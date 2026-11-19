@@ -1,0 +1,473 @@
+// Headless Linux Flutter embedder used by the phase-2 smoke test.
+//
+// Lifecycle: FlutterEngineRun -> SendWindowMetricsEvent -> service vsync batons ->
+// wait for one software surface present -> FlutterEngineShutdown -> write the RGBA
+// frame into /dev/shm/skyline_<key>.dat (docs/contract.md section 4).
+//
+// The engine is built with `--unoptimized --runtime-mode=debug`; a release engine
+// ignores kernel_blob.bin and this host will report a timeout.
+
+#include <flutter_embedder.h>
+
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <deque>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "frame_writer.hh"
+
+namespace {
+
+constexpr int kExitOk = 0;
+constexpr int kExitEngineRunFailed = 70;
+constexpr int kExitTimeout = 71;
+constexpr int kExitSharedMemory = 72;
+constexpr int kExitBadArguments = 78;
+
+struct HostState {
+  std::mutex mutex;
+  std::condition_variable cv;
+
+  std::deque<intptr_t> batons;
+  uint32_t vsync_count = 0;
+
+  // `presented` becomes true once `captured_frames` reaches `target_frames`.
+  bool presented = false;
+  bool stop_capturing = false;
+  uint32_t present_count = 0;
+  uint32_t target_frames = 1;
+  uint32_t captured_frames = 0;
+
+  uint32_t width = 0;
+  uint32_t height = 0;
+  size_t row_bytes = 0;
+  std::vector<uint8_t> rgba;
+
+  // Set before FlutterEngineRun; used by the callbacks.
+  std::string pixel_format = "bgra";
+};
+
+struct Options {
+  std::string assets;
+  std::string icu;
+  int width = 320;
+  int height = 240;
+  double dpr = 1.0;
+  std::string shm_key = "engine_smoke";
+  int timeout_ms = 15000;
+  int frames = 1;
+  std::string pixel_format = "bgra";
+  // Optional custom Dart entrypoint and its arguments (FlutterProjectArgs).
+  std::string entrypoint;
+  std::vector<std::string> entrypoint_args;
+  // Exit right after a captured frame instead of waiting for engine shutdown.
+  // The package:skyline appservice keeps async work alive for a long time, so
+  // its embedder shutdown can exceed the test budget.
+  bool no_shutdown = false;
+};
+
+void OnLogMessage(const char* tag, const char* message, void* /*user_data*/) {
+  std::fprintf(stderr, "[flutter:%s] %s\n", tag ? tag : "?",
+               message ? message : "");
+}
+
+void OnVsync(void* user_data, intptr_t baton) {
+  auto* state = static_cast<HostState*>(user_data);
+  {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->batons.push_back(baton);
+    ++state->vsync_count;
+  }
+  state->cv.notify_all();
+}
+
+bool OnSurfacePresent(void* user_data, const void* allocation, size_t row_bytes,
+                      size_t height) {
+  auto* state = static_cast<HostState*>(user_data);
+  if (allocation == nullptr || row_bytes < 4 || height == 0) return true;
+
+  std::lock_guard<std::mutex> lock(state->mutex);
+  ++state->present_count;
+  if (state->stop_capturing) return true;
+  if (state->captured_frames >= state->target_frames) return true;
+
+  const uint32_t width = static_cast<uint32_t>(row_bytes / 4);
+  const size_t frame_size = static_cast<size_t>(width) * height * 4;
+  state->rgba.resize(frame_size);
+
+  const uint8_t* src = static_cast<const uint8_t*>(allocation);
+  uint8_t* dst = state->rgba.data();
+  if (state->pixel_format == "rgba") {
+    for (size_t y = 0; y < height; ++y) {
+      std::memcpy(dst + y * width * 4, src + y * row_bytes,
+                  static_cast<size_t>(width) * 4);
+    }
+  } else {
+    // Skia's N32 software surface is BGRA on little-endian Linux; the contract
+    // wants RGBA8.  Swap R/B and keep A.
+    for (size_t y = 0; y < height; ++y) {
+      const uint8_t* row_src = src + y * row_bytes;
+      uint8_t* row_dst = dst + y * width * 4;
+      for (uint32_t x = 0; x < width; ++x) {
+        row_dst[x * 4 + 0] = row_src[x * 4 + 2];
+        row_dst[x * 4 + 1] = row_src[x * 4 + 1];
+        row_dst[x * 4 + 2] = row_src[x * 4 + 0];
+        row_dst[x * 4 + 3] = row_src[x * 4 + 3];
+      }
+    }
+  }
+
+  state->width = width;
+  state->height = static_cast<uint32_t>(height);
+  state->row_bytes = row_bytes;
+  ++state->captured_frames;
+  if (state->captured_frames >= state->target_frames) {
+    state->presented = true;
+    state->stop_capturing = true;
+  }
+  state->cv.notify_all();
+  return true;
+}
+
+bool ParseInt(const char* value, int* out) {
+  if (value == nullptr || *value == '\0') return false;
+  char* end = nullptr;
+  const long parsed = std::strtol(value, &end, 10);
+  if (end == value || *end != '\0') return false;
+  *out = static_cast<int>(parsed);
+  return true;
+}
+
+bool ParseDouble(const char* value, double* out) {
+  if (value == nullptr || *value == '\0') return false;
+  char* end = nullptr;
+  const double parsed = std::strtod(value, &end);
+  if (end == value || *end != '\0') return false;
+  *out = parsed;
+  return true;
+}
+
+void PrintUsage(const char* argv0) {
+  std::fprintf(stderr,
+               "usage: %s --assets DIR --icu FILE [options]\n"
+               "  --assets DIR        directory containing kernel_blob.bin\n"
+               "  --icu FILE          icudtl.dat\n"
+               "  --width N           logical width (default 320)\n"
+               "  --height N          logical height (default 240)\n"
+               "  --dpr F             device pixel ratio (default 1.0)\n"
+               "  --shm-key KEY       /dev/shm/skyline_<KEY>.dat (default engine_smoke)\n"
+               "  --timeout-ms N      frame timeout (default 15000)\n"
+               "  --pixel-format F    bgra (convert to RGBA) or rgba (default bgra)\n"
+               "  --frames N          Nth frame (default 1); 0 = capture until timeout, keep last\n"
+               "  --entrypoint NAME   custom Dart entrypoint (default main)\n"
+               "  --entrypoint-arg V  Dart entrypoint argument (repeatable)\n"
+               "  --no-shutdown       exit after the first frame (skip engine shutdown)\n",
+               argv0);
+}
+
+bool ParseOptions(int argc, char** argv, Options* opts) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    auto next = [&](const char* name) -> const char* {
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "%s requires a value\n", name);
+        return nullptr;
+      }
+      return argv[++i];
+    };
+    if (arg == "--help" || arg == "-h") {
+      PrintUsage(argv[0]);
+      return false;
+    } else if (arg == "--assets") {
+      const char* v = next("--assets");
+      if (!v) return false;
+      opts->assets = v;
+    } else if (arg == "--icu") {
+      const char* v = next("--icu");
+      if (!v) return false;
+      opts->icu = v;
+    } else if (arg == "--width") {
+      const char* v = next("--width");
+      if (!v || !ParseInt(v, &opts->width)) return false;
+    } else if (arg == "--height") {
+      const char* v = next("--height");
+      if (!v || !ParseInt(v, &opts->height)) return false;
+    } else if (arg == "--dpr") {
+      const char* v = next("--dpr");
+      if (!v || !ParseDouble(v, &opts->dpr)) return false;
+    } else if (arg == "--shm-key") {
+      const char* v = next("--shm-key");
+      if (!v) return false;
+      opts->shm_key = v;
+    } else if (arg == "--timeout-ms") {
+      const char* v = next("--timeout-ms");
+      if (!v || !ParseInt(v, &opts->timeout_ms)) return false;
+    } else if (arg == "--frames") {
+      const char* v = next("--frames");
+      if (!v || !ParseInt(v, &opts->frames)) return false;
+    } else if (arg == "--pixel-format") {
+      const char* v = next("--pixel-format");
+      if (!v) return false;
+      opts->pixel_format = v;
+    } else if (arg == "--entrypoint") {
+      const char* v = next("--entrypoint");
+      if (!v) return false;
+      opts->entrypoint = v;
+    } else if (arg == "--entrypoint-arg") {
+      const char* v = next("--entrypoint-arg");
+      if (!v) return false;
+      opts->entrypoint_args.emplace_back(v);
+    } else if (arg == "--no-shutdown") {
+      opts->no_shutdown = true;
+    } else {
+      std::fprintf(stderr, "unknown argument: %s\n", arg.c_str());
+      return false;
+    }
+  }
+
+  if (opts->assets.empty() || opts->icu.empty()) {
+    std::fprintf(stderr, "--assets and --icu are required\n");
+    return false;
+  }
+  if (opts->width <= 0 || opts->height <= 0 || opts->dpr <= 0 ||
+      opts->timeout_ms <= 0) {
+    std::fprintf(stderr, "width/height/dpr/timeout must be positive\n");
+    return false;
+  }
+  if (opts->pixel_format != "bgra" && opts->pixel_format != "rgba") {
+    std::fprintf(stderr, "pixel format must be bgra or rgba\n");
+    return false;
+  }
+  if (opts->frames > 1) {
+    std::fprintf(stderr, "note: --frames %d requested; capturing the first frame\n",
+                 opts->frames);
+  }
+  return true;
+}
+
+std::string JoinPath(const std::string& dir, const std::string& name) {
+  if (!dir.empty() && dir.back() == '/') return dir + name;
+  return dir + "/" + name;
+}
+
+bool FileExists(const std::string& path) {
+  std::FILE* f = std::fopen(path.c_str(), "rb");
+  if (f == nullptr) return false;
+  std::fclose(f);
+  return true;
+}
+
+// Returns the batons that are currently queued.
+std::deque<intptr_t> TakeBatons(HostState* state) {
+  std::lock_guard<std::mutex> lock(state->mutex);
+  std::deque<intptr_t> result;
+  result.swap(state->batons);
+  return result;
+}
+
+void ReturnBatons(FlutterEngine engine, const std::deque<intptr_t>& batons) {
+  for (intptr_t baton : batons) {
+    const uint64_t now = FlutterEngineGetCurrentTime();
+    const uint64_t target = now + 16666667;  // 60 Hz hint.
+    (void)FlutterEngineOnVsync(engine, baton, now, target);
+  }
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  Options opts;
+  if (!ParseOptions(argc, argv, &opts)) return kExitBadArguments;
+
+  const std::string kernel = JoinPath(opts.assets, "kernel_blob.bin");
+  if (!FileExists(kernel)) {
+    std::fprintf(stderr, "missing kernel blob: %s\n", kernel.c_str());
+    return kExitBadArguments;
+  }
+  if (!FileExists(opts.icu)) {
+    std::fprintf(stderr, "missing ICU data: %s\n", opts.icu.c_str());
+    return kExitBadArguments;
+  }
+
+  HostState state;
+  state.pixel_format = opts.pixel_format;
+  state.target_frames =
+      opts.frames > 0 ? static_cast<uint32_t>(opts.frames) : UINT32_MAX;
+
+  FlutterRendererConfig renderer = {};
+  renderer.type = kSoftware;
+  renderer.software.struct_size = sizeof(FlutterSoftwareRendererConfig);
+  renderer.software.surface_present_callback = &OnSurfacePresent;
+
+  FlutterProjectArgs args = {};
+  args.struct_size = sizeof(FlutterProjectArgs);
+  args.assets_path = opts.assets.c_str();
+  args.icu_data_path = opts.icu.c_str();
+  args.vsync_callback = &OnVsync;
+  args.log_message_callback = &OnLogMessage;
+  args.log_tag = "skyline_host";
+  args.shutdown_dart_vm_when_done = true;
+  if (!opts.entrypoint.empty()) {
+    args.custom_dart_entrypoint = opts.entrypoint.c_str();
+  }
+  std::vector<const char*> dart_entrypoint_argv;
+  dart_entrypoint_argv.reserve(opts.entrypoint_args.size());
+  for (const std::string& value : opts.entrypoint_args) {
+    dart_entrypoint_argv.push_back(value.c_str());
+  }
+  if (!dart_entrypoint_argv.empty()) {
+    args.dart_entrypoint_argc = static_cast<int>(dart_entrypoint_argv.size());
+    args.dart_entrypoint_argv = dart_entrypoint_argv.data();
+  }
+  const char* flutter_argv[] = {"skyline_engine_host", "--disable-vm-service"};
+  args.command_line_argc = 2;
+  args.command_line_argv = flutter_argv;
+
+  FlutterEngine engine = nullptr;
+  const FlutterEngineResult run_result =
+      FlutterEngineRun(FLUTTER_ENGINE_VERSION, &renderer, &args, &state, &engine);
+  if (run_result != kSuccess || engine == nullptr) {
+    std::fprintf(stderr, "FlutterEngineRun failed: %d\n",
+                 static_cast<int>(run_result));
+    return kExitEngineRunFailed;
+  }
+
+  FlutterWindowMetricsEvent metrics = {};
+  metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
+  metrics.width = static_cast<size_t>(std::ceil(opts.width * opts.dpr));
+  metrics.height = static_cast<size_t>(std::ceil(opts.height * opts.dpr));
+  metrics.pixel_ratio = opts.dpr;
+  metrics.view_id = 0;  // kFlutterImplicitViewId
+  const FlutterEngineResult metrics_result =
+      FlutterEngineSendWindowMetricsEvent(engine, &metrics);
+  if (metrics_result != kSuccess) {
+    std::fprintf(stderr, "FlutterEngineSendWindowMetricsEvent failed: %d\n",
+                 static_cast<int>(metrics_result));
+    FlutterEngineShutdown(engine);
+    return kExitEngineRunFailed;
+  }
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(opts.timeout_ms);
+  bool got_frame = false;
+  {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    while (!state.presented) {
+      if (state.cv.wait_until(lock, deadline) == std::cv_status::timeout &&
+          !state.presented) {
+        break;
+      }
+      if (!state.batons.empty()) {
+        std::deque<intptr_t> batons;
+        batons.swap(state.batons);
+        lock.unlock();
+        ReturnBatons(engine, batons);
+        lock.lock();
+      }
+    }
+    got_frame = state.captured_frames > 0;
+    state.stop_capturing = true;
+  }
+
+  std::fprintf(stderr,
+               "host wait finished: got_frame=%d vsync=%u present=%u batons=%zu\n",
+               got_frame ? 1 : 0, state.vsync_count, state.present_count,
+               state.batons.size());
+  std::fflush(stderr);
+
+  if (got_frame) {
+    // Return outstanding batons so shutdown does not leak frame requests.
+    const auto drain_until =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
+    while (std::chrono::steady_clock::now() < drain_until) {
+      {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        if (!state.batons.empty()) {
+          std::deque<intptr_t> batons;
+          batons.swap(state.batons);
+          lock.unlock();
+          ReturnBatons(engine, batons);
+          continue;
+        }
+        state.cv.wait_for(lock, std::chrono::milliseconds(20));
+      }
+      std::deque<intptr_t> pending = TakeBatons(&state);
+      if (pending.empty()) {
+        // Nothing pending; small grace period before shutdown.
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      } else {
+        ReturnBatons(engine, pending);
+      }
+    }
+    // Drain one final time in case a baton arrived during the grace period.
+    ReturnBatons(engine, TakeBatons(&state));
+  }
+
+  if (!got_frame) {
+    std::fprintf(stderr,
+                 "timeout after %d ms: no software frame (vsync=%u present=%u)\n",
+                 opts.timeout_ms, state.vsync_count, state.present_count);
+    FlutterEngineShutdown(engine);
+    return kExitTimeout;
+  }
+
+  const uint32_t width = state.width;
+  const uint32_t height = state.height;
+  const size_t frame_size = static_cast<size_t>(width) * height * 4;
+  if (frame_size == 0 || state.rgba.size() != frame_size) {
+    std::fprintf(stderr, "invalid captured frame\n");
+    FlutterEngineShutdown(engine);
+    return kExitSharedMemory;
+  }
+
+  skyline::SharedFrameWriter writer(opts.shm_key);
+  if (!writer.Valid()) {
+    std::fprintf(stderr, "cannot open shared memory for key %s\n",
+                 opts.shm_key.c_str());
+    FlutterEngineShutdown(engine);
+    return kExitSharedMemory;
+  }
+  std::string error;
+  if (!writer.WriteFrame(1, state.rgba.data(), frame_size, &error)) {
+    std::fprintf(stderr, "cannot write shared memory: %s\n", error.c_str());
+    FlutterEngineShutdown(engine);
+    return kExitSharedMemory;
+  }
+
+  const uint32_t first = state.rgba[0];
+  const uint32_t second = state.rgba[1];
+  const uint32_t third = state.rgba[2];
+  const uint32_t fourth = state.rgba[3];
+  std::printf(
+      "SKYLINE_HOST_RESULT {\"frameId\":1,\"width\":%u,\"height\":%u,"
+      "\"frameSize\":%zu,\"pixelFormat\":\"%s\",\"firstPixel\":[%u,%u,%u,%u],"
+      "\"vsyncCount\":%u,\"presentCount\":%u,\"shmPath\":\"%s\","
+      "\"shmDataSize\":%zu}\n",
+      width, height, frame_size, opts.pixel_format.c_str(), first, second, third,
+      fourth, state.vsync_count, state.present_count, writer.path().c_str(),
+      static_cast<size_t>(8 + frame_size * 4));
+  std::fflush(stdout);
+
+  if (opts.no_shutdown) {
+    std::fflush(nullptr);
+    std::_Exit(kExitOk);
+  }
+
+  // FlutterEngineShutdown must run on the platform (creation) thread.  The
+  // appservice kernel keeps timers/async work alive and can make shutdown slow;
+  // use --no-shutdown in smoke tests that only need the frame.
+  const FlutterEngineResult shutdown_result = FlutterEngineShutdown(engine);
+  if (shutdown_result != kSuccess) {
+    std::fprintf(stderr, "FlutterEngineShutdown failed: %d\n",
+                 static_cast<int>(shutdown_result));
+  }
+  return kExitOk;
+}

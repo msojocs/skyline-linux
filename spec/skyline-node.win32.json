@@ -1,0 +1,1417 @@
+{
+  "meta": {
+    "generatedAt": "2026-11-19T01:34:39.346Z",
+    "source": "official-wechat-devtools-win32-x64",
+    "devtoolsVersion": "2.02.2609250",
+    "electronVersion": "36.6.0",
+    "engineCases": false,
+    "engineContextCases": false
+  },
+  "cases": {
+    "module.exports": {
+      "status": "ok",
+      "value": {
+        "debugType": "object",
+        "exports": [],
+        "shellType": "function",
+        "windowType": "undefined"
+      }
+    },
+    "globals.surface": {
+      "status": "ok",
+      "value": {
+        "debug": {
+          "flutter_engine_git_rev": "6b917cf86ebe1b9ff148310504a736d667527e8b",
+          "skyline_git_rev": "ef3edf6c94265dfe314f9197ff4e100f99aac070",
+          "skyline_version": "1.4.21"
+        },
+        "debugDescriptor": {
+          "configurable": true,
+          "enumerable": true,
+          "valueType": "object",
+          "writable": true
+        },
+        "debugKeys": [
+          "flutter_engine_git_rev",
+          "skyline_git_rev",
+          "skyline_version"
+        ],
+        "shellDescriptor": {
+          "configurable": true,
+          "enumerable": true,
+          "valueType": "function",
+          "writable": true
+        },
+        "shellKeys": [],
+        "shellLength": 0,
+        "shellName": "",
+        "shellOwnKeys": [
+          "arguments",
+          "caller",
+          "length",
+          "name",
+          "prototype"
+        ]
+      }
+    },
+    "class.prototype": {
+      "status": "ok",
+      "value": {
+        "instanceOwnKeys": [],
+        "prototypeKeys": [
+          "setNotifyBootstrapDoneCallback",
+          "createWindow",
+          "destroyWindow",
+          "onWindowRasterized",
+          "setNotifyWindowReadyCallback",
+          "setNotifyRouteDoneCallback",
+          "setNavigateBackCallback",
+          "setNavigateBackDoneCallback",
+          "setLoadResourceCallback",
+          "setLoadResourceAsyncCallback",
+          "setHttpRequestCallback",
+          "setSendLogCallback",
+          "setSafeAreaEdgeInsets",
+          "notifyResourceLoad",
+          "notifyHttpRequestComplete",
+          "dispatchTouchStartEvent",
+          "dispatchTouchMoveEvent",
+          "dispatchTouchEndEvent",
+          "dispatchTouchOverEvent",
+          "dispatchTouchCancelEvent",
+          "dispatchWheelEvent",
+          "dispatchCharEvent",
+          "dispatchKeyboardEvent",
+          "notifyNavigateTo",
+          "notifyRedirectTo",
+          "notifyNavigateBack",
+          "notifyAppLaunch",
+          "notifyReLaunch",
+          "notifyAutoReLaunch",
+          "notifySwitchTab",
+          "onPlatformBrightnessChanged",
+          "constructor"
+        ],
+        "prototypeStaticKeys": [
+          "constructor",
+          "createWindow",
+          "destroyWindow",
+          "dispatchCharEvent",
+          "dispatchKeyboardEvent",
+          "dispatchTouchCancelEvent",
+          "dispatchTouchEndEvent",
+          "dispatchTouchMoveEvent",
+          "dispatchTouchOverEvent",
+          "dispatchTouchStartEvent",
+          "dispatchWheelEvent",
+          "notifyAppLaunch",
+          "notifyAutoReLaunch",
+          "notifyHttpRequestComplete",
+          "notifyNavigateBack",
+          "notifyNavigateTo",
+          "notifyReLaunch",
+          "notifyRedirectTo",
+          "notifyResourceLoad",
+          "notifySwitchTab",
+          "onPlatformBrightnessChanged",
+          "onWindowRasterized",
+          "setHttpRequestCallback",
+          "setLoadResourceAsyncCallback",
+          "setLoadResourceCallback",
+          "setNavigateBackCallback",
+          "setNavigateBackDoneCallback",
+          "setNotifyBootstrapDoneCallback",
+          "setNotifyRouteDoneCallback",
+          "setNotifyWindowReadyCallback",
+          "setSafeAreaEdgeInsets",
+          "setSendLogCallback"
+        ]
+      }
+    },
+    "class.methods": {
+      "status": "ok",
+      "value": {
+        "constructor": {
+          "configurable": true,
+          "enumerable": false,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "createWindow": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "destroyWindow": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "dispatchCharEvent": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "dispatchKeyboardEvent": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "dispatchTouchCancelEvent": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "dispatchTouchEndEvent": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "dispatchTouchMoveEvent": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "dispatchTouchOverEvent": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "dispatchTouchStartEvent": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "dispatchWheelEvent": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "notifyAppLaunch": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "notifyAutoReLaunch": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "notifyHttpRequestComplete": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "notifyNavigateBack": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "notifyNavigateTo": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "notifyReLaunch": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "notifyRedirectTo": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "notifyResourceLoad": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "notifySwitchTab": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "onPlatformBrightnessChanged": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "onWindowRasterized": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setHttpRequestCallback": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setLoadResourceAsyncCallback": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setLoadResourceCallback": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setNavigateBackCallback": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setNavigateBackDoneCallback": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setNotifyBootstrapDoneCallback": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setNotifyRouteDoneCallback": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setNotifyWindowReadyCallback": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setSafeAreaEdgeInsets": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        },
+        "setSendLogCallback": {
+          "configurable": false,
+          "enumerable": true,
+          "length": 0,
+          "type": "function",
+          "writable": true
+        }
+      }
+    },
+    "construct.rejectsSecondInstanceShape": {
+      "status": "ok",
+      "value": {
+        "withArguments": {
+          "ok": true,
+          "value": {}
+        },
+        "withThis": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "withoutNew": {
+          "ok": true,
+          "value": "<undefined>"
+        }
+      }
+    },
+    "callbacks.nonFunctionArguments": {
+      "status": "ok",
+      "value": {
+        "setHttpRequestCallback": {
+          "extra": {
+            "error": {
+              "message": "SetHttpRequestCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "fn": {
+            "ok": true,
+            "value": "<undefined>"
+          },
+          "noArgs": {
+            "error": {
+              "message": "SetHttpRequestCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "nul": {
+            "error": {
+              "message": "SetHttpRequestCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "number": {
+            "error": {
+              "message": "SetHttpRequestCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "object": {
+            "error": {
+              "message": "SetHttpRequestCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          }
+        },
+        "setLoadResourceAsyncCallback": {
+          "extra": {
+            "error": {
+              "message": "SetLoadResourceAsyncCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "fn": {
+            "ok": true,
+            "value": "<undefined>"
+          },
+          "noArgs": {
+            "error": {
+              "message": "SetLoadResourceAsyncCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "nul": {
+            "error": {
+              "message": "SetLoadResourceAsyncCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "number": {
+            "error": {
+              "message": "SetLoadResourceAsyncCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "object": {
+            "error": {
+              "message": "SetLoadResourceAsyncCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          }
+        },
+        "setLoadResourceCallback": {
+          "extra": {
+            "error": {
+              "message": "SetLoadResourceCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "fn": {
+            "ok": true,
+            "value": "<undefined>"
+          },
+          "noArgs": {
+            "error": {
+              "message": "SetLoadResourceCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "nul": {
+            "error": {
+              "message": "SetLoadResourceCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "number": {
+            "error": {
+              "message": "SetLoadResourceCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "object": {
+            "error": {
+              "message": "SetLoadResourceCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          }
+        },
+        "setNavigateBackCallback": {
+          "extra": {
+            "error": {
+              "message": "SetNavigateBackCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "fn": {
+            "ok": true,
+            "value": "<undefined>"
+          },
+          "noArgs": {
+            "error": {
+              "message": "SetNavigateBackCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "nul": {
+            "error": {
+              "message": "SetNavigateBackCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "number": {
+            "error": {
+              "message": "SetNavigateBackCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "object": {
+            "error": {
+              "message": "SetNavigateBackCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          }
+        },
+        "setNavigateBackDoneCallback": {
+          "extra": {
+            "error": {
+              "message": "SetNavigateBackDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "fn": {
+            "ok": true,
+            "value": "<undefined>"
+          },
+          "noArgs": {
+            "error": {
+              "message": "SetNavigateBackDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "nul": {
+            "error": {
+              "message": "SetNavigateBackDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "number": {
+            "error": {
+              "message": "SetNavigateBackDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "object": {
+            "error": {
+              "message": "SetNavigateBackDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          }
+        },
+        "setNotifyBootstrapDoneCallback": {
+          "extra": {
+            "error": {
+              "message": "SetNotifyBootstrapDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "fn": {
+            "ok": true,
+            "value": "<undefined>"
+          },
+          "noArgs": {
+            "error": {
+              "message": "SetNotifyBootstrapDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "nul": {
+            "error": {
+              "message": "SetNotifyBootstrapDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "number": {
+            "error": {
+              "message": "SetNotifyBootstrapDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "object": {
+            "error": {
+              "message": "SetNotifyBootstrapDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          }
+        },
+        "setNotifyRouteDoneCallback": {
+          "extra": {
+            "error": {
+              "message": "SetNotifyRouteDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "fn": {
+            "ok": true,
+            "value": "<undefined>"
+          },
+          "noArgs": {
+            "error": {
+              "message": "SetNotifyRouteDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "nul": {
+            "error": {
+              "message": "SetNotifyRouteDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "number": {
+            "error": {
+              "message": "SetNotifyRouteDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "object": {
+            "error": {
+              "message": "SetNotifyRouteDoneCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          }
+        },
+        "setNotifyWindowReadyCallback": {
+          "extra": {
+            "error": {
+              "message": "SetNotifyWindowReadyCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "fn": {
+            "ok": true,
+            "value": "<undefined>"
+          },
+          "noArgs": {
+            "error": {
+              "message": "SetNotifyWindowReadyCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "nul": {
+            "error": {
+              "message": "SetNotifyWindowReadyCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "number": {
+            "error": {
+              "message": "SetNotifyWindowReadyCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "object": {
+            "error": {
+              "message": "SetNotifyWindowReadyCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          }
+        },
+        "setSendLogCallback": {
+          "extra": {
+            "error": {
+              "message": "SetSendLogCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "fn": {
+            "ok": true,
+            "value": "<undefined>"
+          },
+          "noArgs": {
+            "error": {
+              "message": "SetSendLogCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "nul": {
+            "error": {
+              "message": "SetSendLogCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "number": {
+            "error": {
+              "message": "SetSendLogCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          },
+          "object": {
+            "error": {
+              "message": "SetSendLogCallback expects a function argument",
+              "name": "Error"
+            },
+            "ok": false
+          }
+        }
+      }
+    },
+    "safeArea.validation": {
+      "status": "ok",
+      "value": {
+        "extra": {
+          "error": {
+            "message": "SetSafeAreaEdgeInsets expects 4 arguments",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "floats": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "fourArgs": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "nan": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "noArgs": {
+          "error": {
+            "message": "SetSafeAreaEdgeInsets expects 4 arguments",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "oneArg": {
+          "error": {
+            "message": "SetSafeAreaEdgeInsets expects 4 arguments",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "strings": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "twoArgs": {
+          "error": {
+            "message": "SetSafeAreaEdgeInsets expects 4 arguments",
+            "name": "Error"
+          },
+          "ok": false
+        }
+      }
+    },
+    "brightness.validation": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "destroy.validation": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "raster.validation": {
+      "status": "ok",
+      "value": {
+        "noArgs": {
+          "error": {
+            "message": "shell.OnWindowRasterized expects 2 arguments: windowId, callback",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "oneArg": {
+          "error": {
+            "message": "shell.OnWindowRasterized expects 2 arguments: windowId, callback",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "twoNumbers": {
+          "error": {
+            "message": "window_id: 1 not found",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "unknownWindow": {
+          "error": {
+            "message": "window_id: 99 not found",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "withExtra": {
+          "error": {
+            "message": "shell.OnWindowRasterized expects 2 arguments: windowId, callback",
+            "name": "Error"
+          },
+          "ok": false
+        }
+      }
+    },
+    "dispatch.unknownWindow.touchStart": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
+    },
+    "dispatch.unknownWindow.touchMove": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
+    },
+    "dispatch.unknownWindow.touchEnd": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
+    },
+    "dispatch.unknownWindow.touchOver": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
+    },
+    "dispatch.unknownWindow.touchCancel": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
+    },
+    "dispatch.unknownWindow.wheel": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
+    },
+    "dispatch.unknownWindow.char": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
+    },
+    "dispatch.unknownWindow.keyboard": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
+    },
+    "dispatch.unknownWindow.extraArgument": {
+      "status": "ok",
+      "value": {
+        "error": {
+          "message": "dispatchTouchStartEvent expects 3 arguments",
+          "name": "Error"
+        },
+        "ok": false
+      }
+    },
+    "notify.navigateTo": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "notify.redirectTo": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "notify.navigateBack": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "notify.appLaunch": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "notify.reLaunch": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "notify.autoReLaunch": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "notify.switchTab": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "notify.resourceLoad": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
+    },
+    "notify.httpRequestComplete": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.argumentCount": {
+      "status": "ok",
+      "value": {
+        "args0": {
+          "error": {
+            "message": "shell.run expects 8 arguments: window_id bundle_path, width, height, device_pixel_ratio, hide_window, array_buffer, skyline_addon_path[, electron_array_buffer]",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "args1": {
+          "error": {
+            "message": "shell.run expects 8 arguments: window_id bundle_path, width, height, device_pixel_ratio, hide_window, array_buffer, skyline_addon_path[, electron_array_buffer]",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "args2": {
+          "error": {
+            "message": "shell.run expects 8 arguments: window_id bundle_path, width, height, device_pixel_ratio, hide_window, array_buffer, skyline_addon_path[, electron_array_buffer]",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "args3": {
+          "error": {
+            "message": "shell.run expects 8 arguments: window_id bundle_path, width, height, device_pixel_ratio, hide_window, array_buffer, skyline_addon_path[, electron_array_buffer]",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "args4": {
+          "error": {
+            "message": "shell.run expects 8 arguments: window_id bundle_path, width, height, device_pixel_ratio, hide_window, array_buffer, skyline_addon_path[, electron_array_buffer]",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "args5": {
+          "error": {
+            "message": "shell.run expects 8 arguments: window_id bundle_path, width, height, device_pixel_ratio, hide_window, array_buffer, skyline_addon_path[, electron_array_buffer]",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "args6": {
+          "error": {
+            "message": "shell.run expects 8 arguments: window_id bundle_path, width, height, device_pixel_ratio, hide_window, array_buffer, skyline_addon_path[, electron_array_buffer]",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "args7": {
+          "error": {
+            "message": "shell.run expects 8 arguments: window_id bundle_path, width, height, device_pixel_ratio, hide_window, array_buffer, skyline_addon_path[, electron_array_buffer]",
+            "name": "Error"
+          },
+          "ok": false
+        }
+      }
+    },
+    "create.dprString": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.dprZero": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.dprOne": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.dprThree": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.dprNaN": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.widthString": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.windowIdString": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.showWindowString": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.bundleNumber": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.addonMissing": {
+      "status": "ok",
+      "value": {
+        "error": {
+          "message": "shell.run expects 8 arguments: window_id bundle_path, width, height, device_pixel_ratio, hide_window, array_buffer, skyline_addon_path[, electron_array_buffer]",
+          "name": "Error"
+        },
+        "ok": false
+      }
+    },
+    "create.descriptorString": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.descriptorShort": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.descriptorArray": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.noDescriptor": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "create.destroyUnknownAfterAttempt": {
+      "status": "skip",
+      "reason": "engine-context-required"
+    },
+    "shm.exports": {
+      "status": "ok",
+      "value": {
+        "keys": [
+          "copyMemoryToBuffer",
+          "deleteCopyCache",
+          "deleteGetCache",
+          "deleteSetCache",
+          "getMemory",
+          "getMemoryByAddress",
+          "removeMemory",
+          "setMemory",
+          "setMemoryByAddress"
+        ],
+        "types": {
+          "copyMemoryToBuffer": "function",
+          "deleteCopyCache": "function",
+          "deleteGetCache": "function",
+          "deleteSetCache": "function",
+          "getMemory": "function",
+          "getMemoryByAddress": "function",
+          "removeMemory": "function",
+          "setMemory": "function",
+          "setMemoryByAddress": "function"
+        }
+      }
+    },
+    "shm.setMemoryShape": {
+      "status": "ok",
+      "value": {
+        "get": {
+          "byteLength": 64,
+          "kind": "Buffer"
+        },
+        "set": {
+          "byteLength": 16,
+          "kind": "Uint8Array",
+          "pointerNonZero": true,
+          "size": 64
+        }
+      }
+    },
+    "shm.zeroInitialized": {
+      "status": "ok",
+      "value": {
+        "allZero": true,
+        "byteLength": 256,
+        "first64": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "shm.keyValidation": {
+      "status": "ok",
+      "value": {
+        "\"\"": {
+          "error": {
+            "message": "Unexpected native error",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "\"../escape\"": {
+          "ok": true,
+          "value": {
+            "byteLength": 16,
+            "kind": "Uint8Array",
+            "pointerNonZero": true,
+            "size": 16
+          }
+        },
+        "\"a b\"": {
+          "ok": true,
+          "value": {
+            "byteLength": 16,
+            "kind": "Uint8Array",
+            "pointerNonZero": true,
+            "size": 16
+          }
+        },
+        "\"ok.key_1-2\"": {
+          "ok": true,
+          "value": {
+            "byteLength": 16,
+            "kind": "Uint8Array",
+            "pointerNonZero": true,
+            "size": 16
+          }
+        },
+        "\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"": {
+          "ok": true,
+          "value": {
+            "byteLength": 16,
+            "kind": "Uint8Array",
+            "pointerNonZero": true,
+            "size": 16
+          }
+        },
+        "\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"": {
+          "ok": true,
+          "value": {
+            "byteLength": 16,
+            "kind": "Uint8Array",
+            "pointerNonZero": true,
+            "size": 16
+          }
+        },
+        "\"中文\"": {
+          "ok": true,
+          "value": {
+            "byteLength": 16,
+            "kind": "Uint8Array",
+            "pointerNonZero": true,
+            "size": 16
+          }
+        },
+        "null": {
+          "error": {
+            "message": "Error in native callback",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "number": {
+          "error": {
+            "message": "Error in native callback",
+            "name": "Error"
+          },
+          "ok": false
+        }
+      }
+    },
+    "shm.length.0": {
+      "status": "ok",
+      "value": {
+        "error": {
+          "message": "Unexpected native error",
+          "name": "Error"
+        },
+        "ok": false
+      }
+    },
+    "shm.length.1": {
+      "status": "ok",
+      "value": {
+        "error": {
+          "message": "Unexpected native error",
+          "name": "Error"
+        },
+        "ok": false
+      }
+    },
+    "shm.length.2": {
+      "status": "ok",
+      "value": {
+        "error": {
+          "message": "Unexpected native error",
+          "name": "Error"
+        },
+        "ok": false
+      }
+    },
+    "shm.length.3": {
+      "status": "ok",
+      "value": {
+        "error": {
+          "message": "Unexpected native error",
+          "name": "Error"
+        },
+        "ok": false
+      }
+    },
+    "shm.length.4": {
+      "status": "ok",
+      "value": {
+        "error": {
+          "message": "Unexpected native error",
+          "name": "Error"
+        },
+        "ok": false
+      }
+    },
+    "shm.length.5": {
+      "status": "ok",
+      "value": {
+        "error": {
+          "message": "Error in native callback",
+          "name": "Error"
+        },
+        "ok": false
+      }
+    },
+    "shm.length.6": {
+      "status": "ok",
+      "value": {
+        "error": {
+          "message": "Error in native callback",
+          "name": "Error"
+        },
+        "ok": false
+      }
+    },
+    "shm.length.7": {
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": {
+          "byteLength": 16,
+          "kind": "Uint8Array",
+          "pointerNonZero": true,
+          "size": 1
+        }
+      }
+    },
+    "shm.reuseKey": {
+      "status": "ok",
+      "value": {
+        "first": {
+          "byteLength": 16,
+          "kind": "Uint8Array",
+          "pointerNonZero": true,
+          "size": 32
+        },
+        "get": {
+          "byteLength": 64,
+          "kind": "Buffer"
+        },
+        "getByteLength": 64,
+        "second": {
+          "byteLength": 16,
+          "kind": "Uint8Array",
+          "pointerNonZero": true,
+          "size": 64
+        }
+      }
+    },
+    "shm.missingKey": {
+      "status": "ok",
+      "value": {
+        "get": {
+          "ok": true,
+          "value": null
+        },
+        "remove": {
+          "ok": true,
+          "value": "<undefined>"
+        }
+      }
+    },
+    "shm.removeExisting": {
+      "status": "ok",
+      "value": {
+        "first": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "second": {
+          "ok": true,
+          "value": "<undefined>"
+        }
+      }
+    },
+    "shm.copyApiShape": {
+      "status": "ok",
+      "value": {
+        "copyMemoryToBuffer": "function",
+        "deleteCopyCache": "function",
+        "deleteGetCache": "function",
+        "deleteSetCache": "function",
+        "getMemoryByAddress": "function",
+        "setMemoryByAddress": "function"
+      }
+    }
+  }
+}

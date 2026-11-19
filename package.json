@@ -1,0 +1,43 @@
+{
+  "name": "skyline-linux",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Linux port exploration and Windows/Linux behavior conformance tests for the WeChat DevTools Skyline node module",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js native/test/*.test.js",
+    "test:contract": "node --test test/contract.test.js",
+    "test:linux": "node --test test/linux.test.js",
+    "test:symbols": "node --test test/symbols.test.js",
+    "test:engine": "node --test native/test/engine-smoke.test.js",
+    "test:ui-compat": "node --test native/test/dart-ui-compat-smoke.test.js",
+    "test:appservice": "node --test native/test/skyline-appservice-smoke.test.js",
+    "test:page": "node --test native/test/skyline-page-smoke.test.js",
+    "smoke:build": "SKYLINE_APP_DIR=apps/dart-ui-compat-smoke bash native/engine/build-empty-page.sh --patched-sdk",
+    "spec:record": "node test/oracle/record.js",
+    "spec:show": "node test/oracle/show.js",
+    "spec:symbols": "node tools/extract-kernel-symbols.js --write",
+    "spec:symbols:check": "node tools/extract-kernel-symbols.js --check",
+    "test:reference": "SKYLINE_LINUX_SKYLINE_ADDON=reference/skyline-node.js node --test test/contract.test.js",
+    "env:check": "node tools/check-env.js",
+    "native:build": "cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release && cmake --build native/build",
+    "test:native": "SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node node --test test/contract.test.js",
+    "toolchain:fetch": "bash native/engine/fetch-toolchain.sh",
+    "toolchain:check": "bash native/engine/fetch-toolchain.sh --check",
+    "app:build": "bash native/engine/build-empty-page.sh",
+    "ui:patch": "bash native/engine/patch-dart-ui.sh",
+    "ui:patch:check": "bash native/engine/patch-dart-ui.sh --check",
+    "runtime:embed": "bash native/engine/patch-skyline-runtime.sh",
+    "runtime:embed:check": "bash native/engine/patch-skyline-runtime.sh --check",
+    "kernel:skyline": "bash native/engine/build-skyline-kernel.sh",
+    "kernel:skyline:check": "bash native/engine/build-skyline-kernel.sh --check",
+    "test:kernel": "node --test test/kernel-rebuild.test.js",
+    "engine:fetch": "bash native/engine/fetch-engine.sh",
+    "engine:build": "bash native/engine/build-engine.sh",
+    "engine:check": "bash native/engine/fetch-engine.sh --check; bash native/engine/build-engine.sh --check",
+    "test:all": "npm run native:build && npm test && npm run test:native"
+  }
+}

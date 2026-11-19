@@ -1,0 +1,22 @@
+# Template consumed by fetch-engine.sh.  @FLUTTER_GIT_REV@ is substituted from
+# native/engine/REVISION.  Keep this layout in sync with engine/scripts/standard.gclient.
+solutions = [
+  {
+    "name": ".",
+    "url": "https://github.com/flutter/flutter.git",
+    "revision": "@FLUTTER_GIT_REV@",
+    "deps_file": "DEPS",
+    "managed": False,
+    "safesync_url": "",
+    "custom_deps": {},
+    "custom_vars": {
+      "download_android_deps": False,
+      "download_fuchsia_deps": False,
+      "download_fuchsia_sdk": False,
+      "download_jdk": False,
+      "download_emsdk": False,
+      "setup_githooks": False,
+      "use_rbe": False
+    }
+  }
+]

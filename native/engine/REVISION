@@ -1,0 +1,37 @@
+# Pinned Flutter engine for the native Skyline port.
+#
+# Every artifact in this phase (kernel_blob.bin, AOT snapshots, libflutter_engine.so,
+# test expectations) must be produced from exactly this revision.  Do not bump one
+# component without re-running `node tools/extract-kernel-symbols.js --write` and the
+# engine smoke test.
+
+FLUTTER_VERSION=3.35.3
+FLUTTER_CHANNEL=stable
+FLUTTER_FRAMEWORK_REV=a402d9a4376add5bc2d6b1e33e53edaae58c07f8
+# `bin/internal/engine.version` at the framework tag above.  In the monorepo era this
+# identifies the whole flutter/flutter checkout, including engine/src/flutter.
+FLUTTER_GIT_REV=ddf47dd3ff96dbde6d9c614db0d7f019d7c7a2b7
+DART_VERSION=3.9.2
+# dart_revision from the root DEPS at FLUTTER_GIT_REV.  Its first 10 chars are the
+# public patched-SDK hash (a29e08c72e).
+DART_GIT_REV=a29e08c72e2ce21813c1edf50cbcdfcac7a7acdd
+# First 10 characters of the Dart SDK hash embedded in the official
+# 2.02.2609250 kernel_blob.bin.  This is the *custom* Skyline Dart SDK, which is
+# distinct from the public 3.35.3 patched SDK (see PUBLIC_KERNEL_SDK_HASH).
+OFFICIAL_KERNEL_SDK_HASH=294a28fe17
+# SDK hash of the public 3.35.3 flutter_patched_sdk.  Kernels produced by
+# build-empty-page.sh use this hash; it must match the public engine build.
+PUBLIC_KERNEL_SDK_HASH=a29e08c72e
+ARTIFACT_BASE=https://storage.googleapis.com/flutter_infra_release/flutter/ddf47dd3ff96dbde6d9c614db0d7f019d7c7a2b7
+# depot_tools revision pinned by the root DEPS at FLUTTER_GIT_REV.
+DEPOT_TOOLS_REV=580b4ff3f5cd0dcaa2eacda28cefe0f45320e8f7
+
+# Metadata reported by the official Windows module (SkylineDebugInfo).
+SKYLINE_VERSION=1.4.21
+SKYLINE_GIT_REV=ef3edf6c94265dfe314f9197ff4e100f99aac070
+# The official addon was built from a private engine branch.  This revision is not
+# fetchable from any public Flutter repository (verified via the GitHub API), which is
+# why the public 3.35.3 engine is used as the buildable baseline.  Keep it here so the
+# kernel/symbol provenance stays auditable.
+OFFICIAL_ENGINE_GIT_REV=6b917cf86ebe1b9ff148310504a736d667527e8b
+OFFICIAL_ENGINE_NOTE=private branch; public 3.35.3 (FLUTTER_GIT_REV) is the closest buildable baseline

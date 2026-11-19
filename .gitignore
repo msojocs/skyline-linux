@@ -1,0 +1,15 @@
+node_modules/
+tmp/
+.cache/
+test/results/
+*.log
+native/build/
+native/engine/checkout/
+native/engine/depot_tools/
+native/engine/out/
+native/engine/toolchain/
+apps/empty-page/.dart_tool/
+apps/empty-page/build/
+native/engine/work/
+apps/dart-ui-compat-smoke/build/
+apps/*/.dart_tool/

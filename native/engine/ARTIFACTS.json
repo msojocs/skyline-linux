@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "engineRevision": "ddf47dd3ff96dbde6d9c614db0d7f019d7c7a2b7",
+  "baseUrl": "https://storage.googleapis.com/flutter_infra_release/flutter/ddf47dd3ff96dbde6d9c614db0d7f019d7c7a2b7",
+  "artifacts": [
+    {
+      "name": "dart-sdk",
+      "url": "{{base}}/dart-sdk-linux-x64.zip",
+      "sha256": "e3d939f19fc9ea1df30c3a4f56f51a2ede165cf29a92eb74512d97119274c5e8",
+      "size": 217651689,
+      "file": "dart-sdk-linux-x64.zip",
+      "extractTo": ".",
+      "required": true,
+      "provides": ["dart-sdk/bin/dartaotruntime", "dart-sdk/bin/dart"]
+    },
+    {
+      "name": "flutter-patched-sdk",
+      "url": "{{base}}/flutter_patched_sdk.zip",
+      "sha256": "5399be8ac526690839ae5bbbcd8244e54138e9b497048776c71647520c1b910a",
+      "size": 3879929,
+      "file": "flutter_patched_sdk.zip",
+      "extractTo": ".",
+      "required": true,
+      "provides": ["flutter_patched_sdk/platform_strong.dill", "flutter_patched_sdk/vm_outline_strong.dill"]
+    },
+    {
+      "name": "linux-x64-artifacts",
+      "url": "{{base}}/linux-x64/artifacts.zip",
+      "sha256": "f68619d100b6e8386f7acb7b1ee3bd1d8d72b10b8ef2fa0b0530ab0d552c4889",
+      "size": 27841644,
+      "file": "linux-x64-artifacts.zip",
+      "extractTo": "engine-artifacts",
+      "required": true,
+      "provides": [
+        "engine-artifacts/icudtl.dat",
+        "engine-artifacts/gen_snapshot",
+        "engine-artifacts/frontend_server_aot.dart.snapshot"
+      ]
+    },
+    {
+      "name": "linux-x64-gtk-debug",
+      "url": "{{base}}/linux-x64-debug/linux-x64-flutter-gtk.zip",
+      "sha256": "ea091b456670c5af1abd525a1c8428fa48d542e1b543d5116b33695aa11a102d",
+      "size": 35823716,
+      "file": "linux-x64-flutter-gtk-debug.zip",
+      "extractTo": "gtk-debug",
+      "required": false,
+      "note": "Reference only: libflutter_linux_gtk.so hides the embedder API, so it cannot be used as the headless host.",
+      "provides": ["gtk-debug/gen_snapshot"]
+    }
+  ],
+  "headers": [
+    {
+      "name": "embedder-header",
+      "url": "https://raw.githubusercontent.com/flutter/flutter/ddf47dd3ff96dbde6d9c614db0d7f019d7c7a2b7/engine/src/flutter/shell/platform/embedder/embedder.h",
+      "sha256": "0ac47fcf9d7ca3a01a7df6321051db91712ba98064acd5dbc2623558125f9f34",
+      "size": 165528,
+      "file": "embedder.h",
+      "to": "include/flutter_embedder.h",
+      "required": true
+    }
+  ]
+}
