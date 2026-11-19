@@ -1,0 +1,20 @@
+{
+  "ops": [
+    {
+      "op": "appendStyleSheet",
+      "index": 1,
+      "css": "@font-face { font-family: TestFont; src: url(fake-font.bin); } .t { font-size: 20px; }"
+    },
+    { "op": "createElement", "id": 2, "tag": "empty", "name": "page" },
+    { "op": "createElement", "id": 3, "tag": "empty", "name": "view" },
+    { "op": "addClass", "id": 3, "prefix": "t", "name": 1 },
+    { "op": "createElement", "id": 4, "tag": "text", "name": "" },
+    { "op": "setText", "id": 4, "text": "Font channel" },
+    { "op": "appendChild", "id": 3, "child": 4 },
+    { "op": "appendChild", "id": 2, "child": 3 },
+    { "op": "createElement", "id": 1, "tag": "empty", "name": "body" },
+    { "op": "appendChild", "id": 1, "child": 2 },
+    { "op": "attach", "root": 1 },
+    { "op": "startRender" }
+  ]
+}

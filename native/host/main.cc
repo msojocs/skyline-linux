@@ -17,7 +17,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -72,6 +74,20 @@ struct Options {
   // The package:skyline appservice keeps async work alive for a long time, so
   // its embedder shutdown can exceed the test budget.
   bool no_shutdown = false;
+  // Timed pointer events used to exercise gestures/scroll without GTK.
+  std::string pointer_script;
+  struct PointerScriptEvent {
+    int at_ms = 0;
+    FlutterPointerPhase phase = kDown;
+    double x = 0.0;
+    double y = 0.0;
+    int32_t device = 1;
+    bool mouse = false;
+    FlutterPointerSignalKind signal_kind = kFlutterPointerSignalKindNone;
+    double scroll_dx = 0.0;
+    double scroll_dy = 0.0;
+  };
+  std::vector<PointerScriptEvent> pointer_events;
 };
 
 void OnLogMessage(const char* tag, const char* message, void* /*user_data*/) {
@@ -169,8 +185,84 @@ void PrintUsage(const char* argv0) {
                "  --frames N          Nth frame (default 1); 0 = capture until timeout, keep last\n"
                "  --entrypoint NAME   custom Dart entrypoint (default main)\n"
                "  --entrypoint-arg V  Dart entrypoint argument (repeatable)\n"
-               "  --no-shutdown       exit after the first frame (skip engine shutdown)\n",
+               "  --no-shutdown       exit after the first frame (skip engine shutdown)\n"
+               "  --pointer-script F  timed pointer events: '<ms> <phase> <x> <y> [device]'\n"
+               "                      phase: add/down/move/up/cancel/hover or scroll dx dy;\n"
+               "                      prefix with m for mouse (mdown/mmove/mup)\n",
                argv0);
+}
+
+bool ParsePointerScript(const std::string& path,
+                        std::vector<Options::PointerScriptEvent>* out) {
+  std::ifstream file(path);
+  if (!file) {
+    std::fprintf(stderr, "cannot read pointer script: %s\n", path.c_str());
+    return false;
+  }
+  std::string line;
+  int line_number = 0;
+  while (std::getline(file, line)) {
+    ++line_number;
+    const size_t comment = line.find('#');
+    if (comment != std::string::npos) line.resize(comment);
+    std::istringstream stream(line);
+    int at_ms = 0;
+    std::string phase;
+    double x = 0.0;
+    double y = 0.0;
+    int device = 1;
+    if (!(stream >> at_ms >> phase >> x >> y)) continue;
+    Options::PointerScriptEvent event;
+    if (phase == "scroll") {
+      double dx = 0.0;
+      double dy = 0.0;
+      if (!(stream >> dx >> dy)) {
+        std::fprintf(stderr, "pointer script line %d: scroll needs dx dy\n",
+                     line_number);
+        return false;
+      }
+      event.phase = kHover;
+      event.mouse = true;
+      event.device = 0;
+      event.signal_kind = kFlutterPointerSignalKindScroll;
+      event.scroll_dx = dx;
+      event.scroll_dy = dy;
+      event.x = x;
+      event.y = y;
+      event.at_ms = at_ms;
+      out->push_back(event);
+      continue;
+    }
+    stream >> device;
+    event.at_ms = at_ms;
+    event.x = x;
+    event.y = y;
+    event.device = device;
+    // Prefix a phase with `m` to send it as a mouse device (`mdown`, `mmove`,
+    // `mup`, ...); useful for exercising desktop drag/wheel behaviour.
+    std::string base_phase = phase;
+    if (base_phase.size() > 1 && base_phase[0] == 'm') {
+      const std::string rest = base_phase.substr(1);
+      if (rest == "add" || rest == "down" || rest == "move" ||
+          rest == "up" || rest == "cancel" || rest == "hover") {
+        base_phase = rest;
+        event.mouse = true;
+      }
+    }
+    if (base_phase == "add") event.phase = kAdd;
+    else if (base_phase == "down") event.phase = kDown;
+    else if (base_phase == "move") event.phase = kMove;
+    else if (base_phase == "up") event.phase = kUp;
+    else if (base_phase == "cancel") event.phase = kCancel;
+    else if (base_phase == "hover") event.phase = kHover;
+    else {
+      std::fprintf(stderr, "pointer script line %d: unknown phase %s\n",
+                   line_number, phase.c_str());
+      return false;
+    }
+    out->push_back(event);
+  }
+  return true;
 }
 
 bool ParseOptions(int argc, char** argv, Options* opts) {
@@ -225,6 +317,10 @@ bool ParseOptions(int argc, char** argv, Options* opts) {
       const char* v = next("--entrypoint-arg");
       if (!v) return false;
       opts->entrypoint_args.emplace_back(v);
+    } else if (arg == "--pointer-script") {
+      const char* v = next("--pointer-script");
+      if (!v) return false;
+      opts->pointer_script = v;
     } else if (arg == "--no-shutdown") {
       opts->no_shutdown = true;
     } else {
@@ -240,6 +336,10 @@ bool ParseOptions(int argc, char** argv, Options* opts) {
   if (opts->width <= 0 || opts->height <= 0 || opts->dpr <= 0 ||
       opts->timeout_ms <= 0) {
     std::fprintf(stderr, "width/height/dpr/timeout must be positive\n");
+    return false;
+  }
+  if (!opts->pointer_script.empty() &&
+      !ParsePointerScript(opts->pointer_script, &opts->pointer_events)) {
     return false;
   }
   if (opts->pixel_format != "bgra" && opts->pixel_format != "rgba") {
@@ -357,11 +457,62 @@ int main(int argc, char** argv) {
 
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(opts.timeout_ms);
+  const uint64_t pointer_start_ns = FlutterEngineGetCurrentTime();
+  size_t next_pointer = 0;
+  bool pointer_error_reported = false;
   bool got_frame = false;
   {
     std::unique_lock<std::mutex> lock(state.mutex);
     while (!state.presented) {
-      if (state.cv.wait_until(lock, deadline) == std::cv_status::timeout &&
+      // Dispatch any pointer events whose script time has elapsed.  Keep the
+      // lock released while calling into the engine: the present callback may
+      // take the same mutex.
+      while (next_pointer < opts.pointer_events.size()) {
+        const auto& scripted = opts.pointer_events[next_pointer];
+        const uint64_t now_ns = FlutterEngineGetCurrentTime();
+        const uint64_t due_ns =
+            pointer_start_ns + static_cast<uint64_t>(scripted.at_ms) * 1000000ull;
+        if (now_ns < due_ns) break;
+        FlutterPointerEvent event = {};
+        event.struct_size = sizeof(event);
+        event.phase = scripted.phase;
+        event.timestamp = now_ns;
+        event.x = scripted.x * opts.dpr;
+        event.y = scripted.y * opts.dpr;
+        event.device = scripted.device;
+        event.device_kind = scripted.mouse ? kFlutterPointerDeviceKindMouse
+                                           : kFlutterPointerDeviceKindTouch;
+        event.buttons =
+            scripted.mouse &&
+                    (scripted.phase == kDown || scripted.phase == kMove)
+                ? kFlutterPointerButtonMousePrimary
+                : 0;
+        event.signal_kind = scripted.signal_kind;
+        event.scroll_delta_x = scripted.scroll_dx;
+        event.scroll_delta_y = scripted.scroll_dy;
+        const char* view_id_env = std::getenv("SKYLINE_POINTER_VIEW_ID");
+        event.view_id = view_id_env != nullptr ? std::atoi(view_id_env) : 0;
+        lock.unlock();
+        const FlutterEngineResult pointer_result =
+            FlutterEngineSendPointerEvent(engine, &event, 1);
+        lock.lock();
+        if (pointer_result != kSuccess && !pointer_error_reported) {
+          std::fprintf(stderr, "FlutterEngineSendPointerEvent failed: %d\n",
+                       static_cast<int>(pointer_result));
+          pointer_error_reported = true;
+        }
+        ++next_pointer;
+      }
+
+      const bool pending_pointers = next_pointer < opts.pointer_events.size();
+      const std::cv_status status =
+          pending_pointers
+              ? state.cv.wait_for(lock, std::chrono::milliseconds(5))
+              : state.cv.wait_until(lock, deadline);
+      if (!state.presented && std::chrono::steady_clock::now() >= deadline) {
+        break;
+      }
+      if (!pending_pointers && status == std::cv_status::timeout &&
           !state.presented) {
         break;
       }

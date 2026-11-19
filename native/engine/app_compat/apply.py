@@ -66,3 +66,34 @@ else:
     if text.count(guarded) < 2:
         raise SystemExit(f"cannot find coordinateStackingChildren anchors in {path}")
     print(f"already patched {path}")
+
+# Optional HTTP platform-channel smoke hook: when SKYLINE_HTTP_TEST_URL is set,
+# the devtools entrypoint performs one HttpForwarder.httpGet and prints the
+# result.  This exercises ForwardHttpGet -> RequestHttpResource ->
+# OnForwardHttpGetResponse end to end (used by the appservice ops test).
+sample = app / "packages" / "sample" / "lib" / "devtools.dart"
+sample_text = sample.read_text(encoding="utf-8")
+if "SKYLINE_HTTP_TEST_URL" not in sample_text:
+    imports = "import 'dart:io';\nimport 'package:skyline/utils/http_forwarder.dart';\n"
+    sample_text = sample_text.replace(
+        'import "package:skyline/skyline.dart";\n',
+        'import "package:skyline/skyline.dart";\n' + imports,
+        1,
+    )
+    hook = """
+  final httpTestUrl = Platform.environment['SKYLINE_HTTP_TEST_URL'];
+  if (httpTestUrl != null && httpTestUrl.isNotEmpty) {
+    HttpForwarder.httpGet(httpTestUrl).then((data) {
+      final text = data == null ? '' : String.fromCharCodes(data);
+      print('SKYLINE_HTTP_RESULT ${data?.length ?? 0} $text');
+    });
+  }
+"""
+    marker = "      skylineAddonPath: args[5],\n  );\n"
+    if marker not in sample_text:
+        raise SystemExit(f"cannot find initSkylineForDevtools anchor in {sample}")
+    sample_text = sample_text.replace(marker, marker + hook, 1)
+    sample.write_text(sample_text, encoding="utf-8")
+    print(f"patched {sample}")
+else:
+    print(f"already patched {sample}")

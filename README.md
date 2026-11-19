@@ -10,8 +10,17 @@
 > 公开引擎上启动，并借助 `native/runtime` 的 stub `libskyline.so` 跑通
 > `initSkylineForDevtools` → appservice 第一帧。嵌入式运行时（完整 Dart API）已能
 > 通过官方 `CreatePageRoute`/`YGConnector`/`NewYGNode`/`NewDecoratedBox`
-> 渲染多节点 Skyline 页面（三色条纹），并通过 `NewTextSpan`/`NewText` 渲染文本。渲染引擎的原生 Linux 实现受闭源限制，详见
-> [docs/feasibility.md](docs/feasibility.md)。
+> 渲染多节点 Skyline 页面（三色条纹），并通过 `NewTextSpan`/`NewText` 渲染文本。
+> 阶段 3 的节点输入已从手写 JSON 描述符切换为**官方渲染层 JS bundle 的真实节点
+> 操作流**：`tools/record-skyline-ops.js` 在 Node V8 中运行官方
+> `app.js`（exparser + skyline-js）并抓取 `createElement`/`appendChild`/
+> `setAttribute`/`appendStyleSheet`/`attach` 等操作，嵌入式运行时按 CSS 级联与
+> flexbox 子集回放，再调用真实 `package:skyline` 回调物化。目前已覆盖滚动
+> （触摸/鼠标拖拽、滚轮）、`list-view`/`grid-view`、图片原生绘制
+> （`NewDirectRenderWidget` + Skia）、HTTP/路由/触摸/鼠标/日志平台通道。
+> 渲染引擎的原生 Linux 实现受闭源限制，详见
+> [docs/feasibility.md](docs/feasibility.md) 与
+> [docs/appservice-ops.md](docs/appservice-ops.md)。
 
 ## 结论先行
 
@@ -74,6 +83,9 @@ npm run test:kernel && npm run smoke:build && npm run test:ui-compat
 npm run test:appservice             # appservice kernel + stub runtime → 第一帧
 npm run runtime:embed               # 把运行时嵌入引擎（完整 Dart API）并重建
 npm run test:page                   # 渲染多节点 Skyline 页面（三色条纹）
+npm run ops:record                  # 录制官方渲染层 bundle 的节点操作流
+npm run test:ops                    # 回放节点操作流（CSS/flexbox/滚动）
+npm run ops:record -- --tap-option 1  # 录制真实 tap 触发的增量操作
 
 # 2. 记录官方 Windows 模块的契约快照（需要 Wine 11 + Windows Electron）
 export SKYLINE_WIN_RESOURCES=/path/to/resources/app.asar.unpacked
@@ -100,7 +112,7 @@ npm run test:contract
 ### 当前结果（2026-11-19）
 
 ```
-npm test: 106 tests, 82 pass, 0 fail, 24 skipped
+npm test: 123 tests, 99 pass, 0 fail, 24 skipped
 ```
 
 - 通过：L1/L2 契约对比（默认目标 `reference/skyline-node.js`；`native/build/skyline.node`
@@ -119,7 +131,17 @@ npm test: 106 tests, 82 pass, 0 fail, 24 skipped
   线性渐变、box shadow、text 样式/对齐（fontWeight/fontStyle/textAlign），以及
   native 定时更新（`DecoratedBoxUpdateColor` → 重绘），以及增量
   `appendChild`/`removeChild`（`YGConnectorUpdateChildren` + relayout），以及
-  `updateOpacity`/`updateBorder` 运行时样式更新。
+  `updateOpacity`/`updateBorder` 运行时样式更新，以及
+  `native/test/skyline-appservice-ops.test.js`（官方 exparser bundle 节点操作流 ->
+  CSS 级联 + flexbox 布局 -> 真实 `package:skyline` 回调；attach 后结构重建与
+  `TextSpanUpdate*`/`DecoratedBoxUpdate*` 细粒度更新；真实 tap -> `setData` ->
+  操作流 -> 重绘；`@font-face` -> `LoadResourceAsync` -> `NotifyResourceLoad`
+  字体资源通道；`scrollview` 渲染 + `ScrollViewUpdateScrollTop`；触摸/鼠标拖拽与
+  滚轮滚动（`ShouldGestureResponse`/`ShouldAcceptGesture` 手势协商）；
+  `list-view` sliver 与 `grid-view` aligned 网格；8×8 BMP 经
+  `NewDirectRenderWidget` 原生绘制；`ForwardHttpGet` -> Dart `HttpClient` ->
+  `OnForwardHttpGetResponse` HTTP 通道；`HandleTouchEvent`/`HandlePageRouteDone`
+  路由与输入通道；宿主 `--pointer-script` 指针注入命中 YGNode 树）。
 - 跳过：需要完整引擎上下文的 L2 用例（`--engine-context`）与 L5 像素对比。
 - 设置 `SKYLINE_LINUX_SKYLINE_ADDON=/path/to/skyline.node` 后，L1/L2 会自动改为
   对比真实 Linux 实现。
@@ -192,8 +214,14 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
     flex/size/文本），支持 `opacity`/`clip`/`gradient`/`shadow` 与文本样式
     （fontWeight/fontStyle/letterSpacing/lineHeight/textAlign/maxLines）；
     `npm run test:page` 覆盖十种页面。
-- 未完成：真实 appservice/V8 节点树输入、完整 yoga 属性、绘制（边框/文本/图片）、
-  手势与平台通道。
+- 已接入：官方渲染层 bundle 的真实节点操作流（录制 + 回放），CSS 级联子集、
+  flexbox 子集布局、文本/边框/背景/透明度绘制、attach 后结构重建 + 文本/样式
+  细粒度更新、tap 手势驱动的 `setData` 更新、字体资源加载平台通道、scroll-view
+  渲染与程序化滚动、触摸/鼠标拖拽与滚轮（含 `concreteWidgetType` 命中测试修复）、
+  `list-view`/`grid-view` sliver、`NewDirectRenderWidget` 图片原生绘制，以及
+  HTTP/路由/触摸/鼠标/日志平台通道。
+- 未完成：完整 yoga 属性；list/grid builder 的增量 mount；图片 `objectFit` 与
+  网络图片；键盘输入路径；路由栈的页面切换回放。
 
 ### `reference/skyline-node.js`
 
@@ -216,14 +244,16 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
    已固定公开 Flutter 3.35.3 引擎、产出符号清单并落地 headless host 骨架；阶段 3
    已完成私有 `dart:ui` 兼容层、`package:skyline` 重编译、stub/嵌入式运行时，并
    通过官方 `CreatePageRoute`/`YGNode`/`DecoratedBox` 渲染第一张 Skyline 页面。
-   下一步是接入 appservice/V8 节点树并补齐布局、绘制、手势与平台通道。
+   阶段 3 的节点输入现已切换为 appservice/V8 渲染层 bundle 的真实操作流，并已
+   覆盖增量更新、滚动/手势、list/grid、图片原生绘制与 HTTP/输入平台通道；
+   下一步是路由栈回放、键盘输入、图片 `objectFit`/网络图片与 builder 增量 mount。
 4. 共享内存缺失 key / 返回值语义已于 2026-11-19 对齐 Windows
    （`skyline-shared-memory`）。
 
 ## 目录
 
 ```
-docs/            可行性分析、接口与协议契约、生成式符号清单、阶段 3 兼容层说明
+docs/            可行性分析、接口与协议契约、生成式符号清单、阶段 3 兼容层与操作流说明
 spec/            由 Windows 官方模块录制的 JSON 快照 + kernel 符号清单
 reference/       可执行接口规范（无引擎），原生实现的 API 层蓝本
 native/          Native N-API 模块（API 层已完成，引擎为 stub）
@@ -232,10 +262,10 @@ native/engine/   阶段 2/3：引擎版本固定、fetch/build 脚本、dart:ui 
 native/host/     阶段 2：headless 软件渲染 host
 apps/empty-page/ 阶段 2：最小纯 dart:ui 页面（编译为 kernel_blob.bin）
 apps/dart-ui-compat-smoke/ 阶段 3：兼容层运行时 smoke（Application + 绿帧）
-tools/           环境检查、kernel 符号提取器、kernel 源树恢复工具
+tools/           环境检查、kernel 符号提取器、kernel 源树恢复、节点操作流录制工具
 test/cases/      Windows / Linux 共用的观察用例
 test/lib/        归一化、差分比较、Wine/Linux 运行器、帧协议实现
-test/fixtures/   跨平台共享内存读写夹具
+test/fixtures/   跨平台共享内存读写夹具、appservice 操作流夹具
 test/oracle/     Wine 侧契约录制脚本
 ```
 

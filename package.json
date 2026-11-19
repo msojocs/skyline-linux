@@ -16,6 +16,7 @@
     "test:ui-compat": "node --test native/test/dart-ui-compat-smoke.test.js",
     "test:appservice": "node --test native/test/skyline-appservice-smoke.test.js",
     "test:page": "node --test native/test/skyline-page-smoke.test.js",
+    "test:ops": "node --test native/test/skyline-appservice-ops.test.js",
     "smoke:build": "SKYLINE_APP_DIR=apps/dart-ui-compat-smoke bash native/engine/build-empty-page.sh --patched-sdk",
     "spec:record": "node test/oracle/record.js",
     "spec:show": "node test/oracle/show.js",
@@ -38,6 +39,7 @@
     "engine:fetch": "bash native/engine/fetch-engine.sh",
     "engine:build": "bash native/engine/build-engine.sh",
     "engine:check": "bash native/engine/fetch-engine.sh --check; bash native/engine/build-engine.sh --check",
-    "test:all": "npm run native:build && npm test && npm run test:native"
+    "test:all": "npm run native:build && npm test && npm run test:native",
+    "ops:record": "node tools/record-skyline-ops.js"
   }
 }

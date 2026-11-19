@@ -124,8 +124,59 @@
   覆盖条纹、文本、卡片、JSON row、嵌套树、opacity、clip、渐变、阴影、文本
   样式/对齐、native 定时颜色/透明度/边框更新，以及 `appendChild`/`removeChild`
   增量布局十四种场景。
-- **下一步**：接入 appservice/V8 节点树（或用测试协议模拟），替换合成页面；
-  逐渐补全 yoga 属性、边框/文本/图片绘制、手势与资源加载。
+- **appservice/V8 节点操作流（2026-11-19）**：新增
+  `tools/record-skyline-ops.js`，在 Node V8 中运行官方渲染层 bundle
+  (`skyline-addon/bundle/flutter_assets/assets/app.js`)，用 capture shim 抓取
+  exparser custom backend 的 `createElement`/`setText`/`setAttribute`/
+  `setStyle`/`addClass`/`appendChild`/`splice`/`appendStyleSheet`/`attach`/
+  `startRender` 操作流。`native/runtime` 新增操作回放：节点表、CSS 级联子集
+  （类/元素/id 选择器、内联样式、文本继承）与 flexbox 子集布局，最后通过真实
+  `NewYGNode`/`NewDecoratedBox`/`NewText`/`CreatePageRoute` 物化。
+  `npm run test:ops` 覆盖提交的条纹操作夹具与官方 bundle 现场录制页
+  （`#ccc` 操作栏、白色按钮、文本、绿色 rect），并断言确定性帧 SHA-256。
+  录制器还支持 `--tap-option N`：在页面 attach 后向 exparser 注入真实 `tap`
+  事件，捕获 `setData` 产生的 `updates` 批次（`setStyle`/`addClass` 等）；
+  回放侧按 `afterMs` 投递，经 `YGConnectorUpdateChildren` +
+  `MarkYGNodeNeedsLayout` 重绘（tap 后按钮变黄）。
+  详见 [appservice-ops.md](appservice-ops.md)。
+- **增量更新（2026-11-19）**：`updates` 批次已区分结构变更与样式/文本变更：
+  结构变更经 `YGConnectorUpdateChildren` 重建根子树；样式/文本走
+  `DecoratedBoxUpdateColor/Border`、`OpacityUpdateOpacity`、
+  `TextSpanUpdateText/TextColor/FontSize/...`、`TextApplyUpdate` 细粒度回调，
+  并重新布局。布局写入改为每节点 acquire/write/release，避免 Dart GC 移动
+  typed data 后使用失效指针。
+- **资源加载平台通道（2026-11-19）**：实现 `LoadResourceSync/Async` 与
+  `NotifyResourceLoad` 回调；CSS `@font-face` 经 `LoadFontFace` ->
+  `ResourceLoader.loadResourceAsync` -> `LoadResourceAsync` -> `NotifyResourceLoad`
+  -> `FontLoader` -> `NotifyFontFaceLoad` 全链路跑通。资源根路径由
+  `SKYLINE_RESOURCE_ROOT` 指定，异步回调投递到 UI task runner。
+- **scroll-view 与输入（2026-11-19）**：`name == "scrollview"` 的节点调用真实
+  `NewScrollView`，子节点以 `isRoot` YGNode 进入 Flutter ListView；`setScrollTop`
+  经 `ScrollViewUpdateScrollTop` 更新并以新初始偏移重建。宿主新增
+  `--pointer-script`，通过 `FlutterEngineSendPointerEvent` 注入触摸事件。
+- **命中测试与手势协商（2026-11-19）**：修正 `NewYGNode` 的
+  `concreteWidgetType`/`yogaConnector` 参数——带 YGConnector 的容器必须报告
+  `kYGConnector` 并传入 connector 句柄，否则 `YGConnectorRenderObject.hitTest`
+  只返回 `size.contains()`，整棵子树的 RenderPointerListener 不在命中路径上。
+  修复后 `shouldAcceptUserOffset` 为真，`SkylineVerticalDragGestureRecognizer`
+  经 `ShouldGestureResponse`/`ShouldAcceptGesture` 胜出，触摸拖拽、鼠标拖拽与
+  滚轮滚动均生效。
+- **list/grid（2026-11-19）**：`listview`/`gridview` 节点调用真实
+  `NewListView`/`NewGridView`；位于 scroll-view 内时作为 sliver 直接挂到
+  `CustomScrollView`，独立时补一层 custom scroll view。item 以 origin 重新布局，
+  grid aligned 按列宽重新测量。`listbuilder`/`gridbuilder` 容器展开。
+- **图片原生绘制（2026-11-19）**：`image` 节点读取 `src`/`url`，Skia 解码后以
+  `DlImageGPU` 包装，经 `NewDirectRenderWidget` 的原生 paint 回调把 Dart
+  `Canvas` 解包为引擎 `flutter::Canvas`，用 `DisplayListBuilder::DrawImageRect`
+  直接绘制。
+- **HTTP / 路由 / 输入通道（2026-11-19）**：`ForwardHttpGet` 委托 Dart
+  `RequestHttpResource`（`dart:io HttpClient`），完成后经
+  `OnForwardHttpGetResponse` 回到 UI task runner；`HandlePageRoute(Done)`、
+  `HandleTouchEvent`/`HandleMouseEvent`、`NotifyUserGestureInProgressChange` 已
+  解析并记录；日志导出保持实现。
+- **下一步**：路由栈的页面切换回放、键盘输入路径、图片 `objectFit`/网络图片、
+  list/grid builder 的增量 mount 回调；继续补全 yoga 属性。L5 的 Windows 基准
+  仍受官方 appservice guest 阻塞。
 
 按依赖顺序推进，每一块都以 Windows 官方输出为基准：
 
@@ -174,5 +225,10 @@
    `npm run test:appservice` 输出第一帧）；
 6. ~~让 `CreateWindow` 后的 Skyline 页面渲染出来~~（已完成：嵌入式运行时 +
    官方 `CreatePageRoute`/`YGNode`/`DecoratedBox` 合成页面）；
-7. **下一步**：接入 appservice/V8 节点树，补齐 yoga 属性与边框/文本/图片绘制、
-   手势、资源与平台通道，并逐步对齐 `lineHeight`、`clipOp` 等 no-op 兼容项。
+7. ~~接入 appservice/V8 节点树~~（已完成：官方渲染层 bundle 录制 + 回放，
+   `npm run ops:record` / `npm run test:ops`）；
+8. ~~增量节点/样式更新、scroll/list/grid、手势协商、图片原生绘制、HTTP/输入
+   通道~~（已完成，见阶段 3 进度）；
+9. **下一步**：路由栈回放、键盘输入、图片 `objectFit`/网络图片、list/grid
+   builder 增量 mount，并逐步对齐 `lineHeight`、`clipOp` 等 no-op 兼容项。
+   L5 的 Windows 基准仍受官方 appservice guest 阻塞。

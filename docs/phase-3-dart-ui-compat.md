@@ -83,7 +83,10 @@ stub：
   `runApplication()`；宿主传入的 holder 若不是本库创建的指针，则使用 fallback
   holder，避免解引用无效地址；
 - `GetFeatureToggle` 全部返回 false，日志函数输出到 stderr；
-- `LayoutParagraph*` / `Yoga*` / 手势 / 资源 / 导航等导出返回零值或 no-op。
+- 资源加载、HTTP 转发、路由/触摸/鼠标通道、图片原生绘制与滚动/list/grid 已在
+  嵌入式运行时实现；`LayoutParagraph*`、`YogaTriggerIntersection*`、键盘与
+  native-view 指针等导出仍返回零值或 no-op（见
+  [appservice-ops.md](appservice-ops.md) 第 6 节）。
 
 宿主新增 `--entrypoint-arg`（可重复）把参数传给 `devtools.dart main`，以及
 `--no-shutdown` 用于只取第一帧后立即退出（appservice 的异步工作会让
@@ -169,6 +172,19 @@ npm run test:appservice
   `removeChild` 的 `coordinateStackingChildren()` 加
   `enableStackingPaint` 守卫；非 stacking connector 不再触发断言。重建源树后由
   `build-skyline-kernel.sh` 自动应用。
+- appservice/V8 节点操作流：`tools/record-skyline-ops.js` 在 Node V8 中运行官方
+  渲染层 bundle (`assets/app.js`)，抓取其发往 `SkylineGlobal` 原生绑定的节点
+  操作；`SKYLINE_APP_SERVICE_OPS=@ops.json` 让嵌入式运行时回放该操作流
+  （节点表 + CSS 级联子集 + flexbox 子集布局），再调用真实
+  `NewYGNode`/`NewDecoratedBox`/`NewText`/`CreatePageRoute` 物化。
+  `npm run test:ops` 覆盖条纹操作夹具与官方 bundle 现场录制页，并锁定确定性帧
+  SHA-256；`--tap-option N` 抓取真实 `tap` -> `setData` -> `updates` 操作批次。
+  回放时结构变更走 `YGConnectorUpdateChildren`，样式/文本变更走
+  `DecoratedBoxUpdate*`/`TextSpanUpdate*` 细粒度回调；`@font-face` 经
+  `LoadFontFace` -> `LoadResourceAsync` -> `NotifyResourceLoad` 完成字体资源
+  加载；`scrollview` 节点经 `NewScrollView` 渲染，`setScrollTop` 触发
+  `ScrollViewUpdateScrollTop`；宿主 `--pointer-script` 可注入触摸事件到
+  Flutter 命中测试。详见 [appservice-ops.md](appservice-ops.md)。
 - 运行时样式更新：opacity 节点支持
   `updateOpacity: {value, afterMs}`（`OpacityUpdateOpacity`）；view 支持
   `updateBorder: {width, color, afterMs}`（`DecoratedBoxUpdateBorder`）。native
@@ -226,9 +242,10 @@ native/engine/out/linux-x64-debug/patched_sdk/      platform_strong.dill + vm_ou
 
 ## 5. 已知限制
 
-1. **Skyline 运行时仍是简化实现**：73 个导出已可加载，引导路径与合成页面
-   （YGNode + DecoratedBox）已跑通；但 appservice/V8 节点树输入、完整 yoga 属性、
-   边框/文本/图片绘制、手势、资源加载和平台通道尚未实现。
+1. **Skyline 运行时仍是简化实现**：73 个导出已可加载，引导路径、合成页面与
+   appservice/V8 节点操作流回放已跑通，attach 后增量更新、tap 手势、拖拽/滚轮
+   滚动、list/grid、图片原生绘制、资源加载与 HTTP/路由/输入通道也已覆盖；但完整
+   yoga 属性、键盘输入、图片 `objectFit`/网络图片与 builder 增量 mount 尚未实现。
 2. `lineHeight`、`backgroundUseLineMetrics`、`useCoreTextWordBreak` 仅保证编译，
    公开引擎的文本引擎不会应用这些属性；后续需在 `skyline_ext` 文本实现中处理。
 3. `Canvas.clipRRect(clipOp: difference)` 暂按 intersect 处理。
@@ -244,6 +261,8 @@ npm run test:kernel        # 重建源树/兼容层静态检查 + 编译级 smok
 npm run test:ui-compat     # 运行时 smoke（绿帧 + Application 行为）
 npm run test:appservice    # stub skyline 运行时 + appservice 第一帧
 npm run test:page          # 嵌入式运行时 + 第一张 Skyline 页面
+npm run ops:record         # 录制官方渲染层 bundle 的节点操作流
+npm run test:ops           # 回放 appservice/V8 节点操作流
 npm run kernel:skyline:check
 npm run ui:patch:check
 ```
