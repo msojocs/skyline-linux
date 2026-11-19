@@ -26,6 +26,12 @@
 
 #include "frame_writer.hh"
 
+// Implemented by the embedded Skyline runtime when present.  The weak
+// reference keeps the host buildable against engines built without the runtime.
+extern "C" void DispatchSkylineKeyEvent(int32_t kind, uint32_t logical,
+                                        const char* text)
+    __attribute__((weak));
+
 namespace {
 
 constexpr int kExitOk = 0;
@@ -76,6 +82,16 @@ struct Options {
   bool no_shutdown = false;
   // Timed pointer events used to exercise gestures/scroll without GTK.
   std::string pointer_script;
+  // Timed keyboard events used to exercise the key input path without GTK.
+  std::string key_script;
+  struct KeyScriptEvent {
+    int at_ms = 0;
+    FlutterKeyEventType type = kFlutterKeyEventTypeDown;
+    uint64_t physical = 0;
+    uint64_t logical = 0;
+    std::string character;
+  };
+  std::vector<KeyScriptEvent> key_events;
   struct PointerScriptEvent {
     int at_ms = 0;
     FlutterPointerPhase phase = kDown;
@@ -188,7 +204,8 @@ void PrintUsage(const char* argv0) {
                "  --no-shutdown       exit after the first frame (skip engine shutdown)\n"
                "  --pointer-script F  timed pointer events: '<ms> <phase> <x> <y> [device]'\n"
                "                      phase: add/down/move/up/cancel/hover or scroll dx dy;\n"
-               "                      prefix with m for mouse (mdown/mmove/mup)\n",
+               "                      prefix with m for mouse (mdown/mmove/mup)\n"
+               "  --key-script F      timed key events: '<ms> <down|up|repeat> <physical> <logical> [char]'\n",
                argv0);
 }
 
@@ -265,6 +282,51 @@ bool ParsePointerScript(const std::string& path,
   return true;
 }
 
+bool ParseKeyScript(const std::string& path,
+                    std::vector<Options::KeyScriptEvent>* out) {
+  std::ifstream file(path);
+  if (!file) {
+    std::fprintf(stderr, "cannot read key script: %s\n", path.c_str());
+    return false;
+  }
+  std::string line;
+  int line_number = 0;
+  while (std::getline(file, line)) {
+    ++line_number;
+    const size_t comment = line.find('#');
+    if (comment != std::string::npos) line.resize(comment);
+    std::istringstream stream(line);
+    int at_ms = 0;
+    std::string phase;
+    unsigned long long physical = 0;
+    unsigned long long logical = 0;
+    if (!(stream >> at_ms >> phase >> physical >> logical)) continue;
+    Options::KeyScriptEvent event;
+    event.at_ms = at_ms;
+    event.physical = physical;
+    event.logical = logical;
+    if (phase == "down") {
+      event.type = kFlutterKeyEventTypeDown;
+    } else if (phase == "up") {
+      event.type = kFlutterKeyEventTypeUp;
+    } else if (phase == "repeat") {
+      event.type = kFlutterKeyEventTypeRepeat;
+    } else {
+      std::fprintf(stderr, "key script line %d: unknown phase %s\n",
+                   line_number, phase.c_str());
+      return false;
+    }
+    std::string character;
+    if (stream >> character) {
+      if (character == "space") character = " ";
+      if (character == "backspace") character.clear();
+      event.character = character;
+    }
+    out->push_back(event);
+  }
+  return true;
+}
+
 bool ParseOptions(int argc, char** argv, Options* opts) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -321,6 +383,10 @@ bool ParseOptions(int argc, char** argv, Options* opts) {
       const char* v = next("--pointer-script");
       if (!v) return false;
       opts->pointer_script = v;
+    } else if (arg == "--key-script") {
+      const char* v = next("--key-script");
+      if (!v) return false;
+      opts->key_script = v;
     } else if (arg == "--no-shutdown") {
       opts->no_shutdown = true;
     } else {
@@ -340,6 +406,10 @@ bool ParseOptions(int argc, char** argv, Options* opts) {
   }
   if (!opts->pointer_script.empty() &&
       !ParsePointerScript(opts->pointer_script, &opts->pointer_events)) {
+    return false;
+  }
+  if (!opts->key_script.empty() &&
+      !ParseKeyScript(opts->key_script, &opts->key_events)) {
     return false;
   }
   if (opts->pixel_format != "bgra" && opts->pixel_format != "rgba") {
@@ -379,6 +449,10 @@ void ReturnBatons(FlutterEngine engine, const std::deque<intptr_t>& batons) {
     const uint64_t target = now + 16666667;  // 60 Hz hint.
     (void)FlutterEngineOnVsync(engine, baton, now, target);
   }
+}
+
+void OnKeyEvent(bool handled, void* /*user_data*/) {
+  std::fprintf(stderr, "[host] key event handled=%d\n", handled ? 1 : 0);
 }
 
 }  // namespace
@@ -459,6 +533,7 @@ int main(int argc, char** argv) {
       std::chrono::steady_clock::now() + std::chrono::milliseconds(opts.timeout_ms);
   const uint64_t pointer_start_ns = FlutterEngineGetCurrentTime();
   size_t next_pointer = 0;
+  size_t next_key = 0;
   bool pointer_error_reported = false;
   bool got_frame = false;
   {
@@ -504,15 +579,82 @@ int main(int argc, char** argv) {
         ++next_pointer;
       }
 
+      // Dispatch scripted key events.  Both the embedder path
+      // (`FlutterEngineSendKeyEvent`, delivered to the Flutter framework) and
+      // the embedded runtime channel (synthetic appservice input) are fed.
+      while (next_key < opts.key_events.size()) {
+        const auto& scripted = opts.key_events[next_key];
+        const uint64_t now_ns = FlutterEngineGetCurrentTime();
+        const uint64_t due_ns =
+            pointer_start_ns + static_cast<uint64_t>(scripted.at_ms) * 1000000ull;
+        if (now_ns < due_ns) break;
+        FlutterKeyEvent event = {};
+        event.struct_size = sizeof(event);
+        event.timestamp = static_cast<double>(now_ns);
+        event.type = scripted.type;
+        event.physical = scripted.physical;
+        event.logical = scripted.logical;
+        event.character =
+            scripted.character.empty() ? nullptr : scripted.character.c_str();
+        event.synthesized = false;
+        event.device_type = kFlutterKeyEventDeviceTypeKeyboard;
+        lock.unlock();
+        const FlutterEngineResult key_result =
+            FlutterEngineSendKeyEvent(engine, &event, &OnKeyEvent, nullptr);
+        if (key_result != kSuccess) {
+          std::fprintf(stderr, "FlutterEngineSendKeyEvent failed: %d\n",
+                       static_cast<int>(key_result));
+        }
+        if (DispatchSkylineKeyEvent != nullptr) {
+          int32_t runtime_kind = 0;
+          if (scripted.type == kFlutterKeyEventTypeUp) {
+            runtime_kind = 1;
+          } else if (scripted.type == kFlutterKeyEventTypeRepeat) {
+            runtime_kind = 2;
+          }
+          // Deliver on the engine's UI thread: the sample appservice registers
+          // a 'skyline/keyboard' message handler that calls the embedded
+          // runtime export.  Calling it directly here would touch the Dart
+          // isolate from the wrong OS thread.
+          std::string payload = std::to_string(runtime_kind) + " " +
+                                std::to_string(scripted.logical) + " " +
+                                scripted.character;
+          FlutterPlatformMessage message = {};
+          message.struct_size = sizeof(message);
+          message.channel = "skyline/keyboard";
+          message.message =
+              reinterpret_cast<const uint8_t*>(payload.data());
+          message.message_size = payload.size();
+          message.response_handle = nullptr;
+          const FlutterEngineResult message_result =
+              FlutterEngineSendPlatformMessage(engine, &message);
+          if (message_result != kSuccess) {
+            std::fprintf(stderr,
+                         "FlutterEngineSendPlatformMessage failed: %d\n",
+                         static_cast<int>(message_result));
+          }
+        } else {
+          std::fprintf(stderr,
+                       "[host] DispatchSkylineKeyEvent unavailable\n");
+        }
+        lock.lock();
+        std::fprintf(stderr, "[host] key event sent: at=%d type=%d logical=%llu\n",
+                     scripted.at_ms, static_cast<int>(scripted.type),
+                     static_cast<unsigned long long>(scripted.logical));
+        ++next_key;
+      }
+
       const bool pending_pointers = next_pointer < opts.pointer_events.size();
+      const bool pending_keys = next_key < opts.key_events.size();
+      const bool pending_events = pending_pointers || pending_keys;
       const std::cv_status status =
-          pending_pointers
+          pending_events
               ? state.cv.wait_for(lock, std::chrono::milliseconds(5))
               : state.cv.wait_until(lock, deadline);
       if (!state.presented && std::chrono::steady_clock::now() >= deadline) {
         break;
       }
-      if (!pending_pointers && status == std::cv_status::timeout &&
+      if (!pending_events && status == std::cv_status::timeout &&
           !state.presented) {
         break;
       }

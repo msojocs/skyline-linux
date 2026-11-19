@@ -35,6 +35,7 @@ function parseArgs(argv) {
     timeoutMs: 1000,
     quiet: false,
     tapOption: null,
+    tapText: null,
     tapDelayMs: 300,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -43,6 +44,7 @@ function parseArgs(argv) {
     else if (arg === '--out') options.out = argv[++i];
     else if (arg === '--timeout-ms') options.timeoutMs = Number(argv[++i]) || 1000;
     else if (arg === '--tap-option') options.tapOption = String(argv[++i]);
+    else if (arg === '--tap-text') options.tapText = String(argv[++i]);
     else if (arg === '--tap-delay-ms') options.tapDelayMs = Number(argv[++i]) || 300;
     else if (arg === '--quiet') options.quiet = true;
     else if (arg === '-h' || arg === '--help') {
@@ -285,8 +287,12 @@ async function run(bundlePath, options) {
   CaptureElement.all = [];
   const makeContext = (id, windowId) => new CapturePageContext(id, windowId, ops);
   let touchCallback = null;
+  let eventCallback = null;
   const Runtime = {
-    registerEventCallback() { ops.push({ op: 'registerEventCallback' }); },
+    registerEventCallback(fn) {
+      eventCallback = typeof fn === 'function' ? fn : null;
+      ops.push({ op: 'registerEventCallback' });
+    },
     registerAnimationCallback() { ops.push({ op: 'registerAnimationCallback' }); },
     registerTouchCallback(fn) {
       touchCallback = typeof fn === 'function' ? fn : null;
@@ -367,9 +373,11 @@ async function run(bundlePath, options) {
   await new Promise((resolve) => setTimeout(resolve, options.tapDelayMs));
 
   // Native code normally hit-tests and emits a `tap` event with the exparser
-  // target.  In the capture shim `data-option` identifies the SPA's action
-  // items; using `__wxElement` avoids reimplementing hit testing.
-  if (options.tapOption !== null && touchCallback !== null) {
+  // target.  In the capture shim `data-option` or the element text identifies
+  // the target; using `__wxElement` avoids reimplementing hit testing.
+  const hasTap = options.tapOption !== null || options.tapText !== null;
+  const dispatchTap = touchCallback || eventCallback;
+  if (hasTap && dispatchTap !== null) {
     // `data-*` values live on the exparser element's `dataset`, not on the
     // custom-backend DOM element, so walk the exparser tree exposed by the
     // runtime core rather than the captured operation ids.
@@ -382,7 +390,13 @@ async function run(bundlePath, options) {
       if (!element || typeof element !== 'object' || seen.has(element)) return null;
       seen.add(element);
       if (element.dataset &&
+          options.tapOption !== null &&
           String(element.dataset.option) === String(options.tapOption)) {
+        return element;
+      }
+      if (options.tapText !== null &&
+          typeof element.textContent === 'string' &&
+          element.textContent.includes(options.tapText)) {
         return element;
       }
       const children = [];
@@ -404,7 +418,7 @@ async function run(bundlePath, options) {
       const y = 80;
       const touch = { identifier: 0, pageX: x, pageY: y, clientX: x, clientY: y };
       const before = ops.length;
-      touchCallback({
+      dispatchTap({
         type: 'tap',
         target: wxElement,
         touches: [touch],
@@ -412,12 +426,16 @@ async function run(bundlePath, options) {
         timeStamp: Date.now(),
         detail: { x, y },
       });
+      // Route handlers are async (`pageReady` resolves in a microtask); let
+      // them finish before slicing the update batch.
+      await new Promise((resolve) => setImmediate(resolve));
       const updateOps = ops.splice(before);
       if (updateOps.length > 0) {
         updates.push({ afterMs: options.tapDelayMs, ops: updateOps });
       }
     } else if (!options.quiet) {
-      console.error('tap target not found (data-option=' + options.tapOption + ')');
+      console.error('tap target not found (data-option=' + options.tapOption +
+        ', text=' + options.tapText + ')');
     }
   }
 
@@ -445,7 +463,9 @@ async function main() {
   const result = await run(bundle, options);
   const payload = {
     source: path.basename(bundle),
-    page: options.tapOption === null ? 'spa-page-a' : `spa-tap-${options.tapOption}`,
+    page: options.tapOption !== null
+      ? `spa-tap-${options.tapOption}`
+      : (options.tapText !== null ? `spa-tap-text` : 'spa-page-a'),
     ops: result.ops,
   };
   if (result.updates.length > 0) payload.updates = result.updates;

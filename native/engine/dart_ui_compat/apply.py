@@ -239,6 +239,28 @@ def patch_canvas(text):
         "Canvas.clipRRect implementation",
     )
     changed = changed or c
+    # Skyline uses ClipOp.difference.  The public native method only supports
+    # intersection, so emulate difference by clipping to the complement of the
+    # rounded rect (a large outer rect minus the rrect).
+    text, c = replace_once(
+        text,
+        "    // clipOp is a Skyline extension; the public engine only intersects.\n"
+        "\n"
+        "    assert(_rrectIsValid(rrect));\n"
+        "    _clipRRect(rrect._getValue32(), doAntiAlias);\n",
+        "    assert(_rrectIsValid(rrect));\n"
+        "    if (clipOp == ClipOp.difference) {\n"
+        "      final Path outer = Path()\n"
+        "        ..addRect(rrect.outerRect.inflate(100000.0));\n"
+        "      final Path inner = Path()..addRRect(rrect);\n"
+        "      clipPath(Path.combine(PathOperation.difference, outer, inner),\n"
+        "          doAntiAlias: doAntiAlias);\n"
+        "      return;\n"
+        "    }\n"
+        "    _clipRRect(rrect._getValue32(), doAntiAlias);\n",
+        "Canvas.clipRRect difference",
+    )
+    changed = changed or c
     return text, changed
 
 

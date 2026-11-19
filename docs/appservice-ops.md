@@ -66,8 +66,11 @@ bundle 不进入本仓库；`--out` 产物只有操作日志（结构，不含 J
 `--tap-option <n>` 在页面 attach 后向渲染层注入一次 `tap` 事件：录制器在 exparser
 树中按 `dataset.option` 找到目标，调用 `SkylineGlobal.Runtime.registerTouchCallback`
 注册的回调。官方 native 层通常负责 hit-test 并合成 `tap`；capture shim 直接给出
-目标元素，因此只依赖 exparser 的元素树，不依赖布局坐标。tap 触发的
-`setData` 会产生 attach 后的操作，录制器把它们写入 `updates`：
+目标元素，因此只依赖 exparser 的元素树，不依赖布局坐标。`--tap-text <text>`
+按元素文本查找目标（用于 `app_0.js` 的 SPA：`--tap-text "Jump To PageB"` 会触发
+`notifyNavigateTo` + 页 B 的完整操作流）。较旧的 bundle 使用
+`registerEventCallback` 而不是 `registerTouchCallback`，录制器两者都接受。
+tap 触发的 `setData` 会产生 attach 后的操作，录制器把它们写入 `updates`：
 
 ```json
 {
@@ -99,8 +102,14 @@ bundle 不进入本仓库；`--out` 产物只有操作日志（结构，不含 J
 | `splice` | `id, pos, count, items` | exparser 的 fragment 展开插入 |
 | `release` | `id` | 从父树移除并标记释放 |
 | `appendStyleSheet` | `index, css` | 追加样式表（全局级联） |
-| `attach` | `root[, host]` | 记录页面根 |
+| `attach` | `root[, host]` | 物化并推入一条页面路由；`attach` 之间的节点操作属于该页面 |
 | `startRender` | — | 触发一次完整物化 |
+| `notifyNavigateTo` | `args: [window, pageId]` | 记录下一次 `attach` 的 openType（navigateTo=4） |
+| `notifySwitchTab` | `args: [window, pageId]` | 已有页面时调用 `SwitchTab`；否则下一次 attach 按 tab 页创建 |
+| `notifyNavigateBack` | `args: [window, pageId, delta, animated]` | 调用 `NavigateBack`，从路由栈弹出 |
+| `focusInput` | `id` | 设置合成键盘输入的焦点节点 |
+| `keyboardStatus` | `inputKey, height` | 调用 `UpdateKeyboardStatus`（native → Dart 键盘高度通道） |
+| `dispatchKey` | `text` | 向焦点节点追加文本（测试用，等价宿主按键提交） |
 
 `setStyleScope` / `associateComponent` / `setListenerOption` /
 `setHitTestBehavior` / `addAnimatedStyle` / `createContext` / `setAsTab` /
@@ -257,8 +266,29 @@ skyline_host ... --pointer-script script.txt
   `(viewport - spacing*(n-1))/n` 重新测量 item；
 - list/grid 节点仍参与本地 flexbox 布局以获得视口宽高，但自身不再被 YGNode 包裹。
 
+**builder 增量 mount**：`listbuilder`/`gridbuilder` 节点调用真实
+`NewListBuilder`/`NewGridBuilder`，并把 `onBuildChild`/`onDisposeChild` 原生回调
+交给 Dart sliver。Flutter 请求某个 index 时，回调把
+`(builderAddress, index)` 投递到 UI task runner，再由 captured 节点表中的
+`listbuilderitem`/`gridbuilderitem`（显式 `index` 属性，否则按出现顺序）
+**按需**物化：
+
+```
+onBuildChild(index)
+  -> NewYGNode / NewText / NewDecoratedBox ...（只构建该 item）
+  -> NewListBuilderItem(children, index)
+  -> ListBuilderAppendChild(builder, item)
+onDisposeChild(index) -> ListBuilderRemoveChild(builder, item)
+```
+
+builder 自身不参与 YGNode 布局（sliver 由 Flutter 定位），`childCount` 可达
+上千而只物化可视窗口。scrollview 的子 sliver 判定包含 builder；builder 节点
+仍可带 padding/背景（传给 `NewListBuilder`/`NewGridBuilder`）。
+
 测试夹具 `appservice-listview.ops.json`（4×80px item + 滚轮滚动）与
-`appservice-gridview.ops.json`（2 列 aligned，红/绿/蓝/黄四格）。
+`appservice-gridview.ops.json`（2 列 aligned，红/绿/蓝/黄四格）；
+`appservice-builder.ops.json` 声明 100 个 child、只捕获 20 个 item，断言初始
+仅 mount 5 个可视项。
 
 ## 3.5 图片原生绘制（NewDirectRenderWidget）
 
@@ -274,8 +304,22 @@ skyline_host ... --pointer-script script.txt
    解包为引擎的 `flutter::Canvas`，通过 `DisplayListBuilder::DrawImageRect`
    直接写入当前 display list（无需构造 Dart `Image`/`Paint` 对象）。
 
-图片拉伸到节点宽高（等价 `object-fit: fill`）；`objectFit`/`repeat` 等属性尚未
-接入。测试用 8×8 BMP 四色象限拉伸到 320×240，断言四个象限颜色。
+图片拉伸模式由 `mode`/`objectFit`/`object-fit` 属性或 CSS `object-fit` 决定：
+
+- `scaleToFill`/`fill`（默认）：铺满节点；
+- `aspectFit`/`contain`：等比缩放并居中，留白；
+- `aspectFill`/`cover`：等比铺满并居中，超出节点部分被裁剪；
+- `center`/`none`：按原尺寸居中；`scale-down`：不超过原始尺寸的 contain；
+- `widthFix`：布局阶段读取解码后的宽高比，把高度改成 `width * h / w`。
+
+网络图片（`http(s)://`）走 Dart 的 `RequestHttpResource`（`dart:io`
+`HttpClient`）：`LoadImageForNode` 先安装 direct-render widget 并投递一次带
+`requestContextId` 的请求，响应在 UI task runner 上解码为 `DlImage` 后重建页面，
+paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则标记
+`image_failed`，不会重复发起。
+
+测试用 8×8 BMP 四色象限：拉伸到 320×240、`aspectFit` 到 200×100（左右留白）、
+以及本地 HTTP server 提供的网络图片。
 
 ## 3.6 HTTP / 路由 / 输入通道
 
@@ -285,17 +329,30 @@ skyline_host ... --pointer-script script.txt
   `HttpForwarder.httpGet` 的 Future 完成。`SKYLINE_HTTP_TEST_URL` 会让
   `sample/devtools.dart` 启动时发起一次 `httpGet` 并打印
   `SKYLINE_HTTP_RESULT <len> <body>`。
-- **路由**：`HandlePageRoute` / `HandlePageRouteDone` /
-  `NotifyUserGestureInProgressChange` 解析 Dart 参数并在
-  `SKYLINE_APP_SERVICE_DEBUG` 下打印；初始页面会观察到
-  `HandlePageRouteDone: pageId=0`。
+- **路由栈**：每个 `attach` 都物化为一条 `CreatePageRoute`。`notifyNavigateTo`
+  记录 openType=navigateTo（4），初始 attach 为 kAppLaunch（0）；
+  `notifySwitchTab` 调用 Dart 注册的 `SwitchTab`，已有页面时直接切 tab；
+  `notifyNavigateBack` 调用 `NavigateBack(delta, animated, callbackId)` 弹栈。
+  `HandlePageRoute`/`HandlePageRouteDone`/`NotifyUserGestureInProgressChange`
+  由 Dart 侧回调并记录。测试夹具 `appservice-route.ops.json` 先推入红色页 B、
+  再 navigateBack 回到蓝色页 A；官方 bundle 的 SPA 录制
+  （`--tap-text "Jump To PageB"`）得到真实的两页操作流。
 - **输入**：Dart 把指针序列经 `HandleTouchEvent`（`NativeTouchEvent` 批次）报告
   给原生，日志包含命中节点、`touchstart/touchmove/touchend` 与
   `client` 坐标；`HandleMouseEvent` 同样可解析 `NativeMouseEvent`。
 - **日志**：`LogVerbose/Debug/Info/Warning/Error` 已实现（`LogTwo` 输出 tag 与
   message）。
-- **键盘**：`InputHoldKeyboard`/`UpdateKeyboardStatus` 是 Dart 注册回调；headless
-  host 目前没有 key 事件输入路径，通道保留待接入。
+- **键盘**：宿主 `--key-script`（`<ms> <down|up|repeat> <physical> <logical>
+  [char]`）同时走两条路径：
+  1. `FlutterEngineSendKeyEvent` 交给 Flutter framework；
+  2. `FlutterEngineSendPlatformMessage` 在 `skyline/keyboard` 通道发送
+     `"<kind> <logical> <text>"`。重编译的 appservice kernel
+     （`app_compat/apply.py` 注入）在 UI 线程接收消息并调用嵌入运行时的
+     `DispatchSkylineKeyEvent`，后者向焦点节点追加/删除文本并走
+     `TextSpanUpdate*` 细粒度刷新。
+  `focusInput` 设置焦点，`keyboardStatus` 调用 Dart 注册的
+  `UpdateKeyboardStatus(inputKey, height)` 驱动 `SkylineKeyboardScrollContainer`
+  的键盘高度逻辑。
 
 ## 4. 回放实现
 
@@ -313,7 +370,7 @@ skyline_host ... --pointer-script script.txt
   `align-items`、`flex`、`gap`、`flex-wrap`（忽略）
 - 盒模型：`width/height`（px/%/auto）、`min/max-*`、`padding`/`margin` 及四边，
   `border`/`border-width`/`border-color`、`border-radius`
-- 绘制：`background`/`background-color`、`opacity`
+- 绘制：`background`/`background-color`、`opacity`、`object-fit`
 - 文本：`font-size`、`font-weight`、`font-style`、`line-height`（px 或倍数）、
   `letter-spacing`、`text-align`、`-webkit-line-clamp`
 
@@ -341,9 +398,10 @@ view   -> NewYGConnector(children) [+ NewDecoratedBox] [+ NewOpacity]
 scroll -> NewScrollView(children)
 list   -> NewListView(item widgets)        (sliver)
 grid   -> NewGridView(item widgets)        (sliver)
+builder-> NewListBuilder/NewGridBuilder     (sliver, on-demand items)
 image  -> NewDirectRenderWidget(onPaint)   (native DrawImageRect)
 任何节点 -> NewYGNode(address, Float32List(9), child[, yogaConnector])
-root   -> CreatePageRoute(rootYGNode)
+每次 attach -> CreatePageRoute(rootYGNode)  (路由栈)
 ```
 
 容器的 `concreteWidgetType` 必须与其 child 一致：带 YGConnector 的节点传
@@ -387,17 +445,34 @@ npm run test:ops
   的 embedder 指针事件命中 YGNode 树。
 - `font-face resource channel`：`@font-face` -> `LoadFontFace` ->
   `LoadResourceAsync` -> `NotifyResourceLoad` -> `NotifyFontFaceLoad`。
+- `list-builder incremental mount`：100 个声明 child 只捕获 20 个 item，初始
+  仅 mount 可视的 5 个（`NewListBuilder` + `ListBuilderAppendChild`）。
+- `route stack push/pop`：`notifyNavigateTo` + attach 推入页 B，
+  `notifyNavigateBack` 弹回页 A，断言两次 `CreatePageRoute` 与最终像素。
+- `recorded SPA navigation`：官方 `app_0.js` 的 "Jump To PageB" tap 录制出真实
+  两页操作流，回放后 `didPush pageId: 1` 且页 B 文本可见。
+- `image objectFit`：`aspectFit` 将 8×8 位图缩放到 100×100 并在 200×100 的
+  节点中居中留白。
+- `network image`：本地 HTTP server -> `RequestHttpResource` -> 解码 -> 重建
+  页面 -> 四象限像素。
+- `host keyboard channel`：`--key-script` 触发 `FlutterEngineSendKeyEvent` 与
+  `skyline/keyboard` 平台消息，运行时把 `A` 更新为 `Ab`；同时验证
+  `UpdateKeyboardStatus`。
 
 ## 6. 当前边界
 
 - attach 后的样式/文本更新走细粒度回调；结构变更仍重建 attach 根子树。
   渐变/阴影/圆角等属性更新与 root 自身样式尚未细粒度处理。
 - `position: absolute`、`transform`、`transition` 暂按普通流处理。
-- list/grid 的虚拟化 item 由录制时一次性给出；`ListBuilderAppendChild` 等增量
-  mount 回调没有回放，builder 容器按静态子树展开。
-- 图片只支持 `object-fit: fill`（拉伸），`objectFit`/`repeat`/`background-image`
-  尚未接入；网络图片（`http(s)://`）仍走文件读取路径。
-- 键盘没有宿主输入路径；`HandleNativeViewPointerEvent` 等仍为 no-op。
+- builder 已按需 mount，但 item 仍来自录制时抓到的节点；滚动后才由 JS 产生的
+  新 item 需要重新录制/追加到操作流。`ListBuilderInsertBefore`、
+  `ListBuilderUpdateChildren` 等二次变更回调尚未回放。
+- 图片支持 `fill`/`contain`/`cover`/`none`/`scale-down` 与 `widthFix`；
+  `repeat`、`background-image`、SVG 解码尚未接入。网络图片缓存与取消
+  （`CancelRequestHttpResource`）未接入。
+- 合成键盘输入向焦点文本节点追加 UTF-8 文本/退格，尚未接入
+  `EditableText` 的选区、光标与输入法组合；`InputHoldKeyboard` 仍无触发点。
+  `HandleNativeViewPointerEvent` 等仍为 no-op。
 - `LoadResourceSync` 已实现但当前字体链路只走异步接口；缓存、内存字体未接入。
 - 中文字形依赖宿主字体；当前 Linux host 没有 CJK 字体时会显示 tofu 方框。
 - L5 的 Windows ↔ Linux 像素对比仍受官方 appservice guest 阻塞；本阶段提供的是

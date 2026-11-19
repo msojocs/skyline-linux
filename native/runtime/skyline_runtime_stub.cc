@@ -30,6 +30,7 @@
 #include <memory>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifdef SKYLINE_EMBEDDED
@@ -553,6 +554,40 @@ using NewDirectRenderWidgetFn = Dart_Handle (*)(intptr_t ptr, void* on_paint,
                                                 void* on_create_render_object,
                                                 void* on_layout);
 
+// List/grid builders.  `on_build_child`/`on_dispose_child` are native
+// function pointers invoked by the Dart sliver (`(ptr, index)`).
+using BuilderChildCallbackFn = void (*)(intptr_t ptr, int32_t index);
+using NewListBuilderFn = Dart_Handle (*)(intptr_t ptr, Dart_Handle children,
+                                         uint8_t type, int32_t child_count,
+                                         float child_height,
+                                         double padding_top,
+                                         double padding_right,
+                                         double padding_bottom,
+                                         double padding_left,
+                                         uint32_t background_color,
+                                         void* on_build_child,
+                                         void* on_dispose_child);
+using NewGridBuilderFn = Dart_Handle (*)(intptr_t ptr, Dart_Handle children,
+                                         uint8_t type, int32_t child_count,
+                                         int32_t cross_axis_count,
+                                         float main_axis_spacing,
+                                         float cross_axis_spacing,
+                                         float max_cross_axis_extent,
+                                         double padding_top,
+                                         double padding_right,
+                                         double padding_bottom,
+                                         double padding_left,
+                                         uint32_t background_color,
+                                         void* on_build_child,
+                                         void* on_dispose_child);
+using NewListBuilderItemFn = Dart_Handle (*)(Dart_Handle children,
+                                              int32_t index);
+using BuilderMutateChildFn = void (*)(Dart_Handle parent, Dart_Handle child);
+using NavigateBackFn = void (*)(int32_t delta, uint8_t animated,
+                                int32_t callback_id);
+using SwitchTabFn = void (*)(int32_t page_id, int32_t callback_id);
+using UpdateKeyboardStatusFn = void (*)(int32_t input_key, double height);
+
 using DispatchTouchEventFn = void (*)(uint8_t type, double x, double y);
 using ScrollViewUpdateScrollTopFn = void (*)(Dart_Handle scroll_view, double top);
 using ConnectorUpdateChildrenFn = void (*)(Dart_Handle connector,
@@ -662,6 +697,17 @@ constexpr uint32_t kRequestHttpResourceHash = 670378368u;
 constexpr uint32_t kOnForwardHttpGetResponseHash = 663443835u;
 constexpr uint32_t kGetNodeFromPointHash = 771509372u;
 constexpr uint32_t kScrollViewUpdateScrollTopHash = 390858736u;
+constexpr uint32_t kNewListBuilderHash = 526654284u;
+constexpr uint32_t kNewListBuilderItemHash = 629516111u;
+constexpr uint32_t kListBuilderAppendChildHash = 707989954u;
+constexpr uint32_t kListBuilderRemoveChildHash = 721255976u;
+constexpr uint32_t kNewGridBuilderHash = 506712993u;
+constexpr uint32_t kNewGridBuilderItemHash = 615943092u;
+constexpr uint32_t kGridBuilderAppendChildHash = 720875816u;
+constexpr uint32_t kGridBuilderRemoveChildHash = 719309313u;
+constexpr uint32_t kNavigateBackHash = 802972930u;
+constexpr uint32_t kSwitchTabHash = 958852003u;
+constexpr uint32_t kUpdateKeyboardStatusHash = 467802059u;
 
 enum class DemoMode { kStripes, kText, kCard };
 DemoMode g_demo_mode = DemoMode::kStripes;
@@ -728,6 +774,33 @@ void ReportDartError(const char* what, Dart_Handle handle) {
   const char* error = Dart_IsError(handle) ? Dart_GetError(handle) : "<not an error>";
   std::fprintf(stderr, "[skyline-runtime] demo page: %s failed: %s\n", what,
                error != nullptr ? error : "<no message>");
+#ifdef SKYLINE_EMBEDDED
+  if (!Dart_IsError(handle)) return;
+  Dart_Handle exception = Dart_ErrorGetException(handle);
+  if (!Dart_IsError(exception) && !Dart_IsNull(exception)) {
+    Dart_Handle text = Dart_ToString(exception);
+    if (!Dart_IsError(text)) {
+      const char* message = nullptr;
+      if (!Dart_IsError(Dart_StringToCString(text, &message)) &&
+          message != nullptr) {
+        std::fprintf(stderr, "[skyline-runtime] demo page: exception: %s\n",
+                     message);
+      }
+    }
+  }
+  Dart_Handle stack = Dart_ErrorGetStackTrace(handle);
+  if (!Dart_IsError(stack) && !Dart_IsNull(stack)) {
+    Dart_Handle text = Dart_ToString(stack);
+    if (!Dart_IsError(text)) {
+      const char* message = nullptr;
+      if (!Dart_IsError(Dart_StringToCString(text, &message)) &&
+          message != nullptr) {
+        std::fprintf(stderr, "[skyline-runtime] demo page: stack:\n%s\n",
+                     message);
+      }
+    }
+  }
+#endif
 }
 
 // Enters the root isolate/scope for the posted UI task; released on every exit
@@ -1894,6 +1967,8 @@ struct AppStyle {
   int text_align = 0;
   uint32_t max_lines = 0;
   bool display_none = false;
+  // Image fit: 0 fill, 1 contain, 2 cover, 3 none, 4 scale-down.
+  int object_fit = 0;
 };
 
 struct AppNode {
@@ -1930,6 +2005,26 @@ struct AppNode {
   Dart_PersistentHandle scroll_view_p = nullptr;
   // Decoded image backing a `<image>` node's direct-render paint callback.
   sk_sp<flutter::DlImage> image_dl;
+  bool image_loaded = false;
+  bool image_failed = false;
+  bool image_pending = false;
+
+  // List/grid builder state (NewListBuilder/NewGridBuilder).  Items are
+  // materialized on demand from the captured node table when Flutter's sliver
+  // asks for an index via the onBuildChild callback.
+  Dart_PersistentHandle builder_p = nullptr;
+  uint8_t builder_kind = 0;  // 0 = list, 1 = grid
+  int builder_child_count = 0;
+  int builder_cross_axis_count = 1;
+  float builder_child_height = 0.0f;
+  float builder_main_spacing = 0.0f;
+  float builder_cross_spacing = 0.0f;
+  float builder_max_cross_extent = 0.0f;
+  uint32_t builder_background = 0u;
+  // index -> materialized SkylineListBuilderItem/SkylineGridBuilderItem.
+  std::unordered_map<int, Dart_PersistentHandle> builder_items;
+  std::unordered_set<int> builder_pending;
+
 
   AppStyle previous_style;
   bool has_previous_style = false;
@@ -1939,6 +2034,10 @@ struct AppNode {
 // Nodes with a live native image, keyed by their YGNode address.  The paint
 // callback only receives that address.
 std::unordered_map<intptr_t, AppNode*> g_image_nodes;
+
+// Builder nodes, keyed by YGNode address (the Dart callback only receives the
+// address).  Declared here because teardown clears the entry.
+std::unordered_map<intptr_t, AppNode*> g_builders_by_address;
 
 struct CssRule {
   std::string selector;
@@ -1959,6 +2058,18 @@ struct OpPage {
   int applied_ops = 0;
   bool started = false;
 
+  // Route stack replay: `notifyNavigateTo`/`notifySwitchTab` record the open
+  // type used by the next `attach`; each attach materializes one page route.
+  uint8_t pending_open_type = 0;
+  int32_t pending_page_id = 0;
+  int32_t pending_callback_id = 0;
+  int pending_back_delta = 1;
+  bool pending_back_animated = true;
+  int page_count = 0;
+  // Synthetic input focus used by the host keyboard channel.
+  uint32_t focused_input_id = 0;
+  double keyboard_height = 0.0;
+
   // Attached page identity, used to push incremental updates.
   Dart_PersistentHandle root_node = nullptr;
   Dart_PersistentHandle root_connector = nullptr;
@@ -1966,6 +2077,9 @@ struct OpPage {
 };
 
 OpPage* g_page = nullptr;
+// Captured on the UI thread; the host keyboard channel is called from the
+// embedder thread and must marshal work back onto the UI runner.
+fml::RefPtr<fml::TaskRunner> g_ui_task_runner;
 std::unique_ptr<rapidjson::Document> g_ops_document;
 int g_next_rule_order = 0;
 intptr_t g_next_address = 0x5000;
@@ -2316,6 +2430,12 @@ void ApplyDeclaration(AppStyle* style,
   } else if (key == "opacity") {
     double number = 1.0;
     if (ParseNumber(value, &number)) style->opacity = number;
+  } else if (key == "object-fit") {
+    if (value == "contain") style->object_fit = 1;
+    else if (value == "cover") style->object_fit = 2;
+    else if (value == "none") style->object_fit = 3;
+    else if (value == "scale-down") style->object_fit = 4;
+    else style->object_fit = 0;
   } else if (key == "-webkit-line-clamp") {
     double number = 0.0;
     if (ParseNumber(value, &number) && number > 0) {
@@ -2759,6 +2879,22 @@ bool HasExplicitHeight(const AppStyle& style) {
   return style.height >= 0.0f || style.height_percent >= 0.0f;
 }
 
+// Forward declarations: image/builder helpers live with the widget
+// materialization code, but measurement needs them.
+bool IsImageName(const std::string& name);
+bool IsListBuilderName(const std::string& name);
+bool IsGridBuilderName(const std::string& name);
+bool LoadImageForNode(AppNode* node);
+
+bool ImageUsesWidthFix(const AppNode* node) {
+  static const char* kKeys[] = {"mode", "objectFit", "object-fit"};
+  for (const char* key : kKeys) {
+    const auto found = node->attrs.find(key);
+    if (found != node->attrs.end() && found->second == "widthFix") return true;
+  }
+  return false;
+}
+
 float BorderBoxExtra(const AppStyle& style, bool horizontal) {
   const float pad = horizontal ? style.padding[1] + style.padding[3]
                                : style.padding[0] + style.padding[2];
@@ -2794,6 +2930,62 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
   if (width >= 0.0f) {
     if (width < style.min_width) width = style.min_width;
     if (width > style.max_width) width = style.max_width;
+  }
+
+  // List/grid builders are slivers: Flutter positions their items, so measure
+  // the builder box from its declared child count instead of recursing into
+  // the (possibly huge) captured item table.
+  if (IsListBuilderName(node->name) || IsGridBuilderName(node->name)) {
+    float height = style.height >= 0.0f ? style.height : -1.0f;
+    if (height < 0.0f && style.height_percent >= 0.0f) {
+      height = avail_h * style.height_percent;
+    }
+    if (height < 0.0f) {
+      int child_count = 0;
+      double child_height = 0.0;
+      const auto count_attr = node->attrs.find("childCount");
+      if (count_attr != node->attrs.end()) {
+        child_count = std::atoi(count_attr->second.c_str());
+      }
+      const auto height_attr = node->attrs.find("childHeight");
+      if (height_attr != node->attrs.end()) {
+        child_height = std::atof(height_attr->second.c_str());
+      }
+      if (IsGridBuilderName(node->name)) {
+        double cross = 1.0;
+        const auto cross_attr = node->attrs.find("crossAxisCount");
+        if (cross_attr != node->attrs.end()) {
+          cross = std::atof(cross_attr->second.c_str());
+        }
+        const int columns = static_cast<int>(cross > 0 ? cross : 1);
+        const int rows = (child_count + columns - 1) / columns;
+        height = static_cast<float>(rows * child_height);
+      } else {
+        height = static_cast<float>(child_count * child_height);
+      }
+    }
+    if (width < 0.0f) width = stretch_w ? avail_w : 0.0f;
+    node->measured_w = width;
+    node->measured_h = height;
+    return SizeF{width, height};
+  }
+
+  // Images: `widthFix` preserves the intrinsic aspect ratio, so the height is
+  // derived from the decoded bitmap rather than the CSS box.
+  if (IsImageName(node->name)) {
+    LoadImageForNode(node);
+    if (width >= 0.0f && ImageUsesWidthFix(node) && node->image_dl != nullptr &&
+        node->image_dl->width() > 0) {
+      const double ratio = static_cast<double>(node->image_dl->height()) /
+                           static_cast<double>(node->image_dl->width());
+      float height = static_cast<float>(width * ratio) +
+                     BorderBoxExtra(style, false);
+      if (height < style.min_height) height = style.min_height;
+      if (height > style.max_height) height = style.max_height;
+      node->measured_w = width;
+      node->measured_h = height;
+      return SizeF{width, height};
+    }
   }
 
   if (is_text) {
@@ -2899,6 +3091,8 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
 
   const AppStyle& style = node->style;
   if (node->children.empty()) return;
+  // Builders materialize items on demand; the Flutter sliver owns placement.
+  if (IsListBuilderName(node->name) || IsGridBuilderName(node->name)) return;
 
   const float content_x = style.border_width + style.padding[3];
   const float content_y = style.border_width + style.padding[0];
@@ -3150,9 +3344,20 @@ void ResetNodeHandles(AppNode* node, bool include_layout) {
   DeletePersistent(&node->text_span_p);
   DeletePersistent(&node->yoga_node_p);
   DeletePersistent(&node->scroll_view_p);
+  if (node->builder_p != nullptr || !node->builder_items.empty()) {
+    g_builders_by_address.erase(node->address);
+    for (auto& entry : node->builder_items) {
+      Dart_DeletePersistentHandle(entry.second);
+    }
+    node->builder_items.clear();
+    node->builder_pending.clear();
+    DeletePersistent(&node->builder_p);
+  }
   if (node->image_dl) {
+    // Keep the decoded image across rebuilds.  DlImageGPU was created with a
+    // null unref queue (software rendering), and its destructor asserts when
+    // no queue is available, so images live for the process lifetime.
     g_image_nodes.erase(node->address);
-    node->image_dl.reset();
   }
   if (include_layout) DeletePersistent(&node->layout_buffer_p);
   node->decorated_box = nullptr;
@@ -3207,6 +3412,18 @@ bool IsGridViewName(const std::string& name) {
   return name == "gridview" || name == "grid-view";
 }
 
+bool IsListBuilderName(const std::string& name) {
+  return name == "listbuilder" || name == "list-builder";
+}
+
+bool IsGridBuilderName(const std::string& name) {
+  return name == "gridbuilder" || name == "grid-builder";
+}
+
+bool IsBuilderName(const std::string& name) {
+  return IsListBuilderName(name) || IsGridBuilderName(name);
+}
+
 bool IsScrollViewName(const std::string& name) {
   return name == "scrollview" || name == "scroll-view";
 }
@@ -3244,19 +3461,165 @@ void DirectRenderImagePaint(intptr_t ptr, Dart_Handle canvas_handle,
   const double image_height = node->image_dl->height();
   if (image_width <= 0.0 || image_height <= 0.0) return;
 
+  // Resolve `objectFit` (`mode`/`objectFit` attributes or CSS object-fit).
+  int fit = node->style.object_fit;
+  static const char* kFitKeys[] = {"objectFit", "object-fit", "mode"};
+  for (const char* key : kFitKeys) {
+    const auto found = node->attrs.find(key);
+    if (found == node->attrs.end() || found->second.empty()) continue;
+    const std::string value = found->second;
+    if (value == "aspectFit" || value == "contain") {
+      fit = 1;
+    } else if (value == "aspectFill" || value == "cover") {
+      fit = 2;
+    } else if (value == "center" || value == "none") {
+      fit = 3;
+    } else if (value == "scaleToFill" || value == "fill") {
+      fit = 0;
+    } else if (value == "widthFix" || value == "heightFix") {
+      fit = 0;  // the size itself already encodes the preserved aspect ratio
+    }
+    break;
+  }
+  double dest_x = 0.0;
+  double dest_y = 0.0;
+  double dest_w = width;
+  double dest_h = height;
+  const double target_w = std::max(0.0, width);
+  const double target_h = std::max(0.0, height);
+  if (fit == 1 || fit == 4 || fit == 3) {
+    double scale = fit == 3 ? 1.0 : std::min(target_w / image_width,
+                                             target_h / image_height);
+    if (fit == 4 && image_width <= target_w && image_height <= target_h) {
+      scale = 1.0;
+    }
+    dest_w = image_width * scale;
+    dest_h = image_height * scale;
+    dest_x = (target_w - dest_w) / 2.0;
+    dest_y = (target_h - dest_h) / 2.0;
+  } else if (fit == 2) {
+    const double scale = std::max(target_w / image_width,
+                                  target_h / image_height);
+    dest_w = image_width * scale;
+    dest_h = image_height * scale;
+    dest_x = (target_w - dest_w) / 2.0;
+    dest_y = (target_h - dest_h) / 2.0;
+  }
+
   canvas->save();
   canvas->translate(offset_x, offset_y);
+  if (fit == 2) {
+    // aspect-fill spills outside the widget box; clip to the node rect.
+    canvas->clipRect(0.0, 0.0, target_w, target_h, flutter::DlClipOp::kIntersect);
+  }
   canvas->builder()->DrawImageRect(
       node->image_dl,
       flutter::DlRect::MakeLTRB(0.0, 0.0, image_width, image_height),
-      flutter::DlRect::MakeLTRB(0.0, 0.0, width, height),
+      flutter::DlRect::MakeLTRB(dest_x, dest_y, dest_x + dest_w,
+                                dest_y + dest_h),
       flutter::DlImageSampling::kLinear, nullptr);
   canvas->restore();
 }
 
+// `package:skyline` registers this Dart callback; native calls it to perform
+// the actual HTTP request (dart:io) and delivers the response through the
+// supplied C function pointer.
+using RequestHttpResourceFn = void (*)(uint32_t request_context_id,
+                                       Dart_Handle url,
+                                       void* native_callback);
+
 // Decodes `src`/`url` (resolved against SKYLINE_RESOURCE_ROOT) into a dart:ui
 // Image and keeps it alive on the node.
+bool DecodeImageForNode(AppNode* node, const uint8_t* data, size_t size,
+                        const std::string& label) {  if (data == nullptr || size == 0) return false;
+  sk_sp<SkData> sk_data = SkData::MakeWithCopy(data, size);
+  sk_sp<SkImage> sk_image = SkImages::DeferredFromEncodedData(std::move(sk_data));
+  if (!sk_image) {
+    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot decode %s\n",
+                 node->id, label.c_str());
+    return false;
+  }
+  // The Dart `ui.Image` requires a UI-thread-safe DlImage; the GPU wrapper is
+  // safe even for software rendering (its unref queue may be null).
+  flutter::SkiaGPUObject<SkImage> gpu_image = {std::move(sk_image), nullptr};
+  node->image_dl = flutter::DlImageGPU::Make(std::move(gpu_image));
+  if (!node->image_dl) {
+    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot wrap %s\n",
+                 node->id, label.c_str());
+    return false;
+  }
+  node->image_loaded = true;
+  std::fprintf(stderr, "[skyline-runtime] image #%u: %s (%zu bytes, %dx%d)\n",
+               node->id, label.c_str(), size, node->image_dl->width(),
+               node->image_dl->height());
+  return true;
+}
+
+struct PendingImageRequest {
+  AppNode* node = nullptr;
+  RuntimeHolder* holder = nullptr;
+};
+
+std::unordered_map<uint32_t, PendingImageRequest> g_pending_image_requests;
+uint32_t g_next_image_request_id = 0x40000000u;
+
+void RebuildAppServicePage(RuntimeHolder* holder);
+
+// Dart's `RequestHttpResource` performs the actual request (dart:io).  The
+// response arrives on the UI task runner; decode here and rebuild the page so
+// the native paint callback can draw the image.
+extern "C" void OnImageResourceResponse(intptr_t /*runtime_ptr*/,
+                                        uint32_t request_id, Dart_Handle data,
+                                        uint8_t /*from_cache*/) {
+  auto found = g_pending_image_requests.find(request_id);
+  if (found == g_pending_image_requests.end()) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] image response for unknown request %u\n",
+                 request_id);
+    return;
+  }
+  PendingImageRequest pending = found->second;
+  g_pending_image_requests.erase(found);
+  if (pending.node == nullptr) return;
+  pending.node->image_pending = false;
+
+  std::vector<uint8_t> bytes;
+  if (data != nullptr && !Dart_IsNull(data) && !Dart_IsError(data)) {
+    Dart_TypedData_Type type = Dart_TypedData_kInvalid;
+    void* raw = nullptr;
+    intptr_t length = 0;
+    if (!Dart_IsError(Dart_TypedDataAcquireData(data, &type, &raw, &length)) &&
+        raw != nullptr && length > 0) {
+      bytes.assign(static_cast<uint8_t*>(raw),
+                   static_cast<uint8_t*>(raw) + length);
+    }
+    Dart_TypedDataReleaseData(data);
+  }
+  if (!DecodeImageForNode(pending.node, bytes.data(), bytes.size(),
+                          "network image")) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] image #%u: network payload unusable (%zu "
+                 "bytes)\n",
+                 pending.node->id, bytes.size());
+    pending.node->image_failed = true;
+  } else {
+    std::fprintf(stderr,
+                 "[skyline-runtime] network image (%zu bytes) for #%u, "
+                 "rebuilding page\n",
+                 bytes.size(), pending.node->id);
+  }
+  auto runner = UiTaskRunner();
+  if (!runner) return;
+  RuntimeHolder* holder = pending.holder;
+  runner->PostTask([holder]() {
+    DemoPageApiScope scope;
+    RebuildAppServicePage(holder);
+  });
+}
+
 bool LoadImageForNode(AppNode* node) {
+  if (node->image_loaded) return true;
+  if (node->image_failed) return false;
   static const char* kSourceKeys[] = {"src", "url", "imageUrl", "image",
                                       "path"};
   std::string source;
@@ -3270,37 +3633,81 @@ bool LoadImageForNode(AppNode* node) {
   if (source.empty()) {
     std::fprintf(stderr, "[skyline-runtime] image #%u: no src attribute\n",
                  node->id);
+    node->image_failed = true;
     return false;
   }
+
+  if (StartsWith(source, "http://") || StartsWith(source, "https://")) {
+    if (node->image_pending) return false;
+    RuntimeHolder* holder = g_page != nullptr ? g_page->holder : nullptr;
+    void* request = holder != nullptr
+                        ? FindCallback(holder->ffi_table,
+                                       kRequestHttpResourceHash)
+                        : nullptr;
+    if (request == nullptr) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] image #%u: RequestHttpResource missing\n",
+                   node->id);
+      node->image_failed = true;
+      return false;
+    }
+    const uint32_t request_id = ++g_next_image_request_id;
+    node->image_pending = true;
+    g_pending_image_requests[request_id] = PendingImageRequest{node, holder};
+    std::fprintf(stderr,
+                 "[skyline-runtime] image #%u: fetch %s (request=%u)\n",
+                 node->id, source.c_str(), request_id);
+    // Start the request from a follow-up UI task: the Dart-side
+    // `RequestHttpResource` is an async callback and must not be entered from
+    // the middle of page construction.
+    auto runner = UiTaskRunner();
+    if (!runner) runner = g_ui_task_runner;
+    if (runner) {
+      runner->PostTask([holder, request_id, source]() {
+        DemoPageApiScope scope;
+        void* request = FindCallback(
+            holder != nullptr ? holder->ffi_table : nullptr,
+            kRequestHttpResourceHash);
+        if (request == nullptr) {
+          std::fprintf(stderr,
+                       "[skyline-runtime] image request %u: "
+                       "RequestHttpResource missing\n",
+                       request_id);
+          return;
+        }
+        Dart_Handle url = Dart_NewStringFromCString(source.c_str());
+        std::fprintf(stderr,
+                     "[skyline-runtime] image request %u starting\n",
+                     request_id);
+        reinterpret_cast<RequestHttpResourceFn>(request)(
+            request_id, url,
+            reinterpret_cast<void*>(&OnImageResourceResponse));
+      });
+    }
+    return false;
+  }
+
   const std::string resolved = ResolveResourcePath(source);
   std::vector<uint8_t> bytes;
   if (!ReadResourceBytes(resolved, &bytes) || bytes.empty()) {
     std::fprintf(stderr, "[skyline-runtime] image #%u: cannot read %s\n",
                  node->id, resolved.c_str());
+    node->image_failed = true;
     return false;
   }
-  sk_sp<SkData> data = SkData::MakeWithCopy(bytes.data(), bytes.size());
-  sk_sp<SkImage> sk_image = SkImages::DeferredFromEncodedData(std::move(data));
-  if (!sk_image) {
-    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot decode %s\n",
-                 node->id, resolved.c_str());
+  if (!DecodeImageForNode(node, bytes.data(), bytes.size(),
+                          source + " -> " + resolved)) {
+    node->image_failed = true;
     return false;
   }
-  // The Dart `ui.Image` requires a UI-thread-safe DlImage; the GPU wrapper is
-  // safe even for software rendering (its unref queue may be null).
-  flutter::SkiaGPUObject<SkImage> gpu_image = {std::move(sk_image), nullptr};
-  node->image_dl = flutter::DlImageGPU::Make(std::move(gpu_image));
-  if (!node->image_dl) {
-    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot wrap %s\n",
-                 node->id, resolved.c_str());
-    return false;
-  }
-  std::fprintf(stderr,
-               "[skyline-runtime] image #%u: %s -> %s (%zu bytes, %dx%d)\n",
-               node->id, source.c_str(), resolved.c_str(), bytes.size(),
-               node->image_dl->width(), node->image_dl->height());
   return true;
 }
+
+// Builder nodes are slivers.  The Dart side calls back with `(address, index)`
+// whenever the sliver needs an item; the callback schedules the mount on the
+// UI runner and materializes the captured item node on demand.
+void OnBuilderBuildChild(intptr_t address, int32_t index);
+void OnBuilderDisposeChild(intptr_t address, int32_t index);
 
 Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         NewYGConnectorFn newYGConnector, NewTextFn newText,
@@ -3309,7 +3716,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         NewOpacityFn newOpacity, NewScrollViewFn newScrollView,
                         NewListViewFn newListView, NewGridViewFn newGridView,
                         NewDirectRenderWidgetFn newDirectRenderWidget,
-                        bool is_root) {
+                        NewListBuilderFn newListBuilder,
+                        NewGridBuilderFn newGridBuilder, bool is_root) {
   if (node->released || node->style.display_none) {
     return Dart_Null();
   }
@@ -3341,19 +3749,77 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       node->text_span_p = Dart_NewPersistentHandle(span_handle);
     }
   } else if (IsImageName(node->name) && newDirectRenderWidget != nullptr) {
-    if (LoadImageForNode(node)) {
-      Dart_Handle widget = newDirectRenderWidget(
-          node->address, reinterpret_cast<void*>(&DirectRenderImagePaint),
-          reinterpret_cast<void*>(&DirectRenderImageDispose),
-          reinterpret_cast<void*>(&DirectRenderImageCreate),
-          reinterpret_cast<void*>(&DirectRenderImageLayout));
-      if (Dart_IsError(widget)) {
-        ReportDartError("appservice direct render widget", widget);
-      } else {
-        inner = widget;
-        g_image_nodes[node->address] = node;
-      }
+    // Network images are fetched asynchronously; the widget is installed
+    // immediately and repaints after the page is rebuilt on response.
+    LoadImageForNode(node);
+    Dart_Handle widget = newDirectRenderWidget(
+        node->address, reinterpret_cast<void*>(&DirectRenderImagePaint),
+        reinterpret_cast<void*>(&DirectRenderImageDispose),
+        reinterpret_cast<void*>(&DirectRenderImageCreate),
+        reinterpret_cast<void*>(&DirectRenderImageLayout));
+    if (Dart_IsError(widget)) {
+      ReportDartError("appservice direct render widget", widget);
+    } else {
+      inner = widget;
+      g_image_nodes[node->address] = node;
     }
+  } else if (IsBuilderName(node->name) &&
+             ((IsGridBuilderName(node->name) && newGridBuilder != nullptr) ||
+              (IsListBuilderName(node->name) && newListBuilder != nullptr))) {
+    // `<list-builder>`/`<grid-builder>`: a virtualized sliver.  Items are not
+    // built here; the sliver requests them through onBuildChild.
+    node->builder_kind = IsGridBuilderName(node->name) ? 1 : 0;
+    node->builder_child_count = static_cast<int>(
+        AttrNumber(node, "childCount", static_cast<double>(AttrNumber(
+                                           node, "child-count", 0.0))));
+    node->builder_child_height =
+        static_cast<float>(AttrNumber(node, "childHeight", 0.0));
+    node->builder_cross_axis_count = std::max(
+        1, static_cast<int>(AttrNumber(node, "crossAxisCount", 2.0)));
+    node->builder_main_spacing =
+        static_cast<float>(AttrNumber(node, "mainAxisSpacing", 0.0));
+    node->builder_cross_spacing =
+        static_cast<float>(AttrNumber(node, "crossAxisSpacing", 0.0));
+    node->builder_max_cross_extent =
+        static_cast<float>(AttrNumber(node, "maxCrossAxisExtent", 0.0));
+    node->builder_background = style.has_background ? style.background : 0u;
+    Dart_Handle empty = Dart_NewList(0);
+    Dart_Handle builder = Dart_Null();
+    if (node->builder_kind == 1) {
+      builder = newGridBuilder(
+          node->address, empty,
+          static_cast<uint8_t>(AttrNumber(node, "type", 0.0)),
+          node->builder_child_count, node->builder_cross_axis_count,
+          node->builder_main_spacing, node->builder_cross_spacing,
+          node->builder_max_cross_extent, style.padding[0], style.padding[1],
+          style.padding[2], style.padding[3], node->builder_background,
+          reinterpret_cast<void*>(&OnBuilderBuildChild),
+          reinterpret_cast<void*>(&OnBuilderDisposeChild));
+    } else {
+      builder = newListBuilder(
+          node->address, empty,
+          static_cast<uint8_t>(AttrNumber(node, "type", 0.0)),
+          node->builder_child_count, node->builder_child_height,
+          style.padding[0], style.padding[1], style.padding[2], style.padding[3],
+          node->builder_background,
+          reinterpret_cast<void*>(&OnBuilderBuildChild),
+          reinterpret_cast<void*>(&OnBuilderDisposeChild));
+    }
+    if (Dart_IsError(builder) || Dart_IsNull(builder)) {
+      ReportDartError("appservice NewListBuilder/NewGridBuilder", builder);
+      return Dart_Null();
+    }
+    node->builder_p = Dart_NewPersistentHandle(builder);
+    g_builders_by_address[node->address] = node;
+    std::fprintf(stderr,
+                 "[skyline-runtime] builder #%u: %s count=%d item=%gx%g\n",
+                 node->id, node->builder_kind == 1 ? "grid" : "list",
+                 node->builder_child_count,
+                 static_cast<double>(node->measured_w),
+                 static_cast<double>(node->builder_child_height));
+    // Slivers are consumed by the ancestor scroll view; do not wrap in a
+    // YGNode (a ParentDataWidget under a sliver is invalid).
+    return builder;
   } else {
     const bool is_scroll_view =
         IsScrollViewName(node->name) && newScrollView != nullptr;
@@ -3396,7 +3862,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         Dart_Handle widget =
             BuildWidget(item, newYGNode, newYGConnector, newText, newTextSpan,
                         newDecoratedBox, newOpacity, newScrollView, newListView,
-                        newGridView, newDirectRenderWidget, true);
+                        newGridView, newDirectRenderWidget, newListBuilder,
+                        newGridBuilder, true);
         if (widget != nullptr && !Dart_IsError(widget)) {
           item_widgets.push_back(widget);
         }
@@ -3476,7 +3943,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       bool has_sliver_child = false;
       for (AppNode* child : node->children) {
         if (child->released || child->style.display_none) continue;
-        if (IsListViewName(child->name) || IsGridViewName(child->name)) {
+        if (IsListViewName(child->name) || IsGridViewName(child->name) ||
+            IsBuilderName(child->name)) {
           has_sliver_child = true;
         }
         // A scroll view's children live under Flutter's ListView, not under a
@@ -3484,7 +3952,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         Dart_Handle widget =
             BuildWidget(child, newYGNode, newYGConnector, newText, newTextSpan,
                         newDecoratedBox, newOpacity, newScrollView, newListView,
-                        newGridView, newDirectRenderWidget, is_scroll_view);
+                        newGridView, newDirectRenderWidget, newListBuilder,
+                        newGridBuilder, is_scroll_view);
         if (widget == nullptr) continue;
         child_widgets.push_back(widget);
       }
@@ -3607,7 +4076,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     }
   }
 
-  Dart_Handle buffer = node->layout_buffer;
+  Dart_Handle buffer = node->layout_buffer_p != nullptr
+                           ? Dart_HandleFromPersistent(node->layout_buffer_p)
+                           : node->layout_buffer;
   if (buffer == nullptr) {
     buffer = Dart_NewTypedData(Dart_TypedData_kFloat32, 9);
     if (Dart_IsError(buffer)) {
@@ -3626,6 +4097,172 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
   node->widget = yoga_node;
   node->yoga_node_p = Dart_NewPersistentHandle(yoga_node);
   return yoga_node;
+}
+
+// -- list/grid builder incremental mount -------------------------------------
+
+// Finds the captured node that backs `index`.  Items may declare an explicit
+// `index` attribute; otherwise the captured order is the index order.
+AppNode* FindBuilderItemNode(AppNode* builder, int index) {
+  int sequential = 0;
+  for (AppNode* child : builder->children) {
+    if (child->released || child->style.display_none) continue;
+    if (child->name != "listbuilderitem" && child->name != "gridbuilderitem" &&
+        child->name != "list-item" && child->name != "grid-item" &&
+        child->name != "builderitem") {
+      continue;
+    }
+    int item_index = sequential;
+    const auto attr = child->attrs.find("index");
+    if (attr != child->attrs.end()) {
+      item_index = std::atoi(attr->second.c_str());
+    }
+    if (item_index == index) return child;
+    sequential++;
+  }
+  return nullptr;
+}
+
+void MaterializeBuilderItem(RuntimeHolder* holder, intptr_t address,
+                            int index) {
+  auto found = g_builders_by_address.find(address);
+  if (found == g_builders_by_address.end() || found->second == nullptr) return;
+  AppNode* builder = found->second;
+  if (builder->released || builder->builder_p == nullptr) return;
+  if (builder->builder_items.count(index) != 0) return;
+  builder->builder_pending.erase(index);
+  AppNode* item = FindBuilderItemNode(builder, index);
+  if (item == nullptr) return;
+
+  auto* newYGNode = reinterpret_cast<NewYGNodeFn>(
+      FindCallback(holder->ffi_table, kNewYGNodeHash));
+  auto* newYGConnector = reinterpret_cast<NewYGConnectorFn>(
+      FindCallback(holder->ffi_table, kNewYGConnectorHash));
+  auto* newText =
+      reinterpret_cast<NewTextFn>(FindCallback(holder->ffi_table, kNewTextHash));
+  auto* newTextSpan = reinterpret_cast<NewTextSpanFn>(
+      FindCallback(holder->ffi_table, kNewTextSpanHash));
+  auto* newDecoratedBox = reinterpret_cast<NewDecoratedBoxFn>(
+      FindCallback(holder->ffi_table, kNewDecoratedBoxHash));
+  auto* newOpacity = reinterpret_cast<NewOpacityFn>(
+      FindCallback(holder->ffi_table, kNewOpacityHash));
+  auto* newScrollView = reinterpret_cast<NewScrollViewFn>(
+      FindCallback(holder->ffi_table, kNewScrollViewHash));
+  auto* newListView = reinterpret_cast<NewListViewFn>(
+      FindCallback(holder->ffi_table, kNewListViewHash));
+  auto* newGridView = reinterpret_cast<NewGridViewFn>(
+      FindCallback(holder->ffi_table, kNewGridViewHash));
+  auto* newDirectRenderWidget = reinterpret_cast<NewDirectRenderWidgetFn>(
+      FindCallback(holder->ffi_table, kNewDirectRenderWidgetHash));
+  auto* newListBuilder = reinterpret_cast<NewListBuilderFn>(
+      FindCallback(holder->ffi_table, kNewListBuilderHash));
+  auto* newGridBuilder = reinterpret_cast<NewGridBuilderFn>(
+      FindCallback(holder->ffi_table, kNewGridBuilderHash));
+  auto* newItem =
+      builder->builder_kind == 1
+          ? reinterpret_cast<NewListBuilderItemFn>(
+                FindCallback(holder->ffi_table, kNewGridBuilderItemHash))
+          : reinterpret_cast<NewListBuilderItemFn>(
+                FindCallback(holder->ffi_table, kNewListBuilderItemHash));
+  auto* append = reinterpret_cast<BuilderMutateChildFn>(
+      FindCallback(holder->ffi_table, builder->builder_kind == 1
+                                          ? kGridBuilderAppendChildHash
+                                          : kListBuilderAppendChildHash));
+  if (newYGNode == nullptr || newYGConnector == nullptr || newText == nullptr ||
+      newTextSpan == nullptr || newDecoratedBox == nullptr ||
+      newOpacity == nullptr || newItem == nullptr || append == nullptr) {
+    return;
+  }
+
+  float width = builder->measured_w > 0.0f
+                    ? builder->measured_w
+                    : static_cast<float>(g_viewport_width);
+  if (width <= 0.0f) width = 320.0f;
+  if (builder->builder_kind == 1) {
+    const int columns = std::max(1, builder->builder_cross_axis_count);
+    width = (width - builder->builder_cross_spacing * (columns - 1)) /
+            static_cast<float>(columns);
+    if (width < 0.0f) width = 0.0f;
+  }
+  PrepareLayoutBuffers(item);
+  MeasureNode(item, width, true, kInf, false);
+  if (builder->builder_child_height > 0.0f) {
+    item->measured_h = builder->builder_child_height;
+  }
+  if (item->measured_w <= 0.0f) item->measured_w = width;
+  std::vector<NodeMetric> metrics;
+  LayoutNode(item, 0.0f, 0.0f, item->measured_w, item->measured_h, &metrics);
+  WriteLayoutMetrics(metrics);
+
+  Dart_Handle widget =
+      BuildWidget(item, newYGNode, newYGConnector, newText, newTextSpan,
+                  newDecoratedBox, newOpacity, newScrollView, newListView,
+                  newGridView, newDirectRenderWidget, newListBuilder,
+                  newGridBuilder, true);
+  if (widget == nullptr || Dart_IsError(widget)) return;
+  Dart_Handle children = Dart_NewList(1);
+  Dart_ListSetAt(children, 0, widget);
+  Dart_Handle item_widget = newItem(children, index);
+  if (item_widget == nullptr || Dart_IsError(item_widget)) {
+    ReportDartError("appservice builder item", item_widget);
+    return;
+  }
+  Dart_Handle builder_widget = Dart_HandleFromPersistent(builder->builder_p);
+  append(builder_widget, item_widget);
+  builder->builder_items[index] = Dart_NewPersistentHandle(item_widget);
+  std::fprintf(stderr,
+               "[skyline-runtime] builder mount: #%u index=%d (%gx%g)\n",
+               builder->id, index, static_cast<double>(item->measured_w),
+               static_cast<double>(item->measured_h));
+}
+
+void OnBuilderBuildChild(intptr_t address, int32_t index) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* builder = nullptr;
+  auto found = g_builders_by_address.find(address);
+  if (found != g_builders_by_address.end()) builder = found->second;
+  if (builder == nullptr || builder->builder_items.count(index) != 0 ||
+      builder->builder_pending.count(index) != 0) {
+    return;
+  }
+  builder->builder_pending.insert(index);
+  RuntimeHolder* holder = g_page->holder;
+  auto runner = UiTaskRunner();
+  if (!runner) {
+    builder->builder_pending.erase(index);
+    return;
+  }
+  runner->PostTask([holder, address, index]() {
+    DemoPageApiScope scope;
+    MaterializeBuilderItem(holder, address, index);
+  });
+}
+
+void OnBuilderDisposeChild(intptr_t address, int32_t index) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  RuntimeHolder* holder = g_page->holder;
+  auto runner = UiTaskRunner();
+  if (!runner) return;
+  runner->PostTask([holder, address, index]() {
+    DemoPageApiScope scope;
+    auto found = g_builders_by_address.find(address);
+    if (found == g_builders_by_address.end() || found->second == nullptr) return;
+    AppNode* builder = found->second;
+    auto item = builder->builder_items.find(index);
+    if (item == builder->builder_items.end()) return;
+    auto* remove = reinterpret_cast<BuilderMutateChildFn>(FindCallback(
+        holder->ffi_table, builder->builder_kind == 1
+                               ? kGridBuilderRemoveChildHash
+                               : kListBuilderRemoveChildHash));
+    if (remove != nullptr && builder->builder_p != nullptr) {
+      remove(Dart_HandleFromPersistent(builder->builder_p),
+             Dart_HandleFromPersistent(item->second));
+    }
+    Dart_DeletePersistentHandle(item->second);
+    builder->builder_items.erase(item);
+    std::fprintf(stderr, "[skyline-runtime] builder dispose: #%u index=%d\n",
+                 builder->id, index);
+  });
 }
 
 uint32_t MemberUint(const rapidjson::Value& object, const char* key,
@@ -3661,7 +4298,33 @@ void ApplyOperation(const rapidjson::Value& op) {
   if (kind[0] == '\0') return;
   g_page->applied_ops++;
 
-  if (std::strcmp(kind, "setScrollTop") == 0) {
+  if (std::strcmp(kind, "focusInput") == 0) {
+    g_page->focused_input_id = MemberUint(op, "id", 0);
+    std::fprintf(stderr, "[skyline-runtime] focus input: id=%u\n",
+                 g_page->focused_input_id);
+  } else if (std::strcmp(kind, "keyboardStatus") == 0) {
+    g_page->keyboard_height = MemberNumber(op, "height", 0.0);
+    const int32_t input_key = static_cast<int32_t>(MemberUint(op, "inputKey", 0));
+    void* callback = g_page->holder != nullptr
+                         ? FindCallback(g_page->holder->ffi_table,
+                                        kUpdateKeyboardStatusHash)
+                         : nullptr;
+    if (callback != nullptr) {
+      reinterpret_cast<UpdateKeyboardStatusFn>(callback)(
+          input_key, g_page->keyboard_height);
+      std::fprintf(stderr,
+                   "[skyline-runtime] UpdateKeyboardStatus: key=%d height=%g\n",
+                   input_key, g_page->keyboard_height);
+    }
+  } else if (std::strcmp(kind, "dispatchKey") == 0) {
+    AppNode* input = FindNode(g_page->focused_input_id);
+    const char* text = MemberText(op, "text");
+    if (input != nullptr && text[0] != '\0') {
+      input->text += text;
+      std::fprintf(stderr, "[skyline-runtime] dispatchKey: id=%u text=%s\n",
+                   input->id, input->text.c_str());
+    }
+  } else if (std::strcmp(kind, "setScrollTop") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
     void* callback = g_page->holder != nullptr
                          ? FindCallback(g_page->holder->ffi_table,
@@ -3711,13 +4374,36 @@ void ApplyOperation(const rapidjson::Value& op) {
   } else if (std::strcmp(kind, "createElement") == 0) {
     NewNode(MemberUint(op, "id", 0), MemberText(op, "tag"),
             MemberText(op, "name"));
+  } else if (std::strcmp(kind, "notifyNavigateTo") == 0 ||
+             std::strcmp(kind, "notifySwitchTab") == 0 ||
+             std::strcmp(kind, "notifyNavigateBack") == 0) {
+    // Route requests from the renderer.  The recorder stores the native call
+    // arguments as an array (`[windowId, pageId, ...]`).
+    const auto args = op.FindMember("args");
+    auto arg_number = [&](size_t index, double fallback) -> double {
+      if (args == op.MemberEnd() || !args->value.IsArray() ||
+          index >= args->value.Size()) {
+        return fallback;
+      }
+      const rapidjson::Value& value = args->value[static_cast<rapidjson::SizeType>(
+          index)];
+      if (value.IsNumber()) return value.GetDouble();
+      return fallback;
+    };
+    const bool is_back = std::strcmp(kind, "notifyNavigateBack") == 0;
+    const bool is_switch = std::strcmp(kind, "notifySwitchTab") == 0;
+    g_page->pending_open_type = is_back ? 6 : (is_switch ? 1 : 4);
+    g_page->pending_page_id =
+        static_cast<int32_t>(arg_number(1, 0.0));
+    if (is_back) {
+      g_page->pending_back_delta =
+          static_cast<int>(arg_number(2, 1.0));
+      g_page->pending_back_animated = arg_number(3, 1.0) != 0.0;
+    }
   } else if (std::strcmp(kind, "createContext") == 0 ||
              std::strcmp(kind, "setAsTab") == 0 ||
              std::strcmp(kind, "registerEventCallback") == 0 ||
              std::strcmp(kind, "registerAnimationCallback") == 0 ||
-             std::strcmp(kind, "notifyNavigateTo") == 0 ||
-             std::strcmp(kind, "notifySwitchTab") == 0 ||
-             std::strcmp(kind, "notifyNavigateBack") == 0 ||
              std::strcmp(kind, "startMapper") == 0 ||
              std::strcmp(kind, "stopMapper") == 0) {
     // Native bindings with no page-tree effect in this milestone.
@@ -4151,6 +4837,10 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
       FindCallback(holder->ffi_table, kNewGridViewHash));
   auto* newDirectRenderWidget = reinterpret_cast<NewDirectRenderWidgetFn>(
       FindCallback(holder->ffi_table, kNewDirectRenderWidgetHash));
+  auto* newListBuilder = reinterpret_cast<NewListBuilderFn>(
+      FindCallback(holder->ffi_table, kNewListBuilderHash));
+  auto* newGridBuilder = reinterpret_cast<NewGridBuilderFn>(
+      FindCallback(holder->ffi_table, kNewGridBuilderHash));
   auto* updateChildren = reinterpret_cast<ConnectorUpdateChildrenFn>(
       FindCallback(holder->ffi_table, kYGConnectorUpdateChildrenHash));
   auto* markNeedsLayout = reinterpret_cast<MarkYGNodeNeedsLayoutFn>(
@@ -4184,7 +4874,8 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
     Dart_Handle widget = BuildWidget(child, newYGNode, newYGConnector, newText,
                                      newTextSpan, newDecoratedBox, newOpacity,
                                      newScrollView, newListView, newGridView,
-                                     newDirectRenderWidget, false);
+                                     newDirectRenderWidget, newListBuilder,
+                                     newGridBuilder, false);
     if (widget != nullptr && !Dart_IsError(widget)) widgets.push_back(widget);
   }
   Dart_Handle list = Dart_NewList(static_cast<intptr_t>(widgets.size()));
@@ -4208,44 +4899,152 @@ void FlushAppServicePage(RuntimeHolder* holder, bool structural) {
   RebuildAppServicePage(holder);
 }
 
-void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
-  auto* newYGNode =
-      reinterpret_cast<NewYGNodeFn>(FindCallback(holder->ffi_table, kNewYGNodeHash));
-  auto* newYGConnector = reinterpret_cast<NewYGConnectorFn>(
+// -- page routes -------------------------------------------------------------
+
+struct PageBuilders {
+  NewYGNodeFn yg_node = nullptr;
+  NewYGConnectorFn yg_connector = nullptr;
+  NewTextFn text = nullptr;
+  NewTextSpanFn text_span = nullptr;
+  NewDecoratedBoxFn decorated = nullptr;
+  NewOpacityFn opacity = nullptr;
+  NewScrollViewFn scroll = nullptr;
+  NewListViewFn list = nullptr;
+  NewGridViewFn grid = nullptr;
+  NewDirectRenderWidgetFn direct = nullptr;
+  NewListBuilderFn list_builder = nullptr;
+  NewGridBuilderFn grid_builder = nullptr;
+  CreatePageRouteFn create_route = nullptr;
+};
+
+PageBuilders LoadPageBuilders(RuntimeHolder* holder) {
+  PageBuilders builders;
+  builders.yg_node = reinterpret_cast<NewYGNodeFn>(
+      FindCallback(holder->ffi_table, kNewYGNodeHash));
+  builders.yg_connector = reinterpret_cast<NewYGConnectorFn>(
       FindCallback(holder->ffi_table, kNewYGConnectorHash));
-  auto* createPageRoute = reinterpret_cast<CreatePageRouteFn>(
-      FindCallback(holder->ffi_table, kCreatePageRouteHash));
-  auto* newText =
+  builders.text =
       reinterpret_cast<NewTextFn>(FindCallback(holder->ffi_table, kNewTextHash));
-  auto* newTextSpan = reinterpret_cast<NewTextSpanFn>(
+  builders.text_span = reinterpret_cast<NewTextSpanFn>(
       FindCallback(holder->ffi_table, kNewTextSpanHash));
-  auto* newDecoratedBox = reinterpret_cast<NewDecoratedBoxFn>(
+  builders.decorated = reinterpret_cast<NewDecoratedBoxFn>(
       FindCallback(holder->ffi_table, kNewDecoratedBoxHash));
-  auto* newOpacity = reinterpret_cast<NewOpacityFn>(
+  builders.opacity = reinterpret_cast<NewOpacityFn>(
       FindCallback(holder->ffi_table, kNewOpacityHash));
-  auto* newScrollView = reinterpret_cast<NewScrollViewFn>(
+  builders.scroll = reinterpret_cast<NewScrollViewFn>(
       FindCallback(holder->ffi_table, kNewScrollViewHash));
-  auto* newListView = reinterpret_cast<NewListViewFn>(
+  builders.list = reinterpret_cast<NewListViewFn>(
       FindCallback(holder->ffi_table, kNewListViewHash));
-  auto* newGridView = reinterpret_cast<NewGridViewFn>(
+  builders.grid = reinterpret_cast<NewGridViewFn>(
       FindCallback(holder->ffi_table, kNewGridViewHash));
-  auto* newDirectRenderWidget = reinterpret_cast<NewDirectRenderWidgetFn>(
+  builders.direct = reinterpret_cast<NewDirectRenderWidgetFn>(
       FindCallback(holder->ffi_table, kNewDirectRenderWidgetHash));
-  if (newYGNode == nullptr || newYGConnector == nullptr ||
-      createPageRoute == nullptr || newText == nullptr ||
-      newTextSpan == nullptr || newDecoratedBox == nullptr ||
-      newOpacity == nullptr) {
+  builders.list_builder = reinterpret_cast<NewListBuilderFn>(
+      FindCallback(holder->ffi_table, kNewListBuilderHash));
+  builders.grid_builder = reinterpret_cast<NewGridBuilderFn>(
+      FindCallback(holder->ffi_table, kNewGridBuilderHash));
+  builders.create_route = reinterpret_cast<CreatePageRouteFn>(
+      FindCallback(holder->ffi_table, kCreatePageRouteHash));
+  return builders;
+}
+
+// Builds and pushes one page route for an `attach` operation.  Called while
+// replaying the captured operation stream, so the node table already contains
+// the page's final tree.
+bool MaterializeAttachedPage(RuntimeHolder* holder,
+                             const PageBuilders& builders, uint32_t root_id,
+                             uint8_t open_type, int32_t page_id,
+                             int32_t callback_id) {
+  if (g_page == nullptr || builders.create_route == nullptr) return false;
+  AppNode* root = FindNode(root_id);
+  if (root == nullptr) {
     std::fprintf(stderr,
-                 "[skyline-runtime] appservice ops: callbacks not registered "
-                 "(yg=%p connector=%p route=%p text=%p span=%p decorated=%p)\n",
-                 reinterpret_cast<void*>(newYGNode),
-                 reinterpret_cast<void*>(newYGConnector),
-                 reinterpret_cast<void*>(createPageRoute),
-                 reinterpret_cast<void*>(newText),
-                 reinterpret_cast<void*>(newTextSpan),
-                 reinterpret_cast<void*>(newDecoratedBox));
+                 "[skyline-runtime] appservice ops: no attach root (root=%u)\n",
+                 root_id);
+    return false;
+  }
+  if (builders.yg_node == nullptr || builders.yg_connector == nullptr ||
+      builders.text == nullptr || builders.text_span == nullptr ||
+      builders.decorated == nullptr || builders.opacity == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] appservice ops: callbacks not registered\n");
+    return false;
+  }
+
+  ResolveStyles(root, nullptr);
+  const float viewport_w =
+      g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
+  const float viewport_h =
+      g_viewport_height > 0.0 ? static_cast<float>(g_viewport_height) : 240.0f;
+  PrepareLayoutBuffers(root);
+  MeasureNode(root, viewport_w, true, viewport_h, true);
+  root->measured_w = viewport_w;
+  root->measured_h = viewport_h;
+  std::vector<NodeMetric> metrics;
+  LayoutNode(root, 0.0f, 0.0f, viewport_w, viewport_h, &metrics);
+  WriteLayoutMetrics(metrics);
+
+  Dart_Handle root_widget =
+      BuildWidget(root, builders.yg_node, builders.yg_connector, builders.text,
+                  builders.text_span, builders.decorated, builders.opacity,
+                  builders.scroll, builders.list, builders.grid, builders.direct,
+                  builders.list_builder, builders.grid_builder, true);
+  if (root_widget == nullptr || Dart_IsError(root_widget)) {
+    std::fprintf(stderr, "[skyline-runtime] appservice ops: build failed\n");
+    return false;
+  }
+
+  static char page_url[] = "pages/appservice";
+  static SkylinePageConfig config;
+  config.backgroundColorContent = 0xFFFFFFFFu;
+  config.pageUrl = page_url;
+  Dart_Handle empty = Dart_NewStringFromCString("");
+  g_page->root_id = root_id;
+  g_page->page_count++;
+  std::fprintf(stderr,
+               "[skyline-runtime] appservice page %d -> CreatePageRoute "
+               "(openType=%u, %gx%g)\n",
+               g_page->page_count, static_cast<unsigned>(open_type),
+               static_cast<double>(viewport_w), static_cast<double>(viewport_h));
+  builders.create_route(callback_id, open_type, 0,
+                        open_type == 1 /* kSwitchTab */ ? 1 : 0, page_id,
+                        1, 1, 0, 0, 0, 0, 0, empty, 1, 1, 0, 0, 0, 0, 0, 0,
+                        empty, empty, Dart_Null(), root_widget, &config);
+
+  DeletePersistent(&g_page->root_node);
+  DeletePersistent(&g_page->root_connector);
+  g_page->root_node = Dart_NewPersistentHandle(root_widget);
+  if (root->connector != nullptr) {
+    g_page->root_connector = Dart_NewPersistentHandle(root->connector);
+  }
+  SnapshotNode(root);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    DebugDumpNode(root, 0);
+    for (const NodeMetric& metric : metrics) {
+      std::fprintf(stderr,
+                   "[ops-debug] metrics #%u -> top=%g left=%g w=%g h=%g\n",
+                   metric.node->id, static_cast<double>(metric.y),
+                   static_cast<double>(metric.x), static_cast<double>(metric.w),
+                   static_cast<double>(metric.h));
+    }
+  }
+  return true;
+}
+
+void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
+  const PageBuilders builders = LoadPageBuilders(holder);
+  if (builders.yg_node == nullptr || builders.yg_connector == nullptr ||
+      builders.create_route == nullptr || builders.text == nullptr ||
+      builders.text_span == nullptr || builders.decorated == nullptr ||
+      builders.opacity == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] appservice ops: callbacks not registered\n");
     return;
   }
+  auto* navigateBack = reinterpret_cast<NavigateBackFn>(
+      FindCallback(holder->ffi_table, kNavigateBackHash));
+  auto* switchTab = reinterpret_cast<SwitchTabFn>(
+      FindCallback(holder->ffi_table, kSwitchTabHash));
 
   std::string json;
   if (!ReadDescriptor(descriptor, &json)) {
@@ -4270,70 +5069,62 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
 
   g_page = new OpPage();
   g_page->holder = holder;
+  g_ui_task_runner = UiTaskRunner();
   g_next_rule_order = 0;
   g_next_address = 0x5000;
+  g_builders_by_address.clear();
+  g_image_nodes.clear();
   for (const rapidjson::Value& op : ops_member->value.GetArray()) {
     ApplyOperation(op);
+    const char* kind = MemberText(op, "op");
+    if (std::strcmp(kind, "attach") == 0) {
+      const uint8_t open_type = g_page->pending_open_type != 0
+                                    ? g_page->pending_open_type
+                                    : (g_page->page_count == 0 ? 0 : 4);
+      const int32_t page_id =
+          g_page->pending_page_id != 0 ? g_page->pending_page_id
+                                       : (g_page->page_count == 0 ? 0 : 1);
+      MaterializeAttachedPage(holder, builders, g_page->root_id, open_type,
+                              page_id, g_page->pending_callback_id);
+      g_page->pending_open_type = 0;
+      g_page->pending_page_id = 0;
+      g_page->pending_callback_id = 0;
+    } else if (std::strcmp(kind, "notifyNavigateBack") == 0) {
+      if (g_page->page_count > 0 && navigateBack != nullptr) {
+        navigateBack(g_page->pending_back_delta,
+                     g_page->pending_back_animated ? 1 : 0, 0);
+        std::fprintf(stderr,
+                     "[skyline-runtime] NavigateBack: delta=%d animated=%d\n",
+                     g_page->pending_back_delta,
+                     g_page->pending_back_animated ? 1 : 0);
+      }
+      g_page->pending_open_type = 0;
+    } else if (std::strcmp(kind, "notifySwitchTab") == 0) {
+      if (g_page->page_count > 0 && switchTab != nullptr) {
+        switchTab(g_page->pending_page_id, 0);
+        std::fprintf(stderr, "[skyline-runtime] SwitchTab: page=%d\n",
+                     g_page->pending_page_id);
+        g_page->pending_open_type = 0;
+      }
+    }
   }
-  AppNode* root = FindNode(g_page->root_id);
-  if (root == nullptr) {
+  if (g_page->page_count == 0 && g_page->root_id != 0) {
+    MaterializeAttachedPage(holder, builders, g_page->root_id, 0, 0, 0);
+  }
+  if (g_page->page_count == 0) {
     std::fprintf(stderr,
                  "[skyline-runtime] appservice ops: no attach root (root=%u)\n",
                  g_page->root_id);
     return;
   }
-  ResolveStyles(root, nullptr);
-
-  const float viewport_w =
-      g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
-  const float viewport_h =
-      g_viewport_height > 0.0 ? static_cast<float>(g_viewport_height) : 240.0f;
-  PrepareLayoutBuffers(root);
-  MeasureNode(root, viewport_w, true, viewport_h, true);
-  root->measured_w = viewport_w;
-  root->measured_h = viewport_h;
-  std::vector<NodeMetric> metrics;
-  LayoutNode(root, 0.0f, 0.0f, viewport_w, viewport_h, &metrics);
-  WriteLayoutMetrics(metrics);
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
-    DebugDumpNode(root, 0);
-    for (const NodeMetric& metric : metrics) {
-      std::fprintf(stderr,
-                   "[ops-debug] metrics #%u -> top=%g left=%g w=%g h=%g\n",
-                   metric.node->id, static_cast<double>(metric.y),
-                   static_cast<double>(metric.x), static_cast<double>(metric.w),
-                   static_cast<double>(metric.h));
-    }
+    DebugDumpNode(FindNode(g_page->root_id), 0);
   }
-  Dart_Handle root_widget =
-      BuildWidget(root, newYGNode, newYGConnector, newText, newTextSpan,
-                  newDecoratedBox, newOpacity, newScrollView, newListView,
-                  newGridView, newDirectRenderWidget, true);
-  if (root_widget == nullptr || Dart_IsError(root_widget)) {
-    std::fprintf(stderr, "[skyline-runtime] appservice ops: build failed\n");
-    return;
-  }
-
-  static char page_url[] = "pages/appservice";
-  static SkylinePageConfig config;
-  config.backgroundColorContent = 0xFFFFFFFFu;
-  config.pageUrl = page_url;
-  Dart_Handle empty = Dart_NewStringFromCString("");
   std::fprintf(stderr,
                "[skyline-runtime] appservice ops: %d ops, %u nodes -> "
-               "CreatePageRoute (%gx%g)\n",
+               "CreatePageRoute (%d page(s))\n",
                g_page->applied_ops,
-               static_cast<unsigned>(g_page->nodes.size()),
-               static_cast<double>(viewport_w), static_cast<double>(viewport_h));
-  createPageRoute(0, 4, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, empty, 1, 1, 0, 0, 0, 0,
-                  0, 0, empty, empty, Dart_Null(), root_widget, &config);
-
-  // Keep the attached root alive so post-attach operations can update it.
-  g_page->root_node = Dart_NewPersistentHandle(root_widget);
-  if (root->connector != nullptr) {
-    g_page->root_connector = Dart_NewPersistentHandle(root->connector);
-  }
-  SnapshotNode(root);
+               static_cast<unsigned>(g_page->nodes.size()), g_page->page_count);
 
   // @font-face requests go through the real Dart font pipeline:
   // LoadFontFace -> ResourceLoader.loadResourceAsync -> LoadResourceAsync ->
@@ -4373,7 +5164,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
       const rapidjson::Value* ops = &ops_member->value;
       if (!task_runner) continue;
       task_runner->PostDelayedTask(
-          [holder, ops]() {
+          [holder, ops, builders, navigateBack, switchTab]() {
             if (g_page == nullptr ||
                 (Dart_CurrentIsolate() == nullptr && g_isolate == nullptr)) {
               return;
@@ -4381,21 +5172,52 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
             DemoPageApiScope scope;
             bool structural = false;
             bool needs_flush = false;
+            bool created_route = false;
             for (const rapidjson::Value& op : ops->GetArray()) {
               ApplyOperation(op);
               const auto kind = op.FindMember("op");
-              if (kind != op.MemberEnd() && kind->value.IsString()) {
-                const char* name = kind->value.GetString();
-                if (IsStructuralOpKind(name)) structural = true;
-                // Pure input/scroll commands already update the Flutter side
-                // through their runtime callbacks; a relayout pass would only
-                // add work (and can interfere with scroll offsets).
-                if (std::strcmp(name, "dispatchTouch") != 0) {
-                  needs_flush = true;
+              if (kind == op.MemberEnd() || !kind->value.IsString()) continue;
+              const char* name = kind->value.GetString();
+              if (std::strcmp(name, "attach") == 0) {
+                const uint8_t open_type = g_page->pending_open_type != 0
+                                              ? g_page->pending_open_type
+                                              : 4;
+                const int32_t page_id =
+                    g_page->pending_page_id != 0 ? g_page->pending_page_id : 1;
+                if (MaterializeAttachedPage(holder, builders, g_page->root_id,
+                                            open_type, page_id,
+                                            g_page->pending_callback_id)) {
+                  created_route = true;
                 }
+                g_page->pending_open_type = 0;
+                g_page->pending_page_id = 0;
+                g_page->pending_callback_id = 0;
+              } else if (std::strcmp(name, "notifyNavigateBack") == 0) {
+                if (navigateBack != nullptr && g_page->page_count > 0) {
+                  navigateBack(g_page->pending_back_delta,
+                               g_page->pending_back_animated ? 1 : 0, 0);
+                  std::fprintf(
+                      stderr,
+                      "[skyline-runtime] NavigateBack: delta=%d animated=%d\n",
+                      g_page->pending_back_delta,
+                      g_page->pending_back_animated ? 1 : 0);
+                }
+                g_page->pending_open_type = 0;
+              } else if (std::strcmp(name, "notifySwitchTab") == 0) {
+                if (switchTab != nullptr && g_page->page_count > 0) {
+                  switchTab(g_page->pending_page_id, 0);
+                  std::fprintf(stderr, "[skyline-runtime] SwitchTab: page=%d\n",
+                               g_page->pending_page_id);
+                  g_page->pending_open_type = 0;
+                }
+              } else if (std::strcmp(name, "dispatchTouch") != 0) {
+                if (IsStructuralOpKind(name)) structural = true;
+                needs_flush = true;
               }
             }
-            if (needs_flush) FlushAppServicePage(holder, structural);
+            if (needs_flush && !created_route) {
+              FlushAppServicePage(holder, structural);
+            }
           },
           fml::TimeDelta::FromMilliseconds(delay_ms));
       std::fprintf(stderr,
@@ -4405,7 +5227,72 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   }
 }
 
+// Synthetic keyboard input: append/delete text on the focused node and push
+// the change through the normal fine-grained update path.
+void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
+                    const std::string& text) {
+  if (g_page == nullptr || kind == 1 /* key up */) return;
+  AppNode* input = FindNode(g_page->focused_input_id);
+  if (input == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] key event ignored: no focused input "
+                 "(kind=%d logical=%u)\n",
+                 static_cast<int>(kind), logical);
+    return;
+  }
+  if (logical == 0x00000008u /* backspace */) {
+    if (!input->text.empty()) {
+      size_t end = input->text.size();
+      while (end > 0 &&
+             (static_cast<unsigned char>(input->text[end - 1]) & 0xC0) == 0x80) {
+        end--;
+      }
+      if (end > 0) end--;
+      input->text.erase(end);
+    }
+  } else if (!text.empty()) {
+    input->text += text;
+  } else {
+    return;
+  }
+  std::fprintf(stderr, "[skyline-runtime] key input: id=%u value=\"%s\"\n",
+               input->id, input->text.c_str());
+  FlushAppServicePage(holder, false);
+}
+
 }  // namespace appservice
+
+SKYLINE_EXPORT extern "C" void DispatchSkylineKeyEvent(int32_t kind,
+                                                       uint32_t logical,
+                                                       const char* text) {
+  std::fprintf(stderr,
+               "[skyline-runtime] DispatchSkylineKeyEvent: kind=%d logical=%u "
+               "text=%s\n",
+               static_cast<int>(kind), logical, text != nullptr ? text : "");
+  if (appservice::g_page == nullptr || appservice::g_page->holder == nullptr) {
+    return;
+  }
+  const std::string value = text != nullptr ? text : "";
+  if (Dart_CurrentIsolate() != nullptr) {
+    // Called with the isolate already entered (e.g. from a Dart callback).
+    DemoPageApiScope scope;
+    appservice::HandleKeyInput(appservice::g_page->holder, kind, logical,
+                               value);
+    return;
+  }
+  RuntimeHolder* holder = appservice::g_page->holder;
+  auto runner = UiTaskRunner();
+  if (!runner) runner = appservice::g_ui_task_runner;
+  if (!runner) return;
+  // The headless embedder runs the UI tasks on the same thread that drives the
+  // engine, so run inline instead of deadlocking behind the host's wait loop.
+  fml::TaskRunner::RunNowOrPostTask(
+      runner, [holder, kind, logical, value]() {
+        DemoPageApiScope scope;
+        appservice::HandleKeyInput(holder, kind, logical, value);
+      });
+}
+
 
 void CreateAppServiceOpsPage(RuntimeHolder* holder, const char* descriptor) {
   appservice::ApplyOpsPage(holder, descriptor);

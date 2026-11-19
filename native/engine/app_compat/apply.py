@@ -97,3 +97,49 @@ if "SKYLINE_HTTP_TEST_URL" not in sample_text:
     print(f"patched {sample}")
 else:
     print(f"already patched {sample}")
+
+# Optional keyboard platform channel: the headless host cannot call into the
+# Dart isolate from its own thread, so it sends a 'skyline/keyboard' platform
+# message.  This handler forwards the payload to the embedded runtime export on
+# the UI thread (used by the appservice ops keyboard test).
+if "skyline/keyboard" not in sample_text:
+    imports = (
+        "import 'dart:convert';\n"
+        "import 'dart:ffi';\n"
+        "import 'package:ffi/ffi.dart';\n"
+        "import 'package:flutter/services.dart';\n"
+    )
+    sample_text = sample_text.replace(
+        'import "package:skyline/skyline.dart";\n',
+        'import "package:skyline/skyline.dart";\n' + imports,
+        1,
+    )
+    hook = """
+  ServicesBinding.instance.defaultBinaryMessenger
+      .setMessageHandler('skyline/keyboard', (ByteData? data) async {
+    if (data == null) return null;
+    final raw = utf8.decode(
+        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
+    final parts = raw.split(' ');
+    final kind = int.tryParse(parts.isNotEmpty ? parts[0] : '0') ?? 0;
+    final logical =
+        int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0;
+    final text = parts.length > 2 ? parts.sublist(2).join(' ') : '';
+    final library = DynamicLibrary.open('libskyline.so');
+    final dispatch = library.lookupFunction<
+        Void Function(Int32, Uint32, Pointer<Utf8>),
+        void Function(int, int, Pointer<Utf8>)>('DispatchSkylineKeyEvent');
+    final pointer = text.isEmpty ? nullptr : text.toNativeUtf8();
+    dispatch(kind, logical, pointer);
+    if (pointer != nullptr) calloc.free(pointer);
+    return null;
+  });
+"""
+    marker = "      skylineAddonPath: args[5],\n  );\n"
+    if marker not in sample_text:
+        raise SystemExit(f"cannot find initSkylineForDevtools anchor in {sample}")
+    sample_text = sample_text.replace(marker, marker + hook, 1)
+    sample.write_text(sample_text, encoding="utf-8")
+    print(f"patched keyboard channel in {sample}")
+else:
+    print(f"keyboard channel already patched in {sample}")

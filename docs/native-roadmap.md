@@ -174,9 +174,38 @@
   `OnForwardHttpGetResponse` 回到 UI task runner；`HandlePageRoute(Done)`、
   `HandleTouchEvent`/`HandleMouseEvent`、`NotifyUserGestureInProgressChange` 已
   解析并记录；日志导出保持实现。
-- **下一步**：路由栈的页面切换回放、键盘输入路径、图片 `objectFit`/网络图片、
-  list/grid builder 的增量 mount 回调；继续补全 yoga 属性。L5 的 Windows 基准
-  仍受官方 appservice guest 阻塞。
+- **路由栈回放（2026-11-19）**：`notifyNavigateTo`/`notifySwitchTab`/
+  `notifyNavigateBack` 操作分别映射到 `CreatePageRoute`（openType
+  kAppLaunch/navigateTo/switchTab）与 Dart 注册的 `SwitchTab`、
+  `NavigateBack`；每个 `attach` 物化一条路由。`tools/record-skyline-ops.js`
+  新增 `--tap-text`（按元素文本注入 tap，兼容旧 bundle 的
+  `registerEventCallback`），可录制 `app_0.js` SPA 的真实
+  `Jump To PageB` 两页操作流。夹具 `appservice-route.ops.json` 覆盖 push +
+  pop；官方 bundle 录制用例覆盖 `didPush pageId: 1`。
+- **键盘输入（2026-11-19）**：宿主新增 `--key-script`，同时发送
+  `FlutterEngineSendKeyEvent` 与 `skyline/keyboard` 平台消息；重编译的
+  appservice kernel 在 UI 线程把消息交给嵌入运行时新增导出
+  `DispatchSkylineKeyEvent`，运行时向焦点节点追加文本并走
+  `TextSpanUpdate*` 刷新。`focusInput`/`keyboardStatus` 操作覆盖焦点与
+  `UpdateKeyboardStatus`（native → Dart）。
+- **图片 objectFit / 网络图片（2026-11-19）**：`mode`/`objectFit`/CSS
+  `object-fit` 支持 fill/contain/cover/none/scale-down/widthFix（cover 用
+  `clipRect` 裁剪，widthFix 在测量阶段按解码宽高比改高度）；`http(s)://`
+  图片经 `RequestHttpResource` 异步获取，响应在 UI runner 上解码并用
+  `YGConnectorUpdateChildren` 重建页面。
+- **builder 增量 mount（2026-11-19）**：`listbuilder`/`gridbuilder` 调用真实
+  `NewListBuilder`/`NewGridBuilder`，`onBuildChild`/`onDisposeChild` 回调把
+  index 投递到 UI runner，再按需物化 captured item 并调用
+  `NewListBuilderItem`/`ListBuilderAppendChild`；100 个声明 child 的夹具初始
+  只 mount 5 个可视项。
+- **兼容项（2026-11-19）**：`Canvas.clipRRect(ClipOp.difference)` 在
+  dart:ui 兼容层用 `Path.combine(difference)` + `clipPath` 实现（不再按
+  intersect 处理）；`TextStyle/ParagraphStyle.lineHeight` 仍受公开引擎文本
+  编码限制，保留记录。
+- **下一步**：item 的动态二次变更回调（`ListBuilderInsertBefore`/
+  `UpdateChildren`）、滚动后新 item 的持续录制、`position: absolute`/
+  `transform`、输入法选区/光标与 `InputHoldKeyboard`；继续补全 yoga 属性。
+  L5 的 Windows 基准仍受官方 appservice guest 阻塞。
 
 按依赖顺序推进，每一块都以 Windows 官方输出为基准：
 
@@ -229,6 +258,9 @@
    `npm run ops:record` / `npm run test:ops`）；
 8. ~~增量节点/样式更新、scroll/list/grid、手势协商、图片原生绘制、HTTP/输入
    通道~~（已完成，见阶段 3 进度）；
-9. **下一步**：路由栈回放、键盘输入、图片 `objectFit`/网络图片、list/grid
-   builder 增量 mount，并逐步对齐 `lineHeight`、`clipOp` 等 no-op 兼容项。
-   L5 的 Windows 基准仍受官方 appservice guest 阻塞。
+9. ~~路由栈回放、键盘输入、图片 `objectFit`/网络图片、list/grid builder
+   增量 mount~~（已完成，见阶段 3 进度；`clipOp` 也已对齐，
+   `lineHeight` 仍受引擎文本编码限制）；
+10. **下一步**：`position: absolute`/`transform`/`transition`、builder item
+   二次变更回调、输入法选区/光标，以及 L5 的 Windows 基准（仍受官方
+   appservice guest 阻塞）。

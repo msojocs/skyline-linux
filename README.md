@@ -16,8 +16,11 @@
 > `app.js`（exparser + skyline-js）并抓取 `createElement`/`appendChild`/
 > `setAttribute`/`appendStyleSheet`/`attach` 等操作，嵌入式运行时按 CSS 级联与
 > flexbox 子集回放，再调用真实 `package:skyline` 回调物化。目前已覆盖滚动
-> （触摸/鼠标拖拽、滚轮）、`list-view`/`grid-view`、图片原生绘制
-> （`NewDirectRenderWidget` + Skia）、HTTP/路由/触摸/鼠标/日志平台通道。
+> （触摸/鼠标拖拽、滚轮）、`list-view`/`grid-view` 与 builder 增量 mount、
+> 图片原生绘制与 `objectFit`/网络图片、HTTP/路由栈/键盘/触摸/鼠标/日志平台
+> 通道。路由栈回放支持 `notifyNavigateTo`/`notifySwitchTab`/`notifyNavigateBack`
+> 与多条 `CreatePageRoute`；宿主 `--key-script` 经 `FlutterEngineSendKeyEvent`
+> 和 `skyline/keyboard` 平台消息驱动焦点文本更新。
 > 渲染引擎的原生 Linux 实现受闭源限制，详见
 > [docs/feasibility.md](docs/feasibility.md) 与
 > [docs/appservice-ops.md](docs/appservice-ops.md)。
@@ -86,6 +89,8 @@ npm run test:page                   # 渲染多节点 Skyline 页面（三色条
 npm run ops:record                  # 录制官方渲染层 bundle 的节点操作流
 npm run test:ops                    # 回放节点操作流（CSS/flexbox/滚动）
 npm run ops:record -- --tap-option 1  # 录制真实 tap 触发的增量操作
+npm run ops:record -- --tap-text "Jump To PageB"  # 录制 SPA 路由切换
+npm run test:ops                     # 含路由栈/builder/objectFit/网络图片/键盘
 
 # 2. 记录官方 Windows 模块的契约快照（需要 Wine 11 + Windows Electron）
 export SKYLINE_WIN_RESOURCES=/path/to/resources/app.asar.unpacked

@@ -244,11 +244,13 @@ native/engine/out/linux-x64-debug/patched_sdk/      platform_strong.dill + vm_ou
 
 1. **Skyline 运行时仍是简化实现**：73 个导出已可加载，引导路径、合成页面与
    appservice/V8 节点操作流回放已跑通，attach 后增量更新、tap 手势、拖拽/滚轮
-   滚动、list/grid、图片原生绘制、资源加载与 HTTP/路由/输入通道也已覆盖；但完整
-   yoga 属性、键盘输入、图片 `objectFit`/网络图片与 builder 增量 mount 尚未实现。
+   滚动、list/grid、builder 增量 mount、图片原生绘制与 `objectFit`/网络图片、
+   资源加载、路由栈回放、键盘通道与 HTTP/输入通道也已覆盖；但 `position:
+   absolute`/`transform`、builder item 二次变更与输入法选区/光标尚未实现。
 2. `lineHeight`、`backgroundUseLineMetrics`、`useCoreTextWordBreak` 仅保证编译，
    公开引擎的文本引擎不会应用这些属性；后续需在 `skyline_ext` 文本实现中处理。
-3. `Canvas.clipRRect(clipOp: difference)` 暂按 intersect 处理。
+3. `Canvas.clipRRect(clipOp: difference)` 已用 `Path.combine` 差值路径 +
+   `clipPath` 模拟（见 `apply.py`）；`intersect` 仍走原生快速路径。
 4. 多 `Application`（每个 Shell 一个）未实现；公开引擎是单应用模型，兼容层复用
    单例 `PlatformDispatcher`。
 5. 每次修改兼容层后必须 `npm run ui:patch && npm run engine:build`，否则 kernel

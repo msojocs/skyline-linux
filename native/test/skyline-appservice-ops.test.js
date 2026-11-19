@@ -182,10 +182,18 @@ function writeQuadBmp(file) {
 function recordRealOps(options = {}) {
   if (!fs.existsSync(recorder)) return null;
   const suffix = options.tapOption === undefined ? '' : `-tap-${options.tapOption}`;
-  const out = path.join(os.tmpdir(), `skyline-ops-${process.pid}${suffix}.json`);
+  const textSuffix = options.tapText === undefined ? '' : '-tap-text';
+  const out = path.join(
+    os.tmpdir(), `skyline-ops-${process.pid}${suffix}${textSuffix}.json`);
   const args = [recorder, '--out', out, '--quiet'];
   if (options.tapOption !== undefined) {
     args.push('--tap-option', String(options.tapOption));
+  }
+  if (options.tapText !== undefined) {
+    args.push('--tap-text', String(options.tapText));
+  }
+  if (options.bundle !== undefined) {
+    args.push('--bundle', options.bundle);
   }
   const result = spawnSync(process.execPath, args, {
     encoding: 'utf8',
@@ -197,6 +205,22 @@ function recordRealOps(options = {}) {
   } catch {
     return null;
   }
+}
+
+function legacyBundle() {
+  const resources = [
+    process.env.SKYLINE_WIN_RESOURCES,
+    path.resolve(repoRoot, '..', 'wechat-web-devtools-linux', 'cache',
+      'devtools', 'resources', 'app.asar.unpacked'),
+    path.resolve(repoRoot, '..', 'wechat-web-devtools-linux', 'tmp',
+      'official-win-resources', 'resources', 'app.asar.unpacked'),
+  ].filter(Boolean);
+  for (const resource of resources) {
+    const candidate = path.join(resource, 'node_modules', 'skyline-addon',
+      'bundle', 'flutter_assets', 'assets', 'app_0.js');
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 test('appservice ops: committed stripe fixture replays through the runtime', {
@@ -874,6 +898,250 @@ test('appservice ops: a captured tap gesture drives a real update batch', {
     assert.deepEqual(pixelAt(pixels, 10, 80), [255, 255, 0, 255]);
     const yellow = countColor(pixels, (r, g, b) => r === 255 && g === 255 && b === 0);
     assert.ok(yellow > 500, `expected the tapped button to turn yellow, found ${yellow}`);
+  } finally {
+    try {
+      fs.unlinkSync(recorded.path);
+    } catch {
+      // Missing file is fine.
+    }
+  }
+});
+
+test('appservice ops: list-builder mounts items on demand', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-builder.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // 100 declared children, but only the visible window is materialized.
+  const indexes = [...logs.matchAll(/builder mount: #4 index=(\d+)/g)]
+    .map((match) => Number(match[1]));
+  const unique = new Set(indexes);
+  assert.ok(unique.size >= 3, `expected several mounts, got ${unique.size}`);
+  assert.ok(unique.size < 20,
+    `builder should not mount all captured items, got ${unique.size}`);
+  for (const index of unique) {
+    assert.ok(index < 20, `unexpected mounted index ${index}`);
+  }
+
+  // Alternate red/green 40px rows, white below the 200px viewport.
+  assert.deepEqual(pixelAt(pixels, 10, 10), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 10, 50), [0, 255, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 10, 210), [255, 255, 255, 255]);
+});
+
+test('appservice ops: route stack pushes and pops pages', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-route.ops.json');
+  const { result, logs, pixels, details } = runHost(fixture, {
+    timeoutMs: 2200,
+    frames: 0,
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  assert.ok(details.presentCount >= 3,
+    `expected push/pop frames, presentCount=${details.presentCount}`);
+  assert.match(logs, /appservice page 1 -> CreatePageRoute/);
+  assert.match(logs, /appservice page 2 -> CreatePageRoute \(openType=4/);
+  assert.match(logs, /didPush pageId: 1/);
+  assert.match(logs, /NavigateBack: delta=1 animated=1/);
+  // Page B (red) is pushed, then popped back to page A (blue).
+  assert.deepEqual(pixelAt(pixels, 160, 120), [0, 0, 255, 255]);
+});
+
+test('appservice ops: image objectFit contains the bitmap', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-fit-'));
+  const bmp = path.join(dir, 'quad.bmp');
+  const ops = path.join(dir, 'fit.ops.json');
+  writeQuadBmp(bmp);
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#808080;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'image' },
+      { op: 'setStyle', id: 3, value: 'width:200px;height:100px;' },
+      { op: 'setAttribute', id: 3, name: 'src', value: 'quad.bmp' },
+      { op: 'setAttribute', id: 3, name: 'mode', value: 'aspectFit' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 1500,
+      frames: 0,
+      env: { SKYLINE_RESOURCE_ROOT: dir },
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    // 8x8 bitmap scaled to 100x100, centered in the 200x100 box.
+    assert.deepEqual(pixelAt(pixels, 10, 50), [128, 128, 128, 255]);
+    assert.deepEqual(pixelAt(pixels, 60, 10), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 140, 10), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 60, 90), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 140, 90), [255, 255, 0, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: network images load through RequestHttpResource', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-net-'));
+  const bmp = path.join(dir, 'quad.bmp');
+  writeQuadBmp(bmp);
+  const encoded = fs.readFileSync(bmp).toString('base64');
+  // The server must live in a separate process: runHost() blocks this event
+  // loop with spawnSync.
+  const server = spawn(process.execPath, ['-e', `
+    const http = require('http');
+    const bytes = Buffer.from('${encoded}', 'base64');
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'image/bmp',
+        'Content-Length': String(bytes.length),
+      });
+      res.end(bytes);
+    });
+    server.listen(0, '127.0.0.1', () => console.log(server.address().port));
+  `], { stdio: ['ignore', 'pipe', 'inherit'] });
+  let port = 0;
+  try {
+    port = await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('image server did not start')), 5000);
+      server.stdout.once('data', (data) => {
+        clearTimeout(timer);
+        resolve(Number(String(data).trim()));
+      });
+    });
+    const ops = path.join(dir, 'network.ops.json');
+    fs.writeFileSync(ops, JSON.stringify({
+      ops: [
+        { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+        { op: 'setStyle', id: 2, value: 'width:320px;height:240px;' },
+        { op: 'createElement', id: 3, tag: 'empty', name: 'image' },
+        { op: 'setStyle', id: 3, value: 'width:320px;height:240px;' },
+        { op: 'setAttribute', id: 3, name: 'src',
+          value: `http://127.0.0.1:${port}/quad.bmp` },
+        { op: 'appendChild', id: 2, child: 3 },
+        { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+        { op: 'appendChild', id: 1, child: 2 },
+        { op: 'attach', root: 1 },
+        { op: 'startRender' },
+      ],
+    }));
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 3000,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /image #3: fetch http:\/\/127\.0\.0\.1:\d+\/quad\.bmp/);
+    assert.match(logs, /network image \(\d+ bytes\)/);
+    assert.ok(pixels, 'no frame was captured');
+    assert.deepEqual(pixelAt(pixels, 80, 60), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 240, 60), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 80, 180), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 240, 180), [255, 255, 0, 255]);
+  } finally {
+    server.kill();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: host key events drive the keyboard channel', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-key-'));
+  const ops = path.join(dir, 'key.ops.json');
+  const script = path.join(dir, 'key.script');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'text', name: 'input' },
+      { op: 'setText', id: 3, text: 'A' },
+      { op: 'setStyle', id: 3, value: 'font-size:48px;color:#000000;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+      { op: 'focusInput', id: 3 },
+      { op: 'keyboardStatus', inputKey: 3, height: 180 },
+    ],
+  }));
+  fs.writeFileSync(script, [
+    '1500 down 4 98 b',
+    '1600 up 4 98',
+    '',
+  ].join('\n'));
+  try {
+    const { result, logs, details } = runHost(ops, {
+      timeoutMs: 2600,
+      frames: 0,
+      args: ['--key-script', script],
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /focus input: id=3/);
+    assert.match(logs, /UpdateKeyboardStatus: key=3 height=180/);
+    assert.match(logs, /\[host\] key event sent: at=1500/);
+    assert.match(logs, /DispatchSkylineKeyEvent: kind=0 logical=98 text=b/);
+    assert.match(logs, /key input: id=3 value="Ab"/);
+    assert.ok(details.presentCount >= 2, 'expected a repaint after the key event');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: recorded SPA navigation replays a route stack', {
+  skip: prerequisiteSkip() || false,
+  timeout: 90000,
+}, () => {
+  const bundle = legacyBundle();
+  if (bundle === null) return;  // official renderer bundle not installed
+  const recorded = recordRealOps({ bundle, tapText: 'Jump To PageB' });
+  if (recorded === null) return;
+  try {
+    assert.ok((recorded.payload.updates || []).length >= 1,
+      'tap should emit a page-B operation batch');
+    const { result, logs, pixels } = runHost(recorded.path, {
+      timeoutMs: 3000,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /appservice page 2 -> CreatePageRoute \(openType=4/);
+    assert.match(logs, /didPush pageId: 1/);
+    assert.ok(pixels, 'no frame was captured');
+    // Page B renders "I am PageB" (the buttons sit below its 200px spacer).
+    const dark = countColor(pixels,
+      (r, g, b) => r < 100 && g < 100 && b < 100);
+    assert.ok(dark > 50, `expected PageB text, found ${dark} dark pixels`);
   } finally {
     try {
       fs.unlinkSync(recorded.path);
