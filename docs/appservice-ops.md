@@ -379,7 +379,9 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
 支持的属性：
 
 - flex：`display`（仅 `none`）、`flex-direction`、`justify-content`、
-  `align-items`、`flex`、`gap`、`flex-wrap`（忽略）
+  `align-items`、`flex`/`flex-grow`/`flex-shrink`/`flex-basis`、`gap`、
+  `flex-wrap`。`flex` 支持 `<grow> [<shrink>] [<basis>]`、`none`/`auto`/
+  `initial`；`flex-basis` 支持 px/%/`auto`/`content`/`0`。
 - 定位：`position: absolute|fixed`、`top/right/bottom/left`（px/%）、`z-index`
 - 盒模型：`width/height`（px/%/auto）、`min/max-*`、`padding`/`margin` 及四边，
   `border`/`border-width`/`border-color`、`border-radius`
@@ -488,7 +490,8 @@ npm run test:ops
   背景/边框/box-shadow/圆角/gradient 与 root 自身样式均支持增量更新
   （`DecoratedBoxUpdateColor/Border/Shadow/BorderSideRadius/Gradient/
   ClearGradient`）。flexbox 子集支持 `align-self`、`order`、`row-gap`/
-  `column-gap`（含 `gap: r c`）、`flex-wrap` + `align-content`，逐边
+  `column-gap`（含 `gap: r c`）、`flex-wrap` + `align-content`、`flex-basis`
+  （px/%/auto/0）与按 `flex-shrink * base` 缩放的溢出收缩，逐边
   `border-width/color`，逐角 `border-radius`（px/%），以及 `overflow:
   hidden/clip`（`NewClipRRect`，圆角增量走 `ClipRRectUpdateRadius`）。
 - `transition` 已回放：CSS `transition`/`transition-*` 解析为属性掩码、时长、
@@ -537,6 +540,6 @@ npm run test:ops
 - L5：Linux 侧确定性帧哈希与 `test/lib/l5.js` 容差比较已就绪
   （`npm run test:l5`）。官方 Windows 引擎帧由 `tools/l5-windows.js` 在
   Wine 渲染进程中以 dpr=2 采集，基线写入 `spec/l5-baseline.win32.json`；
-  Windows 原始帧为 BGRA，采集工具统一转 RGBA。7 个夹具逐像素完全一致（`shadow` 最大差 1），
+  Windows 原始帧为 BGRA，采集工具统一转 RGBA。8 个夹具逐像素完全一致（`shadow` 最大差 1），
   `overflow`/`fixed-scroll` 仅有边缘级差异，`transform3d` 与
   `gridview`/`listview` 的已知差异见 `docs/feasibility.md` §3.1。

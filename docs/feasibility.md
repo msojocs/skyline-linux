@@ -213,11 +213,11 @@ C1 原先按“需要完整官方 DevTools 环境”阻塞。实际验证表明�
 640x480 设备像素；Linux 侧用同一夹具在 `--dpr 2` 下重放，比较时仅排除 Linux debug
 构建右上角的 “DEBUG” 横幅（`ignoreRects`，release Windows 引擎没有该横幅）。
 
-13 个夹具的实测结果（`npm run test:l5`，容差 12/通道）：
+14 个夹具的实测结果（`npm run test:l5`，容差 12/通道）：
 
 | 夹具 | 结果 |
 | --- | --- |
-| stripes/fixed/transform-origin/align-gap/flex-wrap/order/absolute | 逐像素完全一致（maxDelta=0） |
+| stripes/fixed/transform-origin/align-gap/flex-wrap/order/absolute/flex-basis | 逐像素完全一致（maxDelta=0） |
 | shadow | maxDelta=1 |
 | overflow | maxDelta=109，失配率 0.14%（裁剪边缘） |
 | fixed-scroll | maxDelta=26，失配率 0.14%（滚动/固定元素边缘） |

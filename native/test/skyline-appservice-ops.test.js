@@ -2159,3 +2159,36 @@ test('appservice ops: releasing a native view disposes its texture handle', {
   // The update removes the texture; the red page fills its slot again.
   assert.deepEqual(pixelAt(pixels, 60, 60), [255, 0, 0, 255]);
 });
+
+test('appservice ops: flex-basis and flex-shrink size items', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-flex-basis.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // Row 1: `0 0 110px` + `1 1 0%` + `2 1 0px` over 320px.
+  assert.deepEqual(pixelAt(pixels, 109, 35), [255, 0, 0, 255], 'flex-basis px');
+  assert.deepEqual(pixelAt(pixels, 110, 35), [0, 170, 0, 255], 'grow 1 starts');
+  assert.deepEqual(pixelAt(pixels, 179, 35), [0, 170, 0, 255], 'grow 1 ends');
+  assert.deepEqual(pixelAt(pixels, 180, 35), [0, 0, 255, 255], 'grow 2 starts');
+
+  // Row 2: two 150px bases shrink by 25/75 (1:3) into a 200px row.
+  assert.deepEqual(pixelAt(pixels, 124, 120), [255, 255, 0, 255], 'shrink 1');
+  assert.deepEqual(pixelAt(pixels, 125, 120), [255, 0, 255, 255], 'shrink 3');
+  assert.deepEqual(pixelAt(pixels, 199, 120), [255, 0, 255, 255], 'shrink end');
+  assert.deepEqual(pixelAt(pixels, 200, 120), [255, 255, 255, 255], 'row width');
+
+  // Row 3: `0 0 25%` resolves against the 320px row; the auto-basis grow item
+  // takes the rest.
+  assert.deepEqual(pixelAt(pixels, 79, 200), [0, 255, 255, 255], '25% basis');
+  assert.deepEqual(pixelAt(pixels, 80, 200), [255, 136, 0, 255], 'auto basis');
+  assert.deepEqual(pixelAt(pixels, 319, 200), [255, 136, 0, 255], 'grow end');
+});

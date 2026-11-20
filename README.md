@@ -28,8 +28,9 @@
 > `transform-origin`、圆角/gradient 增量更新、root 样式 targeted update、
 > fixed 节点提升到页面根连接器（滚动祖先内保持固定）、录制器
 > `--animate-ms` 驱动 JS worklet/derived value 采样、`align-self`/`order`/按轴
-> gap/`flex-wrap`/`align-content`、逐边 border、`overflow: hidden` 裁剪、
-> 逐角圆角与资源路径缓存。L5 已接入官方 Windows 引擎的真实帧基线
+> gap/`flex-wrap`/`align-content`、`flex-basis`/`flex-shrink`、逐边 border、
+> `overflow: hidden` 裁剪、逐角圆角与资源路径缓存。L5 已接入官方 Windows
+> 引擎的真实帧基线
 > （`spec/l5-baseline.win32.json`，Wine 渲染进程 + dpr=2 采集）。
 > 阶段 3 任务清单与 x/y 进度见 [docs/phase-3-tasks.md](docs/phase-3-tasks.md)。
 > 渲染引擎的原生 Linux 实现受闭源限制，详见
@@ -69,7 +70,7 @@ L1–L4 可在本仓库直接运行；L5 已有 Linux 基线与**官方 Windows 
 （`npm run test:l5`）。`tools/l5-windows.js` 在 Wine 渲染进程中以 dpr=2 启动官方
 `skyline.node`，经 `notifyAppLaunch` + `PageContext` 回放夹具并从共享内存读取帧
 （Windows 原始帧为 BGRA，工具转为 RGBA），结果写入
-`spec/l5-baseline.win32.json`。13 个夹具中 7 个逐像素完全一致、`shadow` 最大差 1，`overflow`/
+`spec/l5-baseline.win32.json`。14 个夹具中 8 个逐像素完全一致、`shadow` 最大差 1，`overflow`/
 `fixed-scroll` 仅有边缘级差异，剩余差异见 `docs/feasibility.md` §3.1。
 
 ## 快速开始
@@ -278,7 +279,8 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   取消、输入法选区/光标/组合输入、CJK 字体回退与 L5 Linux 基线/harness。
   后续增量：`transform-origin`、逐角圆角/gradient 增量更新、root 样式 targeted
   update、fixed 节点提升到页面根连接器、录制器 JS worklet/derived value 采样、
-  `align-self`/`order`/按轴 gap/`flex-wrap`/`align-content`、逐边 border、
+  `align-self`/`order`/按轴 gap/`flex-wrap`/`align-content`、`flex-basis`
+  （px/%/auto）与 `flex-shrink` 缩放收缩、逐边 border、
   `overflow: hidden` 裁剪、逐角圆角与资源路径缓存，以及私有 `dart:ui` 文本编码
   标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`，按官方位布局写入
   native 并在 SkParagraph 中应用行框背景/选区）、native view 通道

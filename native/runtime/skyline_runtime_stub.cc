@@ -2132,6 +2132,13 @@ struct AppStyle {
   float max_height = kInf;
   float flex = 0.0f;
   bool has_flex = false;
+  // CSS flex-shrink (default 1) and flex-basis.  `has_flex_shrink` records an
+  // explicit declaration so the replay's historical non-shrinking layout stays
+  // stable for pages that never ask for it.
+  float flex_shrink = 1.0f;
+  bool has_flex_shrink = false;
+  float flex_basis = std::nanf("");          // px; NaN = auto
+  float flex_basis_percent = std::nanf("");  // 0..1; NaN = not a percentage
 
   uint32_t background = 0u;
   bool has_background = false;
@@ -3326,6 +3333,74 @@ void ParseBoxShadow(const std::string& raw, AppStyle* style) {
   style->shadow_inset = inset;
 }
 
+void ApplyFlexBasis(AppStyle* style, const std::string& raw) {
+  const std::string value = LowerAscii(TrimAscii(raw));
+  if (value.empty() || value == "auto" || value == "content") {
+    style->flex_basis = std::nanf("");
+    style->flex_basis_percent = std::nanf("");
+    return;
+  }
+  float px = -1.0f;
+  float percent = -1.0f;
+  if (!ParseLength(value, &px, &percent)) return;
+  if (percent >= 0.0f) {
+    style->flex_basis_percent = percent;
+    style->flex_basis = std::nanf("");
+  } else if (px >= 0.0f) {
+    style->flex_basis = px;
+    style->flex_basis_percent = std::nanf("");
+  }
+}
+
+// CSS `flex` shorthand: `<grow> [<shrink>] [<basis>]`, `none`, `auto` or
+// `initial`.  A single number implies `1` shrink and `0%` basis.
+void ApplyFlexShorthand(AppStyle* style, const std::string& raw) {
+  const std::vector<std::string> parts = SplitWhitespace(raw);
+  if (parts.empty()) return;
+  const std::string first = LowerAscii(parts[0]);
+  if (parts.size() == 1 && (first == "none" || first == "auto" ||
+                            first == "initial")) {
+    if (first == "none") {
+      style->flex = 0.0f;
+      style->flex_shrink = 0.0f;
+    } else if (first == "auto") {
+      style->flex = 1.0f;
+      style->flex_shrink = 1.0f;
+    } else {
+      style->flex = 0.0f;
+      style->flex_shrink = 1.0f;
+    }
+    style->has_flex = true;
+    style->has_flex_shrink = true;
+    ApplyFlexBasis(style, "auto");
+    return;
+  }
+  double grow = 0.0;
+  if (ParseNumber(first, &grow)) {
+    style->flex = static_cast<float>(grow);
+    style->has_flex = true;
+    style->flex_shrink = 1.0f;
+    style->has_flex_shrink = true;
+    ApplyFlexBasis(style, "0px");
+    if (parts.size() >= 2) {
+      double shrink = 0.0;
+      if (ParseNumber(parts[1], &shrink)) {
+        style->flex_shrink = static_cast<float>(shrink);
+        if (parts.size() >= 3) ApplyFlexBasis(style, parts[2]);
+      } else {
+        ApplyFlexBasis(style, parts[1]);
+      }
+    }
+    return;
+  }
+  // A lone width token: `1 1 <basis>`.
+  ApplyFlexBasis(style, parts[0]);
+  style->flex = 1.0f;
+  style->has_flex = true;
+  style->flex_shrink = 1.0f;
+  style->has_flex_shrink = true;
+}
+
 void ApplyDeclaration(AppStyle* style,
                       const std::string& raw_key,
                       const std::string& raw_value) {
@@ -3545,11 +3620,21 @@ void ApplyDeclaration(AppStyle* style,
       }
     }
   } else if (key == "flex") {
+    ApplyFlexShorthand(style, value);
+  } else if (key == "flex-grow") {
     double number = 0.0;
-    if (ParseNumber(value, &number)) {
+    if (ParseNumber(value, &number) && number >= 0.0) {
       style->flex = static_cast<float>(number);
       style->has_flex = true;
     }
+  } else if (key == "flex-shrink") {
+    double number = 0.0;
+    if (ParseNumber(value, &number) && number >= 0.0) {
+      style->flex_shrink = static_cast<float>(number);
+      style->has_flex_shrink = true;
+    }
+  } else if (key == "flex-basis") {
+    ApplyFlexBasis(style, value);
   } else if (key == "background" || key == "background-color") {
     uint32_t color = 0u;
     if (ParseCssColor(value, &color)) {
@@ -4233,6 +4318,7 @@ bool ResolveInset(const AppStyle& style, int index, float content_extent,
 bool IsImageName(const std::string& name);
 bool IsListBuilderName(const std::string& name);
 bool IsGridBuilderName(const std::string& name);
+bool IsScrollViewName(const std::string& name);
 bool LoadImageForNode(AppNode* node);
 bool LoadBackgroundImageForNode(AppNode* node);
 void CancelPendingImage(AppNode* node);
@@ -4414,13 +4500,20 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
           !HasExplicitHeight(child->style);
       const SizeF measured = MeasureNode(child, content_avail_w, child_stretch_w,
                                          kInf, child_stretch_h);
-      const float outer_w = measured.w + child->style.margin[1] +
-                            child->style.margin[3];
-      const float outer_h = measured.h + child->style.margin[0] +
-                            child->style.margin[2];
+      const float measured_main = style.row ? measured.w : measured.h;
+      // Intrinsic sizing uses the content size; flex-basis applies once the
+      // container has a definite main size (LayoutNode).
+      const float child_main = measured_main;
+      const float child_cross = style.row ? measured.h : measured.w;
+      const float margin_main =
+          style.row ? child->style.margin[1] + child->style.margin[3]
+                    : child->style.margin[0] + child->style.margin[2];
+      const float margin_cross =
+          style.row ? child->style.margin[0] + child->style.margin[2]
+                    : child->style.margin[1] + child->style.margin[3];
+      const float outer_main = child_main + margin_main;
+      const float outer_cross = child_cross + margin_cross;
       if (style.wrap && wrap_limit < kInf) {
-        const float outer_main = style.row ? outer_w : outer_h;
-        const float outer_cross = style.row ? outer_h : outer_w;
         if (line_main > 0.0f &&
             line_main + main_gap + outer_main > wrap_limit + 0.01f) {
           finish_line();
@@ -4428,12 +4521,9 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
         if (line_main > 0.0f) line_main += main_gap;
         line_main += outer_main;
         line_cross = std::max(line_cross, outer_cross);
-      } else if (style.row) {
-        main_extent += outer_w;
-        cross_extent = std::max(cross_extent, outer_h);
       } else {
-        main_extent += outer_h;
-        cross_extent = std::max(cross_extent, outer_w);
+        main_extent += outer_main;
+        cross_extent = std::max(cross_extent, outer_cross);
       }
     }
     if (style.wrap && wrap_limit < kInf) {
@@ -4489,6 +4579,37 @@ struct NodeMetric {
   float h = 0.0f;
 };
 
+// Resolves the item's flex base size along the main axis.  `measured_main` is
+// the intrinsic border-box size used when flex-basis is `auto`.
+float ResolveFlexBasis(const AppStyle& style,
+                       bool row,
+                       float main_extent,
+                       float measured_main) {
+  float basis = measured_main;
+  if (!std::isnan(style.flex_basis_percent)) {
+    // Percentages resolve against a definite main size; otherwise CSS treats
+    // the basis as auto/content.
+    if (std::isfinite(main_extent)) {
+      basis = main_extent * style.flex_basis_percent;
+    }
+  } else if (!std::isnan(style.flex_basis)) {
+    basis = style.flex_basis;
+  }
+  const float min_main = row ? style.min_width : style.min_height;
+  const float max_main = row ? style.max_width : style.max_height;
+  if (basis < min_main) basis = min_main;
+  if (basis > max_main) basis = max_main;
+  return std::max(0.0f, basis);
+}
+
+// Explicit `flex-shrink` opts into CSS shrinking.  Unset items keep the
+// replay's historical non-shrinking behaviour; scroll content must never be
+// shrunk because the scroll viewport is smaller than its content.
+float EffectiveFlexShrink(const AppStyle& style, bool in_scroll_view) {
+  if (in_scroll_view) return 0.0f;
+  return style.has_flex_shrink ? style.flex_shrink : 0.0f;
+}
+
 // Collects the final rects instead of writing through cached typed-data
 // pointers: Dart's GC may move typed data between API calls, so each buffer is
 // acquired only for the duration of its own write.
@@ -4529,12 +4650,17 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     float margin_cross_end = 0.0f;
     float main = 0.0f;
     float cross = 0.0f;
+    float base_main = 0.0f;
+    float shrink = 0.0f;
   };
   std::vector<ChildLayout> children;
   children.reserve(node->children.size());
 
-  float fixed_sum = 0.0f;
-  float flex_sum = 0.0f;
+  const float main_extent = style.row ? content_w : content_h;
+  const bool in_scroll_view = IsScrollViewName(node->name);
+  float total_outer_base = 0.0f;
+  float grow_sum = 0.0f;
+  float shrink_weight_sum = 0.0f;
   for (AppNode* child : OrderedFlowChildren(node)) {
     ChildLayout layout;
     layout.node = child;
@@ -4555,7 +4681,6 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       layout.margin_main_end = child->style.margin[1];
       layout.margin_cross_start = child->style.margin[0];
       layout.margin_cross_end = child->style.margin[2];
-      layout.main = layout.w;
       layout.cross = layout.h;
     } else {
       if (stretch_cross) layout.w = std::max(0.0f, content_w);
@@ -4563,15 +4688,24 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       layout.margin_main_end = child->style.margin[2];
       layout.margin_cross_start = child->style.margin[3];
       layout.margin_cross_end = child->style.margin[1];
-      layout.main = layout.h;
       layout.cross = layout.w;
     }
-    if (child->style.has_flex && child->style.flex > 0.0f) {
-      flex_sum += child->style.flex;
+    const float measured_main = style.row ? layout.w : layout.h;
+    layout.base_main =
+        ResolveFlexBasis(child->style, style.row, main_extent, measured_main);
+    layout.main = layout.base_main;
+    if (style.row) {
+      layout.w = layout.base_main;
     } else {
-      fixed_sum += layout.main + layout.margin_main_start +
-                   layout.margin_main_end;
+      layout.h = layout.base_main;
     }
+    layout.shrink = EffectiveFlexShrink(child->style, in_scroll_view);
+    total_outer_base += layout.main + layout.margin_main_start +
+                        layout.margin_main_end;
+    if (child->style.has_flex && child->style.flex > 0.0f) {
+      grow_sum += child->style.flex;
+    }
+    shrink_weight_sum += layout.shrink * layout.base_main;
     children.push_back(layout);
   }
 
@@ -4580,13 +4714,13 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     // flex growth per line, then align lines with align-content.
     const float main_gap = MainGap(style);
     const float cross_gap = style.row ? style.row_gap : style.column_gap;
-    const float main_extent = style.row ? content_w : content_h;
     const float cross_extent = style.row ? content_h : content_w;
     struct WrapLine {
       std::vector<size_t> indices;
       float main = 0.0f;
       float cross = 0.0f;
       float flex_sum = 0.0f;
+      float shrink_weight = 0.0f;
     };
     std::vector<WrapLine> lines;
     for (size_t i = 0; i < children.size(); i++) {
@@ -4610,16 +4744,34 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       if (child.node->style.has_flex && child.node->style.flex > 0.0f) {
         line->flex_sum += child.node->style.flex;
       }
+      line->shrink_weight += child.shrink * child.base_main;
     }
     for (WrapLine& line : lines) {
-      if (line.flex_sum <= 0.0f) continue;
-      float remaining = main_extent - line.main;
-      if (remaining < 0.0f) remaining = 0.0f;
-      for (size_t index : line.indices) {
-        ChildLayout& child = children[index];
-        if (child.node->style.has_flex && child.node->style.flex > 0.0f) {
-          child.main +=
-              remaining * child.node->style.flex / line.flex_sum;
+      const float remaining = main_extent - line.main;
+      if (remaining > 0.0f && line.flex_sum > 0.0f) {
+        for (size_t index : line.indices) {
+          ChildLayout& child = children[index];
+          if (child.node->style.has_flex && child.node->style.flex > 0.0f) {
+            child.main +=
+                remaining * child.node->style.flex / line.flex_sum;
+            if (style.row) {
+              child.w = child.main;
+            } else {
+              child.h = child.main;
+            }
+          }
+        }
+      } else if (remaining < 0.0f && line.shrink_weight > 0.0f) {
+        const float overflow = -remaining;
+        for (size_t index : line.indices) {
+          ChildLayout& child = children[index];
+          if (child.shrink <= 0.0f) continue;
+          const float amount =
+              overflow * (child.shrink * child.base_main) / line.shrink_weight;
+          const float min_main =
+              style.row ? child.node->style.min_width
+                        : child.node->style.min_height;
+          child.main = std::max(min_main, child.main - amount);
           if (style.row) {
             child.w = child.main;
           } else {
@@ -4723,30 +4875,38 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       children.size() > 1
           ? MainGap(style) * static_cast<float>(children.size() - 1)
           : 0.0f;
-  const float main_extent = style.row ? content_w : content_h;
-  float remaining = main_extent - fixed_sum - gaps;
-  if (remaining < 0.0f) remaining = 0.0f;
-  float flex_extra_total = 0.0f;
-  if (flex_sum > 0.0f) {
+  float free = main_extent - total_outer_base - gaps;
+  if (free > 0.0f && grow_sum > 0.0f) {
     for (ChildLayout& child : children) {
       if (child.node->style.has_flex && child.node->style.flex > 0.0f) {
-        const float extra = remaining * child.node->style.flex / flex_sum;
-        child.main += extra;
+        child.main += free * child.node->style.flex / grow_sum;
         if (style.row) {
           child.w = child.main;
         } else {
           child.h = child.main;
         }
-        flex_extra_total += extra;
+      }
+    }
+  } else if (free < 0.0f && shrink_weight_sum > 0.0f) {
+    const float overflow = -free;
+    for (ChildLayout& child : children) {
+      if (child.shrink <= 0.0f) continue;
+      const float amount =
+          overflow * (child.shrink * child.base_main) / shrink_weight_sum;
+      const float min_main = style.row ? child.node->style.min_width
+                                       : child.node->style.min_height;
+      child.main = std::max(min_main, child.main - amount);
+      if (style.row) {
+        child.w = child.main;
+      } else {
+        child.h = child.main;
       }
     }
   }
 
-  float total_main = fixed_sum + flex_extra_total + gaps;
+  float total_main = gaps;
   for (const ChildLayout& child : children) {
-    if (child.node->style.has_flex && child.node->style.flex > 0.0f) {
-      total_main += child.margin_main_start + child.margin_main_end;
-    }
+    total_main += child.main + child.margin_main_start + child.margin_main_end;
   }
   float leftover = main_extent - total_main;
   if (leftover < 0.0f) leftover = 0.0f;

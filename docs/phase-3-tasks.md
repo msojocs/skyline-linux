@@ -5,8 +5,8 @@
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
 > 核心验收：**22 / 22（100%）**
-> 长尾/外部阻塞：**3 / 12**
-> 全部任务：**25 / 34（73.5%）**
+> 长尾/外部阻塞：**4 / 12**
+> 全部任务：**26 / 34（76.5%）**
 >
 > 勾选项表示已在 Linux 回放运行时上实现并通过测试；标有 `blocked` 的任务
 > 依赖外部环境或私有引擎能力。
@@ -17,8 +17,8 @@
 | --- | ---: | ---: | ---: |
 | A. 原始阶段 3 验收项 | 8 | 8 | 100% |
 | B. 后续运行时增量 | 14 | 14 | 100% |
-| C. 长尾 / 外部阻塞 | 3 | 12 | 25.0% |
-| **合计** | **25** | **34** | **73.5%** |
+| C. 长尾 / 外部阻塞 | 4 | 12 | 33.3% |
+| **合计** | **26** | **34** | **76.5%** |
 
 ## A. 原始阶段 3 验收项（8 / 8）
 
@@ -64,15 +64,15 @@
 - [x] **B13** 资源路径缓存（`LoadResourceSync`/`Async`，≤4 MB）
 - [x] **B14** L5 夹具扩展（transform-origin/fixed-scroll/align-gap/flex-wrap/order/overflow）
 
-## C. 长尾 / 外部阻塞（3 / 12）
+## C. 长尾 / 外部阻塞（4 / 12）
 
 - [x] **C1** 官方 Windows appservice guest 的真实 L5 采集与像素对比
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
     `skyline.node`，窗口就绪后经 `notifyAppLaunch` + `PageContext` 回放夹具操作，
     从共享内存读取 640x480 帧。原始 Windows 帧为 BGRA，工具统一转为 RGBA。
-  - `spec/l5-baseline.win32.json` 保存 13 个夹具的 zlib 压缩帧、样本点与容差；
+  - `spec/l5-baseline.win32.json` 保存 14 个夹具的 zlib 压缩帧、样本点与容差；
     `npm run test:l5` 在 Linux 以 dpr=2 重放同一夹具并逐像素比较。
-  - 结果：7 个夹具逐像素完全一致，`shadow` 最大差 1；`overflow`/`fixed-scroll`
+  - 结果：8 个夹具逐像素完全一致，`shadow` 最大差 1；`overflow`/`fixed-scroll`
     失配率 < 0.2%（裁剪/滚动边缘）；`transform3d` 存在 3D 变换保真差异；
     `gridview`/`listview` 的合成 op 流无法触发官方 native builder 回调，标记为
     不可比。详见 `docs/feasibility.md` §3.1。
@@ -102,7 +102,15 @@
     定位节点并在 `SKYLINE_APP_SERVICE_DEBUG` 下输出 down/move/up 与局部坐标；
     Linux/Windows 无 CoreText 原生视图内容时以占位 slot 呈现。
   - `npm run test:ops` 新增 native view 指针转发与释放两个用例（52 / 52）。
-- [ ] **C4** `flex-basis` / `flex-shrink`
+- [x] **C4** `flex-basis` / `flex-shrink`
+  - `flex` 简写支持 `<grow> [<shrink>] [<basis>]`、`none`/`auto`/`initial`；
+    长手 `flex-grow` / `flex-shrink` / `flex-basis` 均生效。
+  - `flex-basis` 支持 px、百分比、`auto`/`content` 与 `0`；百分比按父内容主轴
+    解析，主尺寸未定时回退为内容尺寸。
+  - 溢出时按 `flex-shrink * base` 的 CSS 缩放因子收缩；未显式声明 shrink 的
+    页面保持原有不收缩布局，scroll-view 内容不参与收缩。
+  - 新增 L5 夹具 `appservice-flex-basis.ops.json`（grow/basis、1:3 shrink、
+    25% basis 三行），与官方 Windows 帧逐像素一致（maxDelta=0）。
 - [ ] **C5** `background-position` / `object-position`
 - [ ] **C6** `box-sizing`（`content-box`）
 - [ ] **C7** 百分比 `padding` / `margin`
@@ -116,8 +124,8 @@
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **147 / 171** | 24 skipped，0 fail |
-| `npm run test:ops` | **52 / 52** | appservice 操作流回放 |
+| `npm test` | **148 / 172** | 24 skipped，0 fail |
+| `npm run test:ops` | **53 / 53** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

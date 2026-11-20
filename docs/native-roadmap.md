@@ -282,8 +282,9 @@
   update、fixed 节点提升到页面根连接器（滚动祖先内保持固定）、录制器
   `--animate-ms` 驱动 JS worklet mapper/derived value 并采样为
   `addAnimatedStyle` 时间线；flexbox 增加 `align-self`、`order`、按轴 gap、
-  `flex-wrap`/`align-content`、逐边 border 与 `overflow: hidden` 裁剪；资源加载
-  按路径缓存（≤4 MB）。
+  `flex-wrap`/`align-content`、`flex-basis`（px/%/auto）与按
+  `flex-shrink * base` 缩放的溢出收缩，逐边 border 与 `overflow: hidden`
+  裁剪；资源加载按路径缓存（≤4 MB）。
 - **下一步**：`transform3d` 保真对齐、native view 真实内容接入（当前 Linux
   为占位 slot），以及继续补全 yoga 属性。
 
