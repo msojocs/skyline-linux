@@ -487,7 +487,9 @@ npm run test:ops
 - attach 后的样式/文本更新走细粒度回调；结构变更仍会重建 attach 根子树。
   背景/边框/box-shadow/圆角/gradient 与 root 自身样式均支持增量更新
   （`DecoratedBoxUpdateColor/Border/Shadow/BorderSideRadius/Gradient/
-  ClearGradient`）。
+  ClearGradient`）。flexbox 子集支持 `align-self`、`row-gap`/`column-gap`
+  （含 `gap: r c`）、`flex-wrap` + `align-content`，以及逐角
+  `border-radius`（px/%）。
 - `transition` 已回放：CSS `transition`/`transition-*` 解析为属性掩码、时长、
   延迟与缓动，16ms 时间线通过 target/override 逐帧走
   `DecoratedBoxUpdateColor`/`OpacityUpdate`/`TextSpanUpdate*` 与
@@ -515,7 +517,10 @@ npm run test:ops
   额外通过 `NewInput` 创建一个离屏 `SkylineInput` 句柄，`InputValue/Cursor/
   SelectionStart/End/HoldKeyboard/Focus` 回调均在该句柄上实际调用；文本仍由
   `NewText` 渲染以保持确定性帧。`HandleNativeViewPointerEvent` 等仍为 no-op。
-- `LoadResourceSync` 已实现但当前字体链路只走异步接口；缓存、内存字体未接入。
+- `LoadResourceSync`/`LoadResourceAsync` 共用按解析后路径的资源缓存（≤4 MB，
+  日志带 `, cache`）；`data:` 内存字体由 Dart `fetchFont` 直接解码，native
+  只需完成普通文件/网络资源通道。`AddPendingFont`/`RemovePendingFont` 仍为
+  no-op（字体加载状态由 Dart 侧 FontFace 管理）。
 - 文本 span 通过 `fontFamilyFallback` 传入常见 CJK/系统字体；宿主无 CJK 字体时
   仍会显示 tofu。私有 `backgroundUseLineMetrics`/`useCoreTextWordBreak` 仍无法
   由公开引擎编码（CSS line-height 已通过 span height 生效）。

@@ -2051,9 +2051,14 @@ struct AppStyle {
   bool row = false;
   int justify = 0;  // 0 start, 1 center, 2 end, 3 space-between
   int align = 0;    // 0 stretch, 1 start, 2 center, 3 end
+  int align_self = -1;  // -1 auto, otherwise same values as `align`
+  bool wrap = false;
+  int align_content = 1;  // 0 stretch, 1 start, 2 center, 3 end
   float padding[4] = {0, 0, 0, 0};  // top, right, bottom, left
   float margin[4] = {0, 0, 0, 0};
   float gap = 0.0f;
+  float row_gap = 0.0f;
+  float column_gap = 0.0f;
 
   // CSS position/insets.  position == 1 absolute, 2 fixed: the node is removed
   // from flex flow; absolute/fixed insets resolve against the parent content box
@@ -2114,6 +2119,10 @@ struct AppStyle {
   uint32_t border_color = 0u;
   float border_width = 0.0f;
   float radius = 0.0f;
+  // Per-corner radii (TL, TR, BR, BL); -1 = use the uniform `radius`.
+  float corner_radius[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+  bool corner_radius_percent[4] = {false, false, false, false};
+  bool corner_radius_ellipse[4] = {false, false, false, false};
   double opacity = 1.0;
 
   double font_size = 16.0;
@@ -3076,6 +3085,92 @@ void ParseLinearGradient(AppStyle* style, const std::string& raw) {
   style->gradient_stops = std::move(stops);
 }
 
+// Parses CSS `border-radius` (1-4 corner values; elliptical `/` is reduced to
+// the horizontal radius).
+void ParseBorderRadius(AppStyle* style, const std::string& raw) {
+  std::string value = raw;
+  const size_t slash = value.find('/');
+  if (slash != std::string::npos) value.resize(slash);
+  const std::vector<std::string> parts = SplitWhitespace(value);
+  if (parts.empty()) return;
+  float radii[4] = {0, 0, 0, 0};
+  bool percent[4] = {false, false, false, false};
+  for (size_t i = 0; i < parts.size() && i < 4; i++) {
+    float px = 0.0f;
+    float pct = -1.0f;
+    if (!ParseLength(parts[i], &px, &pct)) return;
+    if (pct >= 0.0f) {
+      radii[i] = pct;
+      percent[i] = true;
+    } else {
+      radii[i] = px;
+    }
+  }
+  float tl = radii[0];
+  float tr = parts.size() > 1 ? radii[1] : tl;
+  float br = parts.size() > 2 ? radii[2] : tl;
+  float bl = parts.size() > 3 ? radii[3] : tr;
+  if (parts.size() == 1) {
+    tr = bl = br = tl;
+  }
+  const float values[4] = {tl, tr, br, bl};
+  const bool flags[4] = {
+      percent[0], parts.size() > 1 ? percent[1] : percent[0],
+      parts.size() > 2 ? percent[2] : percent[0],
+      parts.size() > 3 ? percent[3] : (parts.size() > 1 ? percent[1] : percent[0])};
+  for (int i = 0; i < 4; i++) {
+    style->corner_radius[i] = values[i];
+    style->corner_radius_percent[i] = flags[i];
+  }
+}
+
+void ParseCornerRadius(AppStyle* style, int corner, const std::string& raw) {
+  std::string value = raw;
+  const size_t slash = value.find('/');
+  if (slash != std::string::npos) value.resize(slash);
+  float px = 0.0f;
+  float pct = -1.0f;
+  if (!ParseLength(TrimAscii(value), &px, &pct)) return;
+  if (pct >= 0.0f) {
+    style->corner_radius[corner] = pct;
+    style->corner_radius_percent[corner] = true;
+  } else {
+    style->corner_radius[corner] = px;
+    style->corner_radius_percent[corner] = false;
+  }
+}
+
+float EffectiveCornerRadius(const AppStyle& style, int corner) {
+  return style.corner_radius[corner] >= 0.0f ? style.corner_radius[corner]
+                                             : style.radius;
+}
+
+bool CornerRadiusPercent(const AppStyle& style, int corner) {
+  return style.corner_radius[corner] >= 0.0f &&
+         style.corner_radius_percent[corner];
+}
+
+bool HasAnyRadius(const AppStyle& style) {
+  if (style.radius > 0.0f) return true;
+  for (int i = 0; i < 4; i++) {
+    if (EffectiveCornerRadius(style, i) > 0.0f) return true;
+  }
+  return false;
+}
+
+bool RadiiChanged(const AppStyle& a, const AppStyle& b) {
+  auto same = [](float x, float y) {
+    if (std::isnan(x) || std::isnan(y)) return std::isnan(x) && std::isnan(y);
+    return std::fabs(x - y) < 0.01f;
+  };
+  if (!same(a.radius, b.radius)) return true;
+  for (int i = 0; i < 4; i++) {
+    if (!same(a.corner_radius[i], b.corner_radius[i])) return true;
+    if (a.corner_radius_percent[i] != b.corner_radius_percent[i]) return true;
+  }
+  return false;
+}
+
 // Resolves transform-origin against the measured border box.
 void ResolveTransformOrigin(const AppStyle& style, float width, float height,
                             double* out_x, double* out_y) {
@@ -3254,10 +3349,25 @@ void ApplyDeclaration(AppStyle* style,
     style->background_fit = ParseBackgroundFit(value);
   } else if (key == "flex-direction") {
     style->row = StartsWith(value, "row");
+  } else if (key == "flex-wrap") {
+    style->wrap = value == "wrap" || value == "wrap-reverse";
+  } else if (key == "align-content") {
+    if (value == "flex-start" || value == "start") {
+      style->align_content = 1;
+    } else if (value == "center") {
+      style->align_content = 2;
+    } else if (value == "flex-end" || value == "end") {
+      style->align_content = 3;
+    } else if (value == "space-between" || value == "space-around" ||
+               value == "stretch") {
+      style->align_content = 0;
+    }
   } else if (key == "justify-content") {
     style->justify = ParseJustify(value);
   } else if (key == "align-items") {
     style->align = ParseAlign(value);
+  } else if (key == "align-self") {
+    style->align_self = value == "auto" ? -1 : ParseAlign(value);
   } else if (key == "width" || key == "min-width" || key == "max-width" ||
              key == "height" || key == "min-height" || key == "max-height") {
     float px = -1.0f;
@@ -3326,9 +3436,34 @@ void ApplyDeclaration(AppStyle* style,
     float dummy = -1.0f;
     ParseLength(value, &style->margin[3], &dummy);
   } else if (key == "gap" || key == "column-gap" || key == "row-gap") {
-    float px = 0.0f;
-    float percent = -1.0f;
-    if (ParseLength(value, &px, &percent) && px > 0) style->gap = px;
+    if (key == "gap") {
+      const std::vector<std::string> parts = SplitWhitespace(value);
+      float row = 0.0f;
+      float column = 0.0f;
+      float percent = -1.0f;
+      if (!parts.empty() && ParseLength(parts[0], &row, &percent)) {
+        column = row;
+        if (parts.size() > 1) {
+          float second_percent = -1.0f;
+          ParseLength(parts[1], &column, &second_percent);
+        }
+        style->gap = row;
+        style->row_gap = row;
+        style->column_gap = column;
+      }
+    } else {
+      float px = 0.0f;
+      float percent = -1.0f;
+      if (ParseLength(value, &px, &percent) && px >= 0) {
+        if (key == "row-gap") {
+          style->row_gap = px;
+          style->gap = px;
+        } else {
+          style->column_gap = px;
+          style->gap = px;
+        }
+      }
+    }
   } else if (key == "flex") {
     double number = 0.0;
     if (ParseNumber(value, &number)) {
@@ -3411,12 +3546,15 @@ void ApplyDeclaration(AppStyle* style,
     uint32_t color = 0u;
     if (ParseCssColor(value, &color)) style->border_color = color;
   } else if (key == "border-radius") {
-    float px = 0.0f;
-    float percent = -1.0f;
-    const std::vector<std::string> parts = SplitWhitespace(value);
-    if (!parts.empty() && ParseLength(parts[0], &px, &percent) && px > 0) {
-      style->radius = px;
-    }
+    ParseBorderRadius(style, value);
+  } else if (key == "border-top-left-radius") {
+    ParseCornerRadius(style, 0, value);
+  } else if (key == "border-top-right-radius") {
+    ParseCornerRadius(style, 1, value);
+  } else if (key == "border-bottom-right-radius") {
+    ParseCornerRadius(style, 2, value);
+  } else if (key == "border-bottom-left-radius") {
+    ParseCornerRadius(style, 3, value);
   } else if (key == "opacity") {
     double number = 1.0;
     if (ParseNumber(value, &number)) style->opacity = number;
@@ -3884,6 +4022,18 @@ bool HasExplicitHeight(const AppStyle& style) {
   return style.height >= 0.0f || style.height_percent >= 0.0f;
 }
 
+// Main-axis gap: row flex uses column-gap, column flex uses row-gap.
+float MainGap(const AppStyle& style) {
+  if (style.row) {
+    return style.column_gap > 0.0f ? style.column_gap : style.gap;
+  }
+  return style.row_gap > 0.0f ? style.row_gap : style.gap;
+}
+
+int EffectiveAlign(const AppStyle& parent, const AppStyle& child) {
+  return child.align_self >= 0 ? child.align_self : parent.align;
+}
+
 // Resolves a CSS inset (top/right/bottom/left) against the parent content box.
 // Returns false when the inset is `auto`.
 bool ResolveInset(const AppStyle& style, int index, float content_extent,
@@ -4037,6 +4187,35 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
     float main_extent = 0.0f;
     float cross_extent = 0.0f;
     int flow_children = 0;
+    const float main_gap = MainGap(style);
+    const float cross_gap = style.row ? style.row_gap : style.column_gap;
+    const float explicit_height =
+        style.height >= 0.0f
+            ? style.height
+            : (style.height_percent >= 0.0f
+                   ? avail_h * style.height_percent
+                   : -1.0f);
+    const float wrap_limit =
+        style.wrap
+            ? (style.row
+                   ? content_avail_w
+                   : (explicit_height >= 0.0f
+                          ? explicit_height - BorderBoxExtra(style, false)
+                          : kInf))
+            : kInf;
+    float line_main = 0.0f;
+    float line_cross = 0.0f;
+    float max_line_main = 0.0f;
+    float total_cross = 0.0f;
+    int lines = 0;
+    auto finish_line = [&]() {
+      if (line_main <= 0.0f && line_cross <= 0.0f) return;
+      max_line_main = std::max(max_line_main, line_main);
+      total_cross += line_cross;
+      lines++;
+      line_main = 0.0f;
+      line_cross = 0.0f;
+    };
     for (AppNode* child : node->children) {
       if (child->released || child->style.display_none) {
         child->measured_w = 0.0f;
@@ -4045,19 +4224,32 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
       }
       // Absolutely positioned nodes do not contribute to the parent's flow
       // size; LayoutNode measures them against the content box.
-      if (child->style.position == 1) continue;
+      if (child->style.position != 0) continue;
       ++flow_children;
+      const int child_align = EffectiveAlign(style, child->style);
       const bool child_stretch_w =
-          !style.row && style.align == 0 && !HasExplicitWidth(child->style);
+          !style.wrap && !style.row && child_align == 0 &&
+          !HasExplicitWidth(child->style);
       const bool child_stretch_h =
-          style.row && style.align == 0 && !HasExplicitHeight(child->style);
+          !style.wrap && style.row && child_align == 0 &&
+          !HasExplicitHeight(child->style);
       const SizeF measured = MeasureNode(child, content_avail_w, child_stretch_w,
                                          kInf, child_stretch_h);
       const float outer_w = measured.w + child->style.margin[1] +
                             child->style.margin[3];
       const float outer_h = measured.h + child->style.margin[0] +
                             child->style.margin[2];
-      if (style.row) {
+      if (style.wrap && wrap_limit < kInf) {
+        const float outer_main = style.row ? outer_w : outer_h;
+        const float outer_cross = style.row ? outer_h : outer_w;
+        if (line_main > 0.0f &&
+            line_main + main_gap + outer_main > wrap_limit + 0.01f) {
+          finish_line();
+        }
+        if (line_main > 0.0f) line_main += main_gap;
+        line_main += outer_main;
+        line_cross = std::max(line_cross, outer_cross);
+      } else if (style.row) {
         main_extent += outer_w;
         cross_extent = std::max(cross_extent, outer_h);
       } else {
@@ -4065,9 +4257,17 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
         cross_extent = std::max(cross_extent, outer_w);
       }
     }
+    if (style.wrap && wrap_limit < kInf) {
+      finish_line();
+      if (lines > 1) {
+        total_cross += cross_gap * static_cast<float>(lines - 1);
+      }
+      return style.row ? SizeF{max_line_main, total_cross}
+                       : SizeF{total_cross, max_line_main};
+    }
     const float gaps =
         flow_children > 1
-            ? style.gap * static_cast<float>(flow_children - 1)
+            ? main_gap * static_cast<float>(flow_children - 1)
             : 0.0f;
     main_extent += gaps;
     return style.row ? SizeF{main_extent, cross_extent}
@@ -4162,7 +4362,7 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     layout.node = child;
     // Re-measure with the final parent content box so percentages resolve.
     const bool stretch_cross =
-        style.align == 0 &&
+        !style.wrap && EffectiveAlign(style, child->style) == 0 &&
         (style.row ? !HasExplicitHeight(child->style)
                    : !HasExplicitWidth(child->style));
     SizeF measured =
@@ -4197,9 +4397,153 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     children.push_back(layout);
   }
 
+  if (style.wrap) {
+    // Wrapped flex: break children into lines along the main axis, distribute
+    // flex growth per line, then align lines with align-content.
+    const float main_gap = MainGap(style);
+    const float cross_gap = style.row ? style.row_gap : style.column_gap;
+    const float main_extent = style.row ? content_w : content_h;
+    const float cross_extent = style.row ? content_h : content_w;
+    struct WrapLine {
+      std::vector<size_t> indices;
+      float main = 0.0f;
+      float cross = 0.0f;
+      float flex_sum = 0.0f;
+    };
+    std::vector<WrapLine> lines;
+    for (size_t i = 0; i < children.size(); i++) {
+      ChildLayout& child = children[i];
+      const float outer_main =
+          child.main + child.margin_main_start + child.margin_main_end;
+      if (lines.empty()) lines.push_back(WrapLine());
+      WrapLine* line = &lines.back();
+      const float needed =
+          line->indices.empty() ? outer_main : line->main + main_gap + outer_main;
+      if (!line->indices.empty() && needed > main_extent + 0.01f) {
+        lines.push_back(WrapLine());
+        line = &lines.back();
+      }
+      if (!line->indices.empty()) line->main += main_gap;
+      line->indices.push_back(i);
+      line->main += outer_main;
+      line->cross = std::max(
+          line->cross,
+          child.cross + child.margin_cross_start + child.margin_cross_end);
+      if (child.node->style.has_flex && child.node->style.flex > 0.0f) {
+        line->flex_sum += child.node->style.flex;
+      }
+    }
+    for (WrapLine& line : lines) {
+      if (line.flex_sum <= 0.0f) continue;
+      float remaining = main_extent - line.main;
+      if (remaining < 0.0f) remaining = 0.0f;
+      for (size_t index : line.indices) {
+        ChildLayout& child = children[index];
+        if (child.node->style.has_flex && child.node->style.flex > 0.0f) {
+          child.main +=
+              remaining * child.node->style.flex / line.flex_sum;
+          if (style.row) {
+            child.w = child.main;
+          } else {
+            child.h = child.main;
+          }
+        }
+      }
+    }
+    float total_cross =
+        cross_gap * (lines.size() > 1 ? static_cast<float>(lines.size() - 1)
+                                      : 0.0f);
+    for (const WrapLine& line : lines) total_cross += line.cross;
+    float cross_offset = 0.0f;
+    if (style.align_content == 2) {
+      cross_offset = (cross_extent - total_cross) / 2.0f;
+    } else if (style.align_content == 3) {
+      cross_offset = cross_extent - total_cross;
+    } else if (style.align_content == 0 && !lines.empty() &&
+               total_cross < cross_extent) {
+      const float extra = (cross_extent - total_cross) / lines.size();
+      for (WrapLine& line : lines) line.cross += extra;
+    }
+    float line_cross_pos = (style.row ? content_y : content_x) + cross_offset;
+    for (WrapLine& line : lines) {
+      float used_main = main_gap * (line.indices.size() > 1
+                                        ? static_cast<float>(line.indices.size() - 1)
+                                        : 0.0f);
+      for (size_t index : line.indices) {
+        const ChildLayout& child = children[index];
+        used_main += child.main + child.margin_main_start +
+                     child.margin_main_end;
+      }
+      float leftover = main_extent - used_main;
+      if (leftover < 0.0f) leftover = 0.0f;
+      float justify_offset = 0.0f;
+      float extra_gap = 0.0f;
+      if (style.justify == 1) {
+        justify_offset = leftover / 2.0f;
+      } else if (style.justify == 2) {
+        justify_offset = leftover;
+      } else if (style.justify == 3 && line.indices.size() > 1) {
+        extra_gap = leftover / static_cast<float>(line.indices.size() - 1);
+      }
+      float cursor = (style.row ? content_x : content_y) + justify_offset;
+      for (size_t index : line.indices) {
+        ChildLayout& child = children[index];
+        const int align = EffectiveAlign(style, child.node->style);
+        if (align == 0) {
+          if (style.row && !HasExplicitHeight(child.node->style)) {
+            child.cross = std::max(0.0f, line.cross -
+                                             child.margin_cross_start -
+                                             child.margin_cross_end);
+            child.h = child.cross;
+          } else if (!style.row && !HasExplicitWidth(child.node->style)) {
+            child.cross = std::max(0.0f, line.cross -
+                                             child.margin_cross_start -
+                                             child.margin_cross_end);
+            child.w = child.cross;
+          }
+        }
+        float child_x = 0.0f;
+        float child_y = 0.0f;
+        if (style.row) {
+          child_y = line_cross_pos;
+          const float cross_space = line.cross - child.cross -
+                                    child.margin_cross_start -
+                                    child.margin_cross_end;
+          if (align == 2) {
+            child_y += child.margin_cross_start + cross_space / 2.0f;
+          } else if (align == 3) {
+            child_y += child.margin_cross_start + cross_space;
+          } else {
+            child_y += child.margin_cross_start;
+          }
+          cursor += child.margin_main_start;
+          child_x = cursor;
+          cursor += child.main + child.margin_main_end + main_gap + extra_gap;
+        } else {
+          child_x = line_cross_pos;
+          const float cross_space = line.cross - child.cross -
+                                    child.margin_cross_start -
+                                    child.margin_cross_end;
+          if (align == 2) {
+            child_x += child.margin_cross_start + cross_space / 2.0f;
+          } else if (align == 3) {
+            child_x += child.margin_cross_start + cross_space;
+          } else {
+            child_x += child.margin_cross_start;
+          }
+          cursor += child.margin_main_start;
+          child_y = cursor;
+          cursor += child.main + child.margin_main_end + main_gap + extra_gap;
+        }
+        LayoutNode(child.node, child_x, child_y, child.w, child.h, metrics,
+                   abs_x + child_x, abs_y + child_y);
+      }
+      line_cross_pos += line.cross + cross_gap;
+    }
+  } else {
   const float gaps =
       children.size() > 1
-          ? style.gap * static_cast<float>(children.size() - 1)
+          ? MainGap(style) * static_cast<float>(children.size() - 1)
           : 0.0f;
   const float main_extent = style.row ? content_w : content_h;
   float remaining = main_extent - fixed_sum - gaps;
@@ -4242,6 +4586,7 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
   float cursor = (style.row ? content_x : content_y) + justify_offset;
   for (ChildLayout& child : children) {
     cursor += child.margin_main_start;
+    const int align = EffectiveAlign(style, child.node->style);
     float child_x = 0.0f;
     float child_y = 0.0f;
     if (style.row) {
@@ -4249,9 +4594,9 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       const float cross_space =
           content_h - child.cross - child.margin_cross_start -
           child.margin_cross_end;
-      if (style.align == 2) {
+      if (align == 2) {
         child_y += child.margin_cross_start + cross_space / 2.0f;
-      } else if (style.align == 3) {
+      } else if (align == 3) {
         child_y += child.margin_cross_start + cross_space;
       } else {
         child_y += child.margin_cross_start;
@@ -4262,9 +4607,9 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       const float cross_space =
           content_w - child.cross - child.margin_cross_start -
           child.margin_cross_end;
-      if (style.align == 2) {
+      if (align == 2) {
         child_x += child.margin_cross_start + cross_space / 2.0f;
-      } else if (style.align == 3) {
+      } else if (align == 3) {
         child_x += child.margin_cross_start + cross_space;
       } else {
         child_x += child.margin_cross_start;
@@ -4273,8 +4618,9 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     }
     LayoutNode(child.node, child_x, child_y, child.w, child.h, metrics,
                abs_x + child_x, abs_y + child_y);
-    cursor += child.main + child.margin_main_end + style.gap + extra_gap;
+    cursor += child.main + child.margin_main_end + MainGap(style) + extra_gap;
   }
+  }  // !style.wrap
 
   // Absolute/fixed children: positioned from the parent's content box (absolute)
   // or from the viewport (fixed) and excluded from flex sizing above.
@@ -5693,7 +6039,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         (style.transition_mask &
          (kTransitionBackground | kTransitionBorderColor)) != 0;
     const bool has_visual = style.has_background ||
-                            style.border_width > 0.0f || style.radius > 0.0f ||
+                            style.border_width > 0.0f || HasAnyRadius(style) ||
                             style.has_shadow || wants_background_image ||
                             style.has_gradient || wants_paint_transition;
     if (has_visual) {
@@ -5703,13 +6049,23 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       const uint8_t border_style = style.border_width > 0.0f ? 1 : 0;
       Dart_Handle shadows = BuildBoxShadowList(style);
       Dart_Handle gradient = BuildLinearGradientHandle(style);
+      const double radius_tl = EffectiveCornerRadius(style, 0);
+      const double radius_tr = EffectiveCornerRadius(style, 1);
+      const double radius_br = EffectiveCornerRadius(style, 2);
+      const double radius_bl = EffectiveCornerRadius(style, 3);
+      const uint8_t radius_tl_pct = CornerRadiusPercent(style, 0) ? 1 : 0;
+      const uint8_t radius_tr_pct = CornerRadiusPercent(style, 1) ? 1 : 0;
+      const uint8_t radius_br_pct = CornerRadiusPercent(style, 2) ? 1 : 0;
+      const uint8_t radius_bl_pct = CornerRadiusPercent(style, 3) ? 1 : 0;
       Dart_Handle decorated = newDecoratedBox(
           node->address, style.background, style.border_width,
           style.border_width, style.border_width, style.border_width,
           border_color, border_color, border_color, border_color, border_style,
-          border_style, border_style, border_style, style.radius, style.radius,
-          style.radius, style.radius, style.radius, style.radius, style.radius,
-          style.radius, 0, 0, 0, 0, 0, 0, 0, 0, Dart_Null(), 0, 0, 0.0, 0.0,
+          border_style, border_style, border_style, radius_tl, radius_tl,
+          radius_tr, radius_tr, radius_bl, radius_bl, radius_br, radius_br,
+          radius_tl_pct, radius_tl_pct, radius_tr_pct, radius_tr_pct,
+          radius_bl_pct, radius_bl_pct, radius_br_pct, radius_br_pct,
+          Dart_Null(), 0, 0, 0.0, 0.0,
           0.0, 0.0, static_cast<uint8_t>(wants_background_image
                                              ? style.background_repeat
                                              : 0),
@@ -7135,7 +7491,7 @@ bool StyleNeedsRebuild(const AppNode* node, const AppStyle& before,
       before.has_gradient != after.has_gradient) {
     return true;
   }
-  if (node->decorated_box_p == nullptr && !Nearly(before.radius, after.radius)) {
+  if (node->decorated_box_p == nullptr && RadiiChanged(before, after)) {
     return true;
   }
   return false;
@@ -7336,13 +7692,19 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
         if (shadow_changed && update_shadow != nullptr) {
           update_shadow(decorated, BuildBoxShadowList(after));
         }
-        if (!Nearly(before.radius, after.radius)) {
+        if (RadiiChanged(before, after)) {
           if (update_radius == nullptr) {
             rebuild = true;
             break;
           }
-          // Edge.all = 0: update all four corners.
-          update_radius(decorated, 0, after.radius, after.radius, 0, 0);
+          static const uint8_t kEdges[4] = {5, 6, 8, 7};  // TL,TR,BR,BL
+          for (int corner = 0; corner < 4; corner++) {
+            const float radius = EffectiveCornerRadius(after, corner);
+            const uint8_t is_percent =
+                CornerRadiusPercent(after, corner) ? 1 : 0;
+            update_radius(decorated, kEdges[corner], radius, radius,
+                          is_percent, is_percent);
+          }
         }
         if (!SameGradient(before, after)) {
           if (after.has_gradient) {
@@ -8622,6 +8984,30 @@ Dart_Handle NewResourceData(const std::vector<uint8_t>& bytes) {
   return data;
 }
 
+// Font/resource cache.  `package:skyline` may request the same font or asset
+// repeatedly; keep small payloads in memory for the replay lifetime.
+std::unordered_map<std::string, std::vector<uint8_t>>& ResourceCache() {
+  static auto* cache =
+      new std::unordered_map<std::string, std::vector<uint8_t>>();
+  return *cache;
+}
+
+bool LoadResourceBytes(const std::string& path, std::vector<uint8_t>* out,
+                       bool* from_cache) {
+  if (from_cache != nullptr) *from_cache = false;
+  auto& cache = ResourceCache();
+  const auto found = cache.find(path);
+  if (found != cache.end()) {
+    *out = found->second;
+    if (from_cache != nullptr) *from_cache = true;
+    return true;
+  }
+  if (!ReadResourceBytes(path, out)) return false;
+  constexpr size_t kMaxCachedBytes = 4u * 1024u * 1024u;
+  if (out->size() <= kMaxCachedBytes) cache.emplace(path, *out);
+  return true;
+}
+
 }  // namespace
 
 SKYLINE_EXPORT extern "C" Dart_Handle LoadResourceSync(void* /*runtime_ptr*/,
@@ -8629,11 +9015,12 @@ SKYLINE_EXPORT extern "C" Dart_Handle LoadResourceSync(void* /*runtime_ptr*/,
   const std::string requested = ResourcePathFromDart(path);
   const std::string resolved = ResolveResourcePath(requested);
   std::vector<uint8_t> bytes;
-  const bool ok = ReadResourceBytes(resolved, &bytes);
+  bool from_cache = false;
+  const bool ok = LoadResourceBytes(resolved, &bytes, &from_cache);
   std::fprintf(stderr,
-               "[skyline-runtime] LoadResourceSync: %s -> %s (%s, %zu bytes)\n",
+               "[skyline-runtime] LoadResourceSync: %s -> %s (%s, %zu bytes%s)\n",
                requested.c_str(), resolved.c_str(), ok ? "ok" : "missing",
-               bytes.size());
+               bytes.size(), from_cache ? ", cache" : "");
   return NewResourceData(bytes);
 }
 
@@ -8650,7 +9037,8 @@ SKYLINE_EXPORT extern "C" void LoadResourceAsync(void* runtime_ptr,
     DemoPageApiScope scope;
     const std::string resolved = ResolveResourcePath(requested);
     std::vector<uint8_t> bytes;
-    const bool ok = ReadResourceBytes(resolved, &bytes);
+    bool from_cache = false;
+    const bool ok = LoadResourceBytes(resolved, &bytes, &from_cache);
     Dart_Handle payload = NewResourceData(bytes);
     void* callback = FindCallback(holder != nullptr ? holder->ffi_table : nullptr,
                                   kNotifyResourceLoadHash);
@@ -8660,9 +9048,10 @@ SKYLINE_EXPORT extern "C" void LoadResourceAsync(void* runtime_ptr,
     }
     std::fprintf(stderr,
                  "[skyline-runtime] LoadResourceAsync: %s -> %s (%s, %zu bytes, "
-                 "id=%d, notified=%s)\n",
+                 "id=%d, notified=%s%s)\n",
                  requested.c_str(), resolved.c_str(), ok ? "ok" : "missing",
-                 bytes.size(), callback_id, callback != nullptr ? "yes" : "no");
+                 bytes.size(), callback_id, callback != nullptr ? "yes" : "no",
+                 from_cache ? ", cache" : "");
   });
 }
 

@@ -383,6 +383,45 @@ test('appservice ops: @font-face drives the resource-loading channel', {
   }
 });
 
+test('appservice ops: repeated font resources hit the native cache', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-rescache-'));
+  fs.writeFileSync(path.join(dir, 'shared.bin'), Buffer.from('fake-font-bytes'));
+  const ops = path.join(dir, 'cache.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1,
+        css: '@font-face{font-family:CachedOne;src:url(shared.bin);}' +
+          '@font-face{font-family:CachedTwo;src:url(shared.bin);}' +
+          '.page{width:320px;height:240px;background:#FFFFFF;}' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'addClass', id: 2, prefix: 'page', name: 1 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(ops, {
+      timeoutMs: 2500,
+      frames: 0,
+      env: { SKYLINE_RESOURCE_ROOT: dir },
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    const loads = logs.match(/LoadResourceAsync: shared\.bin/g) || [];
+    assert.ok(loads.length >= 2,
+      `expected both font faces to load, got ${loads.length}`);
+    assert.match(logs,
+      /LoadResourceAsync: shared\.bin -> .*\(ok, 15 bytes, id=\d+, notified=yes, cache\)/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('appservice ops: scrollview renders clipped content', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
@@ -1356,6 +1395,102 @@ test('appservice ops: transform-origin changes the transform pivot', {
   // scale(0.5) around right/bottom anchors the bottom-right corner.
   assert.deepEqual(pixelAt(pixels, 295, 115), [0, 0, 255, 255]);
   assert.deepEqual(pixelAt(pixels, 205, 25), [255, 255, 255, 255]);
+});
+
+test('appservice ops: align-self and per-axis gaps', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-align-gap.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // row: column-gap 20, align-self center/end.
+  assert.deepEqual(pixelAt(pixels, 10, 10), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 60, 25), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 80, 50), [0, 170, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 80, 10), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 150, 80), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 150, 10), [255, 255, 255, 255]);
+  // column: row-gap 30 between the 30px children.
+  assert.deepEqual(pixelAt(pixels, 10, 130), [255, 255, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 10, 160), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 10, 190), [0, 255, 255, 255]);
+});
+
+test('appservice ops: per-corner border-radius updates', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-corners-'));
+  const ops = path.join(dir, 'corners.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:100px;top:100px;width:100px;height:100px;' +
+          'background:#00AA00;border-radius:50px 0 0 50px;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 300, ops: [
+        { op: 'setStyle', id: 3, value: 'border-radius:0 50px 50px 0;' },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2600,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    // Left corners are square after the update; right corners are rounded.
+    assert.deepEqual(pixelAt(pixels, 105, 105), [0, 170, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 195, 105), [255, 255, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 105, 195), [0, 170, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 195, 195), [255, 255, 255, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: flex-wrap breaks rows and columns', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-flex-wrap.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // row wrap: two 90px children fit in 200px, the third moves to line 2.
+  assert.deepEqual(pixelAt(pixels, 10, 10), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 110, 10), [255, 255, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 10, 60), [0, 170, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 110, 60), [255, 255, 255, 255]);
+  // column wrap: two 40px children fit in 100px, the third starts column 2.
+  assert.deepEqual(pixelAt(pixels, 230, 10), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 230, 60), [255, 255, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 262, 30), [0, 170, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 262, 60), [255, 255, 255, 255]);
 });
 
 test('appservice ops: position fixed resolves against the viewport', {

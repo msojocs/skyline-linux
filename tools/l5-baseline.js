@@ -42,6 +42,8 @@ const FIXTURES = [
   'appservice-fixed.ops.json',
   'appservice-transform3d.ops.json',
   'appservice-transform-origin.ops.json',
+  'appservice-align-gap.ops.json',
+  'appservice-flex-wrap.ops.json',
   'appservice-fixed-scroll.ops.json',
   'appservice-absolute.ops.json',
   'appservice-shadow.ops.json',

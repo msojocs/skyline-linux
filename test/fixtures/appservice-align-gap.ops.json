@@ -1,0 +1,158 @@
+{
+ "ops": [
+  {
+   "op": "appendStyleSheet",
+   "index": 1,
+   "css": ".page{width:320px;height:240px;background:#FFFFFF;} .row{position:absolute;left:0px;top:0px;width:320px;height:100px;flex-direction:row;column-gap:20px;align-items:flex-start;} .a{width:50px;height:50px;background:#FF0000;} .b{width:50px;height:50px;background:#00AA00;align-self:center;} .c{width:50px;height:50px;background:#0000FF;align-self:flex-end;} .col{position:absolute;left:0px;top:120px;width:80px;height:110px;flex-direction:column;row-gap:30px;} .d{width:40px;height:30px;background:#FFFF00;} .e{width:40px;height:30px;background:#00FFFF;}"
+  },
+  {
+   "op": "createElement",
+   "id": 2,
+   "tag": "empty",
+   "name": "page"
+  },
+  {
+   "op": "addClass",
+   "id": 2,
+   "prefix": "page",
+   "name": 1
+  },
+  {
+   "op": "createElement",
+   "id": 3,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 3,
+   "prefix": "row",
+   "name": 1
+  },
+  {
+   "op": "createElement",
+   "id": 4,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 4,
+   "prefix": "a",
+   "name": 1
+  },
+  {
+   "op": "createElement",
+   "id": 5,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 5,
+   "prefix": "b",
+   "name": 1
+  },
+  {
+   "op": "createElement",
+   "id": 6,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 6,
+   "prefix": "c",
+   "name": 1
+  },
+  {
+   "op": "createElement",
+   "id": 7,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 7,
+   "prefix": "col",
+   "name": 1
+  },
+  {
+   "op": "createElement",
+   "id": 8,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 8,
+   "prefix": "d",
+   "name": 1
+  },
+  {
+   "op": "createElement",
+   "id": 9,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 9,
+   "prefix": "e",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 3,
+   "child": 4
+  },
+  {
+   "op": "appendChild",
+   "id": 3,
+   "child": 5
+  },
+  {
+   "op": "appendChild",
+   "id": 3,
+   "child": 6
+  },
+  {
+   "op": "appendChild",
+   "id": 7,
+   "child": 8
+  },
+  {
+   "op": "appendChild",
+   "id": 7,
+   "child": 9
+  },
+  {
+   "op": "appendChild",
+   "id": 2,
+   "child": 3
+  },
+  {
+   "op": "appendChild",
+   "id": 2,
+   "child": 7
+  },
+  {
+   "op": "createElement",
+   "id": 1,
+   "tag": "empty",
+   "name": "body"
+  },
+  {
+   "op": "appendChild",
+   "id": 1,
+   "child": 2
+  },
+  {
+   "op": "attach",
+   "root": 1
+  },
+  {
+   "op": "startRender"
+  }
+ ]
+}
