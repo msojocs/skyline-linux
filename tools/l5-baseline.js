@@ -41,6 +41,8 @@ const FIXTURES = [
   'appservice-stripes.ops.json',
   'appservice-fixed.ops.json',
   'appservice-transform3d.ops.json',
+  'appservice-transform-origin.ops.json',
+  'appservice-fixed-scroll.ops.json',
   'appservice-absolute.ops.json',
   'appservice-shadow.ops.json',
   'appservice-gridview.ops.json',

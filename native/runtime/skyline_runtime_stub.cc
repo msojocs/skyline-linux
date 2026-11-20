@@ -652,6 +652,13 @@ using DecoratedBoxUpdateBorderFn = void (*)(Dart_Handle decoratedBox,
                                             uint8_t bottomStyle);
 using DecoratedBoxUpdateShadowFn = void (*)(Dart_Handle decoratedBox,
                                             Dart_Handle shadows);
+using DecoratedBoxUpdateRadiusFn = void (*)(Dart_Handle decoratedBox,
+                                            uint8_t side, double x, double y,
+                                            uint8_t x_is_percent,
+                                            uint8_t y_is_percent);
+using DecoratedBoxUpdateGradientFn = void (*)(Dart_Handle decoratedBox,
+                                              Dart_Handle gradient);
+using DecoratedBoxClearGradientFn = void (*)(Dart_Handle decoratedBox);
 
 using NewClipRRectFn = Dart_Handle (*)(
     uint8_t disableClip,
@@ -721,6 +728,9 @@ constexpr uint32_t kMarkYGNodeNeedsLayoutHash = 739701891u;
 constexpr uint32_t kOpacityUpdateHash = 362821014u;
 constexpr uint32_t kDecoratedBoxUpdateBorderHash = 515044687u;
 constexpr uint32_t kDecoratedBoxUpdateShadowHash = 458311868u;
+constexpr uint32_t kDecoratedBoxUpdateBorderSideRadiusHash = 464860390u;
+constexpr uint32_t kDecoratedBoxUpdateGradientHash = 756142529u;
+constexpr uint32_t kDecoratedBoxClearGradientHash = 754568836u;
 constexpr uint32_t kTextSpanUpdateTextHash = 752549844u;
 constexpr uint32_t kTextSpanUpdateTextColorHash = 504732227u;
 constexpr uint32_t kTextSpanUpdateFontSizeHash = 666327014u;
@@ -2058,6 +2068,11 @@ struct AppStyle {
   bool has_transform = false;
   float transform[16] = {1, 0, 0, 0, 0, 1, 0, 0,
                          0, 0, 1, 0, 0, 0, 0, 1};
+  // CSS transform-origin (px or percent; NaN = unset, default 50% 50%).
+  float transform_origin_x = std::nanf("");
+  float transform_origin_y = std::nanf("");
+  float transform_origin_x_percent = std::nanf("");
+  float transform_origin_y_percent = std::nanf("");
   // CSS transitions.  `transition_mask` selects the animated properties.
   uint32_t transition_mask = 0;
   double transition_duration = 0.0;  // ms
@@ -2077,6 +2092,11 @@ struct AppStyle {
   std::string background_image;
   int background_repeat = 0;  // 0 no-repeat, 1 repeat, 2 repeat-x, 3 repeat-y
   int background_fit = 0;     // 0 fill, 1 contain, 2 cover
+  // First CSS linear-gradient layer.
+  bool has_gradient = false;
+  double gradient_angle = 0.0;  // radians
+  std::vector<uint32_t> gradient_colors;
+  std::vector<double> gradient_stops;
 
   float width = -1.0f;          // px, -1 = auto
   float height = -1.0f;
@@ -2125,6 +2145,9 @@ struct AppNode {
   AppStyle style;
   float measured_w = 0.0f;
   float measured_h = 0.0f;
+  // Absolute border-box origin relative to the viewport (set by LayoutNode).
+  float abs_x = 0.0f;
+  float abs_y = 0.0f;
   intptr_t address = 0;
   Dart_Handle widget = nullptr;
   Dart_Handle layout_buffer = nullptr;
@@ -2237,6 +2260,32 @@ void CacheImage(const std::string& key, const sk_sp<flutter::DlImage>& image) {
 // Builder nodes, keyed by YGNode address (the Dart callback only receives the
 // address).  Declared here because teardown clears the entry.
 std::unordered_map<intptr_t, AppNode*> g_builders_by_address;
+
+// `position: fixed` nodes are collected during the page build and appended to
+// the page root connector, so an ancestor scroll does not move them.
+std::vector<AppNode*> g_deferred_fixed_nodes;
+std::unordered_set<AppNode*> g_deferred_fixed_set;
+bool g_collect_fixed_nodes = false;
+// The attach-root node whose connector receives promoted fixed nodes.
+AppNode* g_fixed_root_node = nullptr;
+
+void ResetDeferredFixedNodes() {
+  g_deferred_fixed_nodes.clear();
+  g_deferred_fixed_set.clear();
+  g_fixed_root_node = nullptr;
+}
+
+// Returns true when the child was promoted out of its parent's connector.
+bool DeferFixedChild(AppNode* child) {
+  if (!g_collect_fixed_nodes || child == nullptr ||
+      child->style.position != 2) {
+    return false;
+  }
+  if (g_deferred_fixed_set.insert(child).second) {
+    g_deferred_fixed_nodes.push_back(child);
+  }
+  return true;
+}
 
 struct CssRule {
   std::string selector;
@@ -2863,6 +2912,191 @@ int ParseBackgroundFit(const std::string& raw) {
   return 0;  // fill / auto
 }
 
+// Parses CSS `transform-origin` (one to three components; z is ignored).
+void ParseTransformOrigin(AppStyle* style, const std::string& raw) {
+  const std::vector<std::string> parts = SplitWhitespace(raw);
+  if (parts.empty()) return;
+  bool x_set = false;
+  bool y_set = false;
+  float x_px = std::nanf("");
+  float y_px = std::nanf("");
+  float x_percent = std::nanf("");
+  float y_percent = std::nanf("");
+  auto set_x_percent = [&](float value) {
+    x_percent = value;
+    x_px = std::nanf("");
+    x_set = true;
+  };
+  auto set_y_percent = [&](float value) {
+    y_percent = value;
+    y_px = std::nanf("");
+    y_set = true;
+  };
+  for (const std::string& part : parts) {
+    const std::string value = LowerAscii(TrimAscii(part));
+    if (value == "left") {
+      set_x_percent(0.0f);
+      continue;
+    }
+    if (value == "right") {
+      set_x_percent(1.0f);
+      continue;
+    }
+    if (value == "top") {
+      set_y_percent(0.0f);
+      continue;
+    }
+    if (value == "bottom") {
+      set_y_percent(1.0f);
+      continue;
+    }
+    if (value == "center") {
+      if (!x_set) {
+        set_x_percent(0.5f);
+      } else if (!y_set) {
+        set_y_percent(0.5f);
+      }
+      continue;
+    }
+    float px = 0.0f;
+    float percent = -1.0f;
+    if (!ParseLength(part, &px, &percent)) continue;
+    if (!x_set) {
+      if (percent >= 0.0f) {
+        set_x_percent(percent);
+      } else {
+        x_px = px;
+        x_percent = std::nanf("");
+        x_set = true;
+      }
+    } else if (!y_set) {
+      if (percent >= 0.0f) {
+        set_y_percent(percent);
+      } else {
+        y_px = px;
+        y_percent = std::nanf("");
+        y_set = true;
+      }
+    } else {
+      break;  // third component is the z offset
+    }
+  }
+  if (x_set && !y_set) set_y_percent(0.5f);
+  if (y_set && !x_set) set_x_percent(0.5f);
+  style->transform_origin_x = x_px;
+  style->transform_origin_y = y_px;
+  style->transform_origin_x_percent = x_percent;
+  style->transform_origin_y_percent = y_percent;
+}
+
+// Parses the first `linear-gradient(...)` layer into AppStyle.
+void ParseLinearGradient(AppStyle* style, const std::string& raw) {
+  const size_t start = raw.find("linear-gradient(");
+  if (start == std::string::npos) return;
+  size_t cursor = start + strlen("linear-gradient(");
+  int depth = 1;
+  const size_t args_start = cursor;
+  while (cursor < raw.size() && depth > 0) {
+    if (raw[cursor] == '(') depth++;
+    if (raw[cursor] == ')') depth--;
+    cursor++;
+  }
+  if (depth != 0) return;
+  const std::string args =
+      raw.substr(args_start, cursor - args_start - 1);
+  const std::vector<std::string> layers = SplitTopLevelComma(args);
+  if (layers.empty()) return;
+
+  size_t first_color = 0;
+  double angle = 0.0;  // CSS 0deg = to top; NewLinearGradient uses radians.
+  {
+    const std::string head = LowerAscii(TrimAscii(layers[0]));
+    if (StartsWith(head, "to ")) {
+      const std::string direction = TrimAscii(head.substr(3));
+      if (direction == "right") angle = kPi / 2.0;
+      else if (direction == "bottom") angle = kPi;
+      else if (direction == "left") angle = -kPi / 2.0;
+      else angle = 0.0;  // to top
+      first_color = 1;
+    } else {
+      double parsed = 0.0;
+      if (ParseAngleToken(head, &parsed)) {
+        angle = parsed;
+        first_color = 1;
+      }
+    }
+  }
+
+  std::vector<uint32_t> colors;
+  std::vector<double> stops;
+  for (size_t i = first_color; i < layers.size(); i++) {
+    const std::string part = TrimAscii(layers[i]);
+    if (part.empty()) continue;
+    std::string color_text;
+    std::string stop_text;
+    if (StartsWith(LowerAscii(part), "rgb(") ||
+        StartsWith(LowerAscii(part), "rgba(")) {
+      const size_t close = part.find(')');
+      if (close == std::string::npos) continue;
+      color_text = part.substr(0, close + 1);
+      stop_text = TrimAscii(part.substr(close + 1));
+    } else {
+      const std::vector<std::string> tokens = SplitWhitespace(part);
+      if (tokens.empty()) continue;
+      color_text = tokens[0];
+      if (tokens.size() > 1) stop_text = tokens[1];
+    }
+    uint32_t color = 0u;
+    if (!ParseCssColor(color_text, &color)) continue;
+    double stop = colors.empty() ? 0.0 : -1.0;
+    if (!stop_text.empty()) {
+      float px = 0.0f;
+      float percent = -1.0f;
+      if (ParseLength(stop_text, &px, &percent)) {
+        stop = percent >= 0.0f ? percent : px / 100.0f;
+      }
+    }
+    colors.push_back(color);
+    stops.push_back(stop);
+  }
+  if (colors.size() < 2) return;
+  // Distribute unspecified stops evenly.
+  double previous = 0.0;
+  for (size_t i = 0; i < stops.size(); i++) {
+    if (stops[i] < 0.0) {
+      stops[i] = static_cast<double>(i) /
+                 static_cast<double>(stops.size() - 1);
+      if (stops[i] < previous) stops[i] = previous;
+    }
+    previous = stops[i];
+  }
+  style->has_gradient = true;
+  style->gradient_angle = angle;
+  style->gradient_colors = std::move(colors);
+  style->gradient_stops = std::move(stops);
+}
+
+// Resolves transform-origin against the measured border box.
+void ResolveTransformOrigin(const AppStyle& style, float width, float height,
+                            double* out_x, double* out_y) {
+  if (!std::isnan(style.transform_origin_x_percent) &&
+      style.transform_origin_x_percent >= 0.0f) {
+    *out_x = style.transform_origin_x_percent * width;
+  } else if (!std::isnan(style.transform_origin_x)) {
+    *out_x = style.transform_origin_x;
+  } else {
+    *out_x = width * 0.5;
+  }
+  if (!std::isnan(style.transform_origin_y_percent) &&
+      style.transform_origin_y_percent >= 0.0f) {
+    *out_y = style.transform_origin_y_percent * height;
+  } else if (!std::isnan(style.transform_origin_y)) {
+    *out_y = style.transform_origin_y;
+  } else {
+    *out_y = height * 0.5;
+  }
+}
+
 // Whitespace tokenizer that keeps `rgba(0, 0, 0, 0.5)` together.
 std::vector<std::string> TokenizeCssValue(const std::string& value) {
   std::vector<std::string> out;
@@ -2960,6 +3194,8 @@ void ApplyDeclaration(AppStyle* style,
     }
   } else if (key == "transform") {
     if (value != "none") ParseTransform(value, style);
+  } else if (key == "transform-origin") {
+    ParseTransformOrigin(style, value);
   } else if (key == "transition") {
     ParseTransitionShorthand(style, value);
   } else if (key == "transition-property") {
@@ -2985,6 +3221,9 @@ void ApplyDeclaration(AppStyle* style,
   } else if (key == "box-shadow") {
     ParseBoxShadow(value, style);
   } else if (key == "background-image" || key == "background") {
+    if (value.find("linear-gradient") != std::string::npos) {
+      ParseLinearGradient(style, value);
+    }
     const std::string url = ParseCssUrl(value);
     if (!url.empty()) style->background_image = url;
     if (value.find("repeat-x") != std::string::npos) {
@@ -3881,6 +4120,8 @@ struct NodeMetric {
 void LayoutNode(AppNode* node, float x, float y, float w, float h,
                 std::vector<NodeMetric>* metrics, float abs_x = 0.0f,
                 float abs_y = 0.0f) {
+  node->abs_x = abs_x;
+  node->abs_y = abs_y;
   if (metrics != nullptr) {
     metrics->push_back(NodeMetric{node, x, y, w, h});
   }
@@ -4974,8 +5215,36 @@ void OnBuilderBuildChild(intptr_t address, int32_t index);
 void OnBuilderDisposeChild(intptr_t address, int32_t index);
 
 // Builds the `List<BoxShadow>` argument for NewDecoratedBox.
-Dart_Handle BuildBoxShadowList(const AppStyle& style) {
-  if (!style.has_shadow || g_page == nullptr || g_page->holder == nullptr) {
+Dart_Handle BuildLinearGradientHandle(const AppStyle& style) {
+  if (!style.has_gradient || style.gradient_colors.size() < 2 ||
+      g_page == nullptr || g_page->holder == nullptr) {
+    return Dart_Null();
+  }
+  auto* new_linear = reinterpret_cast<NewLinearGradientFn>(
+      FindCallback(g_page->holder->ffi_table, kNewLinearGradientHash));
+  if (new_linear == nullptr) return Dart_Null();
+  Dart_Handle colors =
+      Dart_NewList(static_cast<intptr_t>(style.gradient_colors.size()));
+  if (Dart_IsError(colors)) return Dart_Null();
+  std::vector<GradientStopNative> stops;
+  stops.reserve(style.gradient_colors.size());
+  for (size_t i = 0; i < style.gradient_colors.size(); i++) {
+    Dart_ListSetAt(colors, static_cast<intptr_t>(i),
+                   Dart_NewInteger(
+                       static_cast<int64_t>(style.gradient_colors[i])));
+    double stop = i < style.gradient_stops.size()
+                      ? style.gradient_stops[i]
+                      : (style.gradient_colors.size() > 1
+                             ? static_cast<double>(i) /
+                                   static_cast<double>(style.gradient_colors.size() - 1)
+                             : 0.0);
+    stops.push_back(GradientStopNative{stop, 1});
+  }
+  return new_linear(style.gradient_angle, colors, stops.data(), -1.0, -1.0,
+                    0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0);
+}
+
+Dart_Handle BuildBoxShadowList(const AppStyle& style) {  if (!style.has_shadow || g_page == nullptr || g_page->holder == nullptr) {
     return Dart_Null();
   }
   auto* new_box_shadow = reinterpret_cast<NewBoxShadowFn>(
@@ -5313,6 +5582,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       bool has_sliver_child = false;
       for (AppNode* child : node->children) {
         if (child->released || child->style.display_none) continue;
+        // position:fixed is promoted to the page root connector so scrolling
+        // ancestors do not move it.
+        if (DeferFixedChild(child)) continue;
         if (IsListViewName(child->name) || IsGridViewName(child->name) ||
             IsBuilderName(child->name)) {
           has_sliver_child = true;
@@ -5326,6 +5598,30 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         newGridBuilder, is_scroll_view);
         if (widget == nullptr) continue;
         child_widgets.push_back(widget);
+      }
+      // Fixed nodes were skipped above.  At the page root they become direct
+      // children of the root connector and use viewport-relative layout.
+      if (node == g_fixed_root_node && g_collect_fixed_nodes) {
+        for (size_t i = 0; i < g_deferred_fixed_nodes.size(); i++) {
+          AppNode* fixed = g_deferred_fixed_nodes[i];
+          if (fixed == nullptr || fixed->released ||
+              fixed->style.display_none) {
+            continue;
+          }
+          std::vector<NodeMetric> fixed_metrics;
+          fixed_metrics.push_back(NodeMetric{fixed, fixed->abs_x, fixed->abs_y,
+                                             fixed->measured_w,
+                                             fixed->measured_h});
+          WriteLayoutMetrics(fixed_metrics);
+          Dart_Handle widget =
+              BuildWidget(fixed, newYGNode, newYGConnector, newText,
+                          newTextSpan, newDecoratedBox, newOpacity, newScrollView,
+                          newListView, newGridView, newDirectRenderWidget,
+                          newListBuilder, newGridBuilder, false);
+          if (widget != nullptr && !Dart_IsError(widget)) {
+            child_widgets.push_back(widget);
+          }
+        }
       }
       if (is_scroll_view) {
         Dart_Handle list =
@@ -5399,13 +5695,14 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     const bool has_visual = style.has_background ||
                             style.border_width > 0.0f || style.radius > 0.0f ||
                             style.has_shadow || wants_background_image ||
-                            wants_paint_transition;
+                            style.has_gradient || wants_paint_transition;
     if (has_visual) {
       if (wants_background_image) LoadBackgroundImageForNode(node);
       const uint32_t border_color =
           style.border_width > 0.0f ? style.border_color : 0u;
       const uint8_t border_style = style.border_width > 0.0f ? 1 : 0;
       Dart_Handle shadows = BuildBoxShadowList(style);
+      Dart_Handle gradient = BuildLinearGradientHandle(style);
       Dart_Handle decorated = newDecoratedBox(
           node->address, style.background, style.border_width,
           style.border_width, style.border_width, style.border_width,
@@ -5418,7 +5715,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                                              : 0),
           static_cast<uint8_t>(wants_background_image ? style.background_fit
                                                       : 0),
-          0.0, 0.0, 0, 0, Dart_Null(), 0, shadows, 0,
+          0.0, 0.0, 0, 0, gradient, 0, shadows, 0,
           reinterpret_cast<void*>(&BackgroundImagePaint),
           reinterpret_cast<void*>(&BackgroundImageCreate),
           reinterpret_cast<void*>(&BackgroundImageDisposed), nullptr, inner);
@@ -5507,8 +5804,11 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       Dart_TypedDataReleaseData(matrix);
       setup(yoga_node, matrix);
       if (origin != nullptr) {
-        origin(yoga_node, node->measured_w * 0.5, node->measured_h * 0.5,
-               -1.0, -1.0);
+        double origin_x = 0.0;
+        double origin_y = 0.0;
+        ResolveTransformOrigin(style, node->measured_w, node->measured_h,
+                               &origin_x, &origin_y);
+        origin(yoga_node, origin_x, origin_y, -1.0, -1.0);
       }
       if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
         std::fprintf(stderr,
@@ -6790,6 +7090,27 @@ bool Nearly(float a, float b) {
   return std::fabs(a - b) < 0.01f;
 }
 
+bool SameFloatOrNan(float a, float b) {
+  if (std::isnan(a) || std::isnan(b)) {
+    return std::isnan(a) && std::isnan(b);
+  }
+  return std::fabs(a - b) < 0.01f;
+}
+
+bool SameGradient(const AppStyle& a, const AppStyle& b) {
+  if (a.has_gradient != b.has_gradient) return false;
+  if (!a.has_gradient) return true;
+  if (std::fabs(a.gradient_angle - b.gradient_angle) > 0.001) return false;
+  if (a.gradient_colors != b.gradient_colors) return false;
+  if (a.gradient_stops.size() != b.gradient_stops.size()) return false;
+  for (size_t i = 0; i < a.gradient_stops.size(); i++) {
+    if (std::fabs(a.gradient_stops[i] - b.gradient_stops[i]) > 0.001) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool StyleNeedsRebuild(const AppNode* node, const AppStyle& before,
                        const AppStyle& after) {
   if (before.display_none != after.display_none) return true;
@@ -6808,6 +7129,10 @@ bool StyleNeedsRebuild(const AppNode* node, const AppStyle& before,
     return true;
   }
   if (node->decorated_box_p == nullptr && before.has_shadow != after.has_shadow) {
+    return true;
+  }
+  if (node->decorated_box_p == nullptr &&
+      before.has_gradient != after.has_gradient) {
     return true;
   }
   if (node->decorated_box_p == nullptr && !Nearly(before.radius, after.radius)) {
@@ -6862,6 +7187,12 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       FindCallback(holder->ffi_table, kDecoratedBoxUpdateBorderHash));
   auto* update_shadow = reinterpret_cast<DecoratedBoxUpdateShadowFn>(
       FindCallback(holder->ffi_table, kDecoratedBoxUpdateShadowHash));
+  auto* update_radius = reinterpret_cast<DecoratedBoxUpdateRadiusFn>(
+      FindCallback(holder->ffi_table, kDecoratedBoxUpdateBorderSideRadiusHash));
+  auto* update_gradient = reinterpret_cast<DecoratedBoxUpdateGradientFn>(
+      FindCallback(holder->ffi_table, kDecoratedBoxUpdateGradientHash));
+  auto* clear_gradient = reinterpret_cast<DecoratedBoxClearGradientFn>(
+      FindCallback(holder->ffi_table, kDecoratedBoxClearGradientHash));
   auto* update_opacity = reinterpret_cast<OpacityUpdateFn>(
       FindCallback(holder->ffi_table, kOpacityUpdateHash));
   auto* mark_needs_layout = reinterpret_cast<MarkYGNodeNeedsLayoutFn>(
@@ -7005,6 +7336,29 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
         if (shadow_changed && update_shadow != nullptr) {
           update_shadow(decorated, BuildBoxShadowList(after));
         }
+        if (!Nearly(before.radius, after.radius)) {
+          if (update_radius == nullptr) {
+            rebuild = true;
+            break;
+          }
+          // Edge.all = 0: update all four corners.
+          update_radius(decorated, 0, after.radius, after.radius, 0, 0);
+        }
+        if (!SameGradient(before, after)) {
+          if (after.has_gradient) {
+            if (update_gradient == nullptr) {
+              rebuild = true;
+              break;
+            }
+            update_gradient(decorated, BuildLinearGradientHandle(after));
+          } else {
+            if (clear_gradient == nullptr) {
+              rebuild = true;
+              break;
+            }
+            clear_gradient(decorated);
+          }
+        }
       }
       if (node->opacity_widget_p != nullptr && update_opacity != nullptr &&
           std::fabs(before.opacity - after.opacity) > 0.001) {
@@ -7017,7 +7371,13 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       const bool transform_changed =
           before.has_transform != after.has_transform ||
           std::memcmp(before.transform, after.transform,
-                      sizeof(before.transform)) != 0;
+                      sizeof(before.transform)) != 0 ||
+          !SameFloatOrNan(before.transform_origin_x, after.transform_origin_x) ||
+          !SameFloatOrNan(before.transform_origin_y, after.transform_origin_y) ||
+          !SameFloatOrNan(before.transform_origin_x_percent,
+                          after.transform_origin_x_percent) ||
+          !SameFloatOrNan(before.transform_origin_y_percent,
+                          after.transform_origin_y_percent);
       if (transform_changed && node->yoga_node_p != nullptr &&
           g_page != nullptr && g_page->holder != nullptr) {
         auto* setup = reinterpret_cast<YGNodeSetupTransformFn>(FindCallback(
@@ -7044,8 +7404,11 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
                 Dart_HandleFromPersistent(node->yoga_node_p);
             setup(yoga, matrix);
             if (origin != nullptr) {
-              origin(yoga, node->measured_w * 0.5, node->measured_h * 0.5, -1.0,
-                     -1.0);
+              double origin_x = 0.0;
+              double origin_y = 0.0;
+              ResolveTransformOrigin(after, node->measured_w, node->measured_h,
+                                     &origin_x, &origin_y);
+              origin(yoga, origin_x, origin_y, -1.0, -1.0);
             }
             DeletePersistent(&node->transform_p);
             node->transform_p = Dart_NewPersistentHandle(matrix);
@@ -7144,8 +7507,12 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
   WriteLayoutMetrics(metrics);
 
   std::vector<Dart_Handle> widgets;
+  ResetDeferredFixedNodes();
+  g_fixed_root_node = root;
+  g_collect_fixed_nodes = true;
   for (AppNode* child : root->children) {
     if (child->released || child->style.display_none) continue;
+    if (DeferFixedChild(child)) continue;
     Dart_Handle widget = BuildWidget(child, newYGNode, newYGConnector, newText,
                                      newTextSpan, newDecoratedBox, newOpacity,
                                      newScrollView, newListView, newGridView,
@@ -7153,6 +7520,24 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
                                      newGridBuilder, false);
     if (widget != nullptr && !Dart_IsError(widget)) widgets.push_back(widget);
   }
+  for (size_t i = 0; i < g_deferred_fixed_nodes.size(); i++) {
+    AppNode* fixed = g_deferred_fixed_nodes[i];
+    if (fixed == nullptr || fixed->released || fixed->style.display_none) {
+      continue;
+    }
+    std::vector<NodeMetric> fixed_metrics;
+    fixed_metrics.push_back(NodeMetric{fixed, fixed->abs_x, fixed->abs_y,
+                                       fixed->measured_w, fixed->measured_h});
+    WriteLayoutMetrics(fixed_metrics);
+    Dart_Handle widget =
+        BuildWidget(fixed, newYGNode, newYGConnector, newText, newTextSpan,
+                    newDecoratedBox, newOpacity, newScrollView, newListView,
+                    newGridView, newDirectRenderWidget, newListBuilder,
+                    newGridBuilder, false);
+    if (widget != nullptr && !Dart_IsError(widget)) widgets.push_back(widget);
+  }
+  g_collect_fixed_nodes = false;
+  ResetDeferredFixedNodes();
   Dart_Handle list = Dart_NewList(static_cast<intptr_t>(widgets.size()));
   for (size_t i = 0; i < widgets.size(); i++) {
     Dart_ListSetAt(list, static_cast<intptr_t>(i), widgets[i]);
@@ -7551,11 +7936,16 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   LayoutNode(root, 0.0f, 0.0f, viewport_w, viewport_h, &metrics);
   WriteLayoutMetrics(metrics);
 
+  ResetDeferredFixedNodes();
+  g_fixed_root_node = root;
+  g_collect_fixed_nodes = true;
   Dart_Handle root_widget =
       BuildWidget(root, builders.yg_node, builders.yg_connector, builders.text,
                   builders.text_span, builders.decorated, builders.opacity,
                   builders.scroll, builders.list, builders.grid, builders.direct,
                   builders.list_builder, builders.grid_builder, true);
+  g_collect_fixed_nodes = false;
+  ResetDeferredFixedNodes();
   if (root_widget == nullptr || Dart_IsError(root_widget)) {
     std::fprintf(stderr, "[skyline-runtime] appservice ops: build failed\n");
     return false;

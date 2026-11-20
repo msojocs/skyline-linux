@@ -195,6 +195,9 @@ function recordRealOps(options = {}) {
   if (options.bundle !== undefined) {
     args.push('--bundle', options.bundle);
   }
+  if (options.animateMs !== undefined) {
+    args.push('--animate-ms', String(options.animateMs));
+  }
   const result = spawnSync(process.execPath, args, {
     encoding: 'utf8',
     timeout: 30000,
@@ -1217,6 +1220,144 @@ test('appservice ops: CSS box-shadow offsets paint behind the node', {
   assert.deepEqual(pixelAt(pixels, 200, 200), [255, 255, 255, 255]);
 });
 
+test('appservice ops: radius and root style updates stay targeted', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-radius-'));
+  const ops = path.join(dir, 'radius.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:50px;top:50px;width:100px;height:100px;' +
+          'background:#00AA00;border-radius:0px;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 300, ops: [
+        { op: 'setStyle', id: 3, value: 'border-radius:50px;' },
+      ] },
+      { afterMs: 600, ops: [
+        { op: 'setStyle', id: 2, value: 'background:#FF0000;' },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2800,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(!/appservice flush:/.test(logs),
+      `radius/root updates should stay targeted:\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    // Rounded corner is transparent to the now-red page background.
+    assert.deepEqual(pixelAt(pixels, 55, 55), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 100, 100), [0, 170, 0, 255]);
+    // Root/page style update is visible outside the box.
+    assert.deepEqual(pixelAt(pixels, 10, 10), [255, 0, 0, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: CSS gradients build and update in place', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-gradient-'));
+  const ops = path.join(dir, 'gradient.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:50px;top:50px;width:100px;height:100px;' +
+          'background:linear-gradient(90deg,#FF0000,#0000FF);' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 300, ops: [
+        { op: 'setStyle', id: 3,
+          value: 'background:linear-gradient(90deg,#00FF00,#FFFF00);' },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2600,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    const left = pixelAt(pixels, 55, 100);
+    const right = pixelAt(pixels, 145, 100);
+    assert.ok(left[1] > 200 && left[0] < 50 && left[2] < 50,
+      `expected green on the left, got ${left}`);
+    assert.ok(right[0] > 200 && right[1] > 200 && right[2] < 50,
+      `expected yellow on the right, got ${right}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: fixed nodes stay pinned inside a scrollview', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-fixed-scroll.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 2800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.match(logs, /appservice setScrollTop: id=3 value=100/);
+  assert.ok(pixels, 'no frame was captured');
+  // Content scrolled by 100px; the fixed pin remains at the viewport corner.
+  assert.deepEqual(pixelAt(pixels, 285, 210), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 285, 110), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 100, 10), [255, 0, 0, 255]);
+});
+
+test('appservice ops: transform-origin changes the transform pivot', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-transform-origin.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // scale(0.5) around left/top keeps the box at its top-left corner.
+  assert.deepEqual(pixelAt(pixels, 65, 25), [0, 170, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 130, 60), [255, 255, 255, 255]);
+  // scale(0.5) around right/bottom anchors the bottom-right corner.
+  assert.deepEqual(pixelAt(pixels, 295, 115), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 205, 25), [255, 255, 255, 255]);
+});
+
 test('appservice ops: position fixed resolves against the viewport', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
@@ -1606,6 +1747,61 @@ test('appservice ops: editing keys move the cursor and replace selections', {
     assert.match(logs, /key input: id=3 value="Xb" cursor=0/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: recorder samples animated style worklets', {
+  skip: prerequisiteSkip() || false,
+  timeout: 90000,
+}, () => {
+  const bundle = legacyBundle();
+  if (bundle === null) return;  // official renderer bundle not installed
+  const recorded = recordRealOps({
+    bundle,
+    tapText: 'Jump To PageB',
+    animateMs: 300,
+  });
+  if (recorded === null) return;
+  try {
+    const animated = [];
+    for (const batch of recorded.payload.updates || []) {
+      for (const op of batch.ops || []) {
+        if (op.op === 'addAnimatedStyle' && op.updates) {
+          animated.push({ atMs: batch.afterMs, updates: op.updates });
+        }
+      }
+    }
+    assert.ok(animated.length >= 3,
+      `expected sampled animated frames, got ${animated.length}`);
+    const translateValues = animated
+      .map((entry) => entry.updates.transform)
+      .filter((transform) => Array.isArray(transform))
+      .map((transform) => {
+        const first = transform.find((item) => item && item.translateX !== undefined);
+        return first ? Number(first.translateX) : null;
+      })
+      .filter((value) => value !== null);
+    assert.ok(new Set(translateValues).size > 1,
+      `expected a varying translateX timeline, got ${translateValues}`);
+
+    const { result, logs, pixels } = runHost(recorded.path, {
+      timeoutMs: 3400,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    const replayed = [...logs.matchAll(
+      /animated style #\d+ at 0ms: .*translateX\(([\d.]+)px\)/g,
+    )].map((match) => Number(match[1]));
+    assert.ok(new Set(replayed).size > 1,
+      `expected replayed translateX frames, got ${replayed}`);
+    assert.ok(pixels, 'no frame was captured');
+  } finally {
+    try {
+      fs.unlinkSync(recorded.path);
+    } catch {
+      // Missing file is fine.
+    }
   }
 });
 

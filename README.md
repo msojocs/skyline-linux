@@ -24,7 +24,10 @@
 > CSS `transition` 与 `addAnimatedStyle` 时间线、builder 二次变更回调、
 > `position: fixed` 视口定位、3D/skew/perspective transform、图片
 > `repeat`/`background-image`/SVG/网络缓存与取消、输入法选区/光标/组合输入、
-> CJK 字体回退，以及 L5 Linux 基线/容差比较 harness。
+> CJK 字体回退，以及 L5 Linux 基线/容差比较 harness。后续增量补齐：
+> `transform-origin`、圆角/gradient 增量更新、root 样式 targeted update、
+> fixed 节点提升到页面根连接器（滚动祖先内保持固定）、录制器
+> `--animate-ms` 驱动 JS worklet/derived value 采样。
 > 渲染引擎的原生 Linux 实现受闭源限制，详见
 > [docs/feasibility.md](docs/feasibility.md) 与
 > [docs/appservice-ops.md](docs/appservice-ops.md)。
@@ -141,8 +144,8 @@ npm run test:contract
 ### 当前结果（2026-11-20）
 
 ```
-npm test: 157 tests, 132 pass, 0 fail, 25 skipped
-npm run test:ops: 38 tests, 38 pass
+npm test: 162 tests, 137 pass, 0 fail, 25 skipped
+npm run test:ops: 43 tests, 43 pass
 npm run test:l5: 2 tests, 1 pass, 1 skipped (Windows guest 基线与 L2 engine-context 用例)
 ```
 
@@ -262,9 +265,11 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   `addAnimatedStyle` 时间线、builder 二次变更回调、`position: fixed`、
   `transform` 3D/skew/perspective、图片 `repeat`/`background-image`/SVG/缓存与
   取消、输入法选区/光标/组合输入、CJK 字体回退与 L5 Linux 基线/harness。
-- 未完成：完整 yoga 属性；官方 Windows appservice guest 的 L5 像素采集；
-  滚动祖先内的 fixed 偏移；JS worklet 动态 `addAnimatedStyle` 采样；私有
-  `dart:ui` 文本编码标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`）。
+  后续增量：`transform-origin`、圆角/gradient 增量更新、root 样式 targeted
+  update、fixed 节点提升到页面根连接器、录制器 JS worklet/derived value 采样。
+- 未完成：完整 yoga 属性；官方 Windows appservice guest 的 L5 像素采集；私有
+  `dart:ui` 文本编码标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`）；
+  资源缓存/内存字体；`HandleNativeViewPointerEvent` 等 native view 通道。
 
 ### `reference/skyline-node.js`
 

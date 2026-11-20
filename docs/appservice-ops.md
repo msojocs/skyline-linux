@@ -41,6 +41,10 @@ npm run ops:record -- --out tmp/appservice-ops.json
 # 录制一次真实 tap（触发 setData -> 节点操作更新）
 npm run ops:record -- --tap-option 1 --out tmp/appservice-tap.json
 
+# 录制路由动画：采样 JS worklet 的 addAnimatedStyle 时间线
+npm run ops:record -- --tap-text "Jump To PageB" --animate-ms 300 \
+  --out tmp/appservice-route-animated.json
+
 # 或指定 bundle / 输出到 stdout
 node tools/record-skyline-ops.js \
   --bundle ../wechat-web-devtools-linux/cache/devtools/resources/app.asar.unpacked/\
@@ -144,7 +148,8 @@ tap 触发的 `setData` 会产生 attach 后的操作，录制器把它们写入
 若样式变化需要新增/移除视觉 widget（背景、边框、opacity 从 1 变为非 1、
 圆角变化等），该批次回退到结构重建路径。
 
-root 自身样式在 attach 后仍不更新。测试：
+root 自身样式也走 targeted update（背景色/圆角/gradient 等已在
+`appservice ops: radius and root style updates stay targeted` 覆盖）。测试：
 
 - `appservice ops: post-attach updates rebuild through the runtime`：内联样式覆盖、
   追加节点、删除节点（targeted + rebuild 两条路径）。
@@ -480,15 +485,20 @@ npm run test:ops
 ## 6. 当前边界
 
 - attach 后的样式/文本更新走细粒度回调；结构变更仍会重建 attach 根子树。
-  渐变/圆角等属性更新与 root 自身样式尚未细粒度处理（box-shadow 已支持）。
+  背景/边框/box-shadow/圆角/gradient 与 root 自身样式均支持增量更新
+  （`DecoratedBoxUpdateColor/Border/Shadow/BorderSideRadius/Gradient/
+  ClearGradient`）。
 - `transition` 已回放：CSS `transition`/`transition-*` 解析为属性掩码、时长、
   延迟与缓动，16ms 时间线通过 target/override 逐帧走
   `DecoratedBoxUpdateColor`/`OpacityUpdate`/`TextSpanUpdate*` 与
   `YGNodeSetupTransform`。`addAnimatedStyle` 支持录制/回放
-  `{timeline:[{atMs,style:{...}}]}`（JS worklet 的动态采样仍需录制器配合）。
+  `{timeline:[{atMs,style:{...}}]}`；录制器 `--animate-ms` 会驱动 JS worklet
+  mapper（含 derived value）并采样为 `updates` 时间线。
 - `transform` 已覆盖 `translate/translate3d/scale/scale3d/rotate/rotateX/
-  rotateY/skewX/skewY/perspective/matrix/matrix3d`；仍绕元素中心绘制，不改变布局。
-  `transform-origin` 目前固定为 CSS 默认中心。
+  rotateY/skewX/skewY/perspective/matrix/matrix3d`；不改变布局。
+  CSS `transform-origin` 支持 px/%/关键字（默认 50% 50%）。
+- `position: fixed` 在页面构建时提升到根连接器，因此滚动祖先不会移动它；
+  insets 按 viewport 解析。
 - builder 已按需 mount，并支持 attach 后的二次变更：
   `UpdateChildCount/ChildHeight/CrossAxisCount/...`、item 内容
   `ItemUpdateChildren`、index `ItemUpdateIndex`、`UpdateChildren`、

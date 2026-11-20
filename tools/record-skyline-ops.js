@@ -21,6 +21,8 @@
 // Usage:
 //   node tools/record-skyline-ops.js [--bundle <app.js>] [--out <file|->]
 //                                    [--timeout-ms 1000] [--quiet]
+//                                    [--tap-option N | --tap-text <text>]
+//                                    [--animate-ms 300] [--animate-step-ms 50]
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -37,6 +39,8 @@ function parseArgs(argv) {
     tapOption: null,
     tapText: null,
     tapDelayMs: 300,
+    animateMs: 0,
+    animateStepMs: 50,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -46,6 +50,10 @@ function parseArgs(argv) {
     else if (arg === '--tap-option') options.tapOption = String(argv[++i]);
     else if (arg === '--tap-text') options.tapText = String(argv[++i]);
     else if (arg === '--tap-delay-ms') options.tapDelayMs = Number(argv[++i]) || 300;
+    else if (arg === '--animate-ms') options.animateMs = Number(argv[++i]) || 0;
+    else if (arg === '--animate-step-ms') {
+      options.animateStepMs = Math.max(1, Number(argv[++i]) || 50);
+    }
     else if (arg === '--quiet') options.quiet = true;
     else if (arg === '-h' || arg === '--help') {
       console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(22, 32).join('\n'));
@@ -92,6 +100,7 @@ class CaptureElement {
     this.text = '';
     this._id = '';
     this._style = '';
+    this.animatedMapperIds = [];
     this.viewTag = ++CaptureElement.nextTag;
     CaptureElement.all.push(this);
     this.ops.push({ op: 'createElement', id: this.viewTag, tag, name });
@@ -154,11 +163,10 @@ class CaptureElement {
     this.ops.push({ op: 'setHitTestBehavior', id: this.viewTag, value });
   }
   addAnimatedStyle(style) {
-    this.ops.push({
-      op: 'addAnimatedStyle',
-      id: this.viewTag,
-      mapperId: style && typeof style === 'object' ? style.mapperId : undefined,
-    });
+    const mapperId =
+      style && typeof style === 'object' ? style.mapperId : undefined;
+    this.ops.push({ op: 'addAnimatedStyle', id: this.viewTag, mapperId });
+    if (typeof mapperId === 'number') this.animatedMapperIds.push(mapperId);
   }
   asShadowRoot() {
     this.ops.push({ op: 'asShadowRoot', id: this.viewTag });
@@ -284,6 +292,20 @@ function plain(value) {
   }
 }
 
+// Finds `makeMutable()` objects (`{value: number}`) reachable from a worklet
+// closure so --animate-ms can drive their value directly.
+function collectNumericMutables(value, seen, out, depth = 0) {
+  if (!value || typeof value !== 'object' || seen.has(value) || depth > 6) return;
+  seen.add(value);
+  if (typeof value.value === 'number') {
+    out.push(value);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    collectNumericMutables(value[key], seen, out, depth + 1);
+  }
+}
+
 async function run(bundlePath, options) {
   const ops = [];
   const updates = [];
@@ -311,6 +333,8 @@ async function run(bundlePath, options) {
     notifySwitchTab(...args) { ops.push({ op: 'notifySwitchTab', args }); },
     notifyNavigateBack(...args) { ops.push({ op: 'notifyNavigateBack', args }); },
   };
+  const mapperFuns = new Map();
+  const animationFrames = [];
   const ReanimatedModule = {
     makeMutable: (value) => ({ value }),
     makeRemote: (value) => value,
@@ -318,7 +342,9 @@ async function run(bundlePath, options) {
     registerMutableValueSetter() {},
     startMapper(...args) {
       ops.push({ op: 'startMapper', args: args.map(scalar) });
-      return ++CaptureElement.nextTag;
+      const id = ++CaptureElement.nextTag;
+      if (typeof args[0] === 'function') mapperFuns.set(id, args[0]);
+      return id;
     },
     stopMapper() { ops.push({ op: 'stopMapper' }); },
     registerEventHandler() { return ++CaptureElement.nextTag; },
@@ -370,6 +396,13 @@ async function run(bundlePath, options) {
         updates: plain(updates),
       });
     },
+    requestAnimationFrame(callback) {
+      // Mappers are driven explicitly by --animate-ms below; native frames are
+      // not available in the capture shim.
+      if (typeof callback === 'function') animationFrames.push(callback);
+      return animationFrames.length;
+    },
+    _getCurrentTime() { return Date.now(); },
     SkylineGlobal,
     console: {
       log: forward('log'), warn: forward('warn'),
@@ -450,6 +483,78 @@ async function run(bundlePath, options) {
     } else if (!options.quiet) {
       console.error('tap target not found (data-option=' + options.tapOption +
         ', text=' + options.tapText + ')');
+    }
+  }
+
+  if (options.animateMs > 0) {
+    const steps = Math.max(
+      1, Math.ceil(options.animateMs / options.animateStepMs));
+    // Animated styles registered by the tap batch start at tapDelayMs; keep the
+    // sampled frames on the same clock.
+    const baseMs = (options.tapOption !== null || options.tapText !== null)
+      ? options.tapDelayMs
+      : 0;
+    const elements = CaptureElement.all.filter(
+      (element) => element.animatedMapperIds && element.animatedMapperIds.length);
+    let sampled = 0;
+    for (const element of elements) {
+      const styleMappers = [];
+      const styleIds = new Set(element.animatedMapperIds);
+      for (const mapperId of element.animatedMapperIds) {
+        const fun = mapperFuns.get(mapperId);
+        if (!fun) continue;
+        styleMappers.push({ id: mapperId, fun });
+      }
+      if (styleMappers.length === 0) continue;
+      // Derived-value mappers must run before the style mappers so curve /
+      // secondary values reflect the phase we just wrote.
+      const derived = [];
+      const mutables = [];
+      const seen = new Set();
+      for (const [id, fun] of mapperFuns) {
+        collectNumericMutables(fun._closure || fun, seen, mutables);
+        if (!styleIds.has(id)) derived.push(fun);
+      }
+      for (let step = 0; step <= steps; step++) {
+        const phase = step / steps;
+        for (const mutable of mutables) {
+          try {
+            mutable.value = phase;
+          } catch {
+            // Getter-only derived values are refreshed by their mapper below.
+          }
+        }
+        for (const fun of derived) {
+          try {
+            fun();
+          } catch {
+            // Derived mappers are best-effort in the capture shim.
+          }
+        }
+        const before = ops.length;
+        for (const { fun } of styleMappers) {
+          try {
+            fun(element);
+          } catch (error) {
+            if (!options.quiet) {
+              console.error(`animated style mapper failed (${element.viewTag}):`,
+                String(error && error.message ? error.message : error));
+            }
+          }
+        }
+        const updateOps = ops.splice(before);
+        if (updateOps.length > 0) {
+          updates.push({
+            afterMs: baseMs + 1 + step * options.animateStepMs,
+            ops: updateOps,
+          });
+          sampled += updateOps.length;
+        }
+      }
+    }
+    if (!options.quiet) {
+      console.error(
+        `sampled animated styles: ${sampled} operation(s) over ${steps + 1} frame(s)`);
     }
   }
 
