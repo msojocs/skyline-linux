@@ -54,11 +54,36 @@ void main(List<String> args) {
 | `onReportSlowRunnerStack` | 同上 | 可赋值但不会触发（无 native 上报） |
 | `isUseParallelPipeline()` / `setUseParallelPipeline()` | 同上 | Dart 静态状态，默认 false |
 | `FramePhase.vsyncTarget` / `compositeFrameStart` | 同上 | 枚举追加；`FrameTiming` 把二者分别映射到 `vsyncStart` / `buildStart`，native 负载仍为公开引擎的 11 个 int |
-| `TextStyle.lineHeight` / `ignoreClusterLetterSpacing` / `useCoreTextWordBreak` | `text.dart` | 接受并存储，暂不写入 native 编码（公开引擎的文本格式不含这些位） |
-| `ParagraphStyle.lineHeight` / `backgroundUseLineMetrics` | 同上 | 同上 |
-| `Canvas.clipRRect(..., clipOp:)` | `painting.dart` | 接受参数；公开引擎只做 intersect |
+| `TextStyle.lineHeight` / `ignoreClusterLetterSpacing` / `useCoreTextWordBreak` | `text.dart` | 按官方位布局写入 native 编码（bit 20/21/22），`lineHeight` 另经 `ParagraphBuilder::Create`/`pushStyle` 传入 |
+| `ParagraphStyle.lineHeight` / `ignoreClusterLetterSpacing` / `backgroundUseLineMetrics` | 同上 | 按官方位布局写入 native 编码（bit 13/14/15）；`backgroundUseLineMetrics` 由 SkParagraph 应用 |
+| `Canvas.clipRRect(..., clipOp:)` | `painting.dart` | 接受参数；`difference` 用 `Path.combine` 模拟，`intersect` 走原生快速路径 |
 | `SceneBuilder.setCheckerboard*()` | `compositing.dart` | no-op 扩展方法 |
 | `Platform.isOhos` | Dart SDK `io/platform.dart` | 追加 `operatingSystem == "ohos"`，与官方私有 SDK 一致 |
+
+### 2.1 私有文本编码与 native 落地
+
+官方 `isolate_snapshot_data` 中的私有 `dart:ui/text.dart` 给出了完整位布局：
+
+| 编码 | bit | 含义 | native 处理 |
+| --- | ---: | --- | --- |
+| `TextStyle._encoded` | 20 | `lineHeight`（px，单独传参） | `txt::TextStyle.line_height`；有字号时换算为 SkParagraph 的 height 倍数 |
+|  | 21 | `ignoreClusterLetterSpacing` | 写入 SkParagraph `TextStyle` |
+|  | 22 | `useCoreTextWordBreak` | 写入 SkParagraph `TextStyle`，供 CoreText 分词平台使用 |
+| `ParagraphStyle._encoded` | 13 | `lineHeight`（px，单独传参） | 默认 `txt::TextStyle.line_height` |
+|  | 14 | `ignoreClusterLetterSpacing` | 默认 `txt::TextStyle` |
+|  | 15 | `backgroundUseLineMetrics` | `skia::textlayout::ParagraphStyle`；span 背景与选区使用完整行框 |
+
+`_NativeParagraphBuilder._constructor` / `_pushStyle` 的 `@Native` 签名同步增加
+`double lineHeight`，与官方一致；`flutter/lib/ui/text/paragraph_builder.cc`
+解码后写入 `txt` 样式，`flutter/txt/src/skia/paragraph_builder_skia.cc` 再映射到
+SkParagraph。`backgroundUseLineMetrics` 在 `TextLine::paintBackground` 与
+`getRectsForRange` 中生效。`useCoreTextWordBreak` 仅在 CoreText 分词实现中有
+行为差异；Linux 与官方 Windows 一样继续使用 ICU line breaker。
+
+`npm run test:ui-compat` 的 smoke 页现在构造两段 40px strut + 10px run 的文本：
+开启 `backgroundUseLineMetrics` 时蓝色 span 背景覆盖整行框，关闭时只覆盖该 run
+的字体度量区域；同一段落同时设置 `useCoreTextWordBreak` 与
+`ignoreClusterLetterSpacing`，用于验证编码路径。
 
 兼容层刻意**不**采用私有引擎对 embedder 接口的改动（`_addView`、`render`、
 `updateSemantics` 等增加 `applicationId` 参数），因为这些 Dart hook 的签名必须与
@@ -250,9 +275,12 @@ native/engine/out/linux-x64-debug/patched_sdk/      platform_strong.dill + vm_ou
    `position: absolute|fixed`、`transform` 3D/skew/perspective、CSS `transition`
    与 `addAnimatedStyle` 时间线、输入法选区/光标/组合输入；剩余边界见
    [appservice-ops.md](appservice-ops.md) 第 6 节。
-2. `lineHeight` 已通过公开文本 span 的 `height` 参数生效；
-   `backgroundUseLineMetrics`、`useCoreTextWordBreak` 仅保证编译，公开引擎的文本
-   实现不会应用这两个私有标志；后续需在 `skyline_ext` 文本实现中处理。
+2. 私有文本标志已按官方位布局编码并接入 native（见 §2.1）。`lineHeight` 优先
+   使用绝对 px 值（有字号时换算为 height 倍数），否则回退到 span `height`；
+   `backgroundUseLineMetrics` 在 SkParagraph 中用完整行框绘制 span 背景与选区；
+   `useCoreTextWordBreak` 已传入 SkParagraph，但只有 CoreText 分词平台会产生
+   差异，Linux/Windows 与官方 Windows 一样继续使用 ICU。`ignoreClusterLetterSpacing`
+   同样只作为 SkParagraph 样式标志保留，公开 line breaker 未改变簇间距行为。
 3. `Canvas.clipRRect(clipOp: difference)` 已用 `Path.combine` 差值路径 +
    `clipPath` 模拟（见 `apply.py`）；`intersect` 仍走原生快速路径。
 4. 多 `Application`（每个 Shell 一个）未实现；公开引擎是单应用模型，兼容层复用
@@ -264,7 +292,7 @@ native/engine/out/linux-x64-debug/patched_sdk/      platform_strong.dill + vm_ou
 
 ```bash
 npm run test:kernel        # 重建源树/兼容层静态检查 + 编译级 smoke
-npm run test:ui-compat     # 运行时 smoke（绿帧 + Application 行为）
+npm run test:ui-compat     # 运行时 smoke（绿帧、Application、私有文本标志像素）
 npm run test:appservice    # stub skyline 运行时 + appservice 第一帧
 npm run test:page          # 嵌入式运行时 + 第一张 Skyline 页面
 npm run ops:record         # 录制官方渲染层 bundle 的节点操作流

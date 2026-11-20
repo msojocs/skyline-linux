@@ -19,6 +19,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/env.sh"
 
 ui_dir="$ENGINE_CHECKOUT/engine/src/flutter/lib/ui"
+engine_src="$ENGINE_CHECKOUT/engine/src"
 out_dir="$ENGINE_BUILD_DIR"
 compat_dir="$SCRIPT_DIR/dart_ui_compat"
 patched_sdk_dir="$ENGINE_STAGE/patched_sdk"
@@ -46,6 +47,15 @@ if [ "$check_only" -eq 1 ]; then
   done
   grep -q "static bool isUseParallelPipeline()" "$ui_dir/platform_dispatcher.dart" \
     || die "platform_dispatcher.dart lacks isUseParallelPipeline"
+  grep -q "result\[0\] |= 1 << 22;" "$ui_dir/text.dart" \
+    || die "text.dart lacks the private text flag encoding"
+  grep -q "kTSLineHeightIndex" "$ui_dir/text/paragraph_builder.cc" \
+    || die "paragraph_builder.cc lacks the private text flag decoding"
+  grep -q "background_use_line_metrics" "$engine_src/flutter/txt/src/txt/paragraph_style.h" \
+    || die "txt paragraph_style.h lacks backgroundUseLineMetrics"
+  grep -q "getBackgroundUseLineMetrics()" \
+    "$engine_src/flutter/third_party/skia/modules/skparagraph/src/TextLine.cpp" \
+    || die "SkParagraph TextLine.cpp lacks backgroundUseLineMetrics"
   log "dart:ui compat layer is installed"
   exit 0
 fi

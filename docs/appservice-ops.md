@@ -523,8 +523,11 @@ npm run test:ops
   只需完成普通文件/网络资源通道。`AddPendingFont`/`RemovePendingFont` 仍为
   no-op（字体加载状态由 Dart 侧 FontFace 管理）。
 - 文本 span 通过 `fontFamilyFallback` 传入常见 CJK/系统字体；宿主无 CJK 字体时
-  仍会显示 tofu。私有 `backgroundUseLineMetrics`/`useCoreTextWordBreak` 仍无法
-  由公开引擎编码（CSS line-height 已通过 span height 生效）。
+  仍会显示 tofu。私有 `backgroundUseLineMetrics`/`useCoreTextWordBreak` 已按官方
+  位布局编码并由 native 文本实现解码（CSS line-height 仍可经 span height 生效）；
+  `backgroundUseLineMetrics` 在 SkParagraph 中用完整行框绘制背景/选区，
+  `useCoreTextWordBreak` 只在 CoreText 分词平台产生差异，Linux/Windows 与官方
+  Windows 一样继续使用 ICU。
 - L5：Linux 侧确定性帧哈希与 `test/lib/l5.js` 容差比较已就绪
   （`npm run test:l5`）。官方 Windows 引擎帧由 `tools/l5-windows.js` 在
   Wine 渲染进程中以 dpr=2 采集，基线写入 `spec/l5-baseline.win32.json`；

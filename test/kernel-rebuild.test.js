@@ -105,9 +105,35 @@ test('dart:ui compat: apply.py patches every required engine file', () => {
     'flutter/lib/ui/platform_dispatcher.dart',
     'flutter/lib/ui/window.dart',
     'flutter/lib/ui/text.dart',
+    'flutter/lib/ui/text/paragraph_builder.h',
+    'flutter/lib/ui/text/paragraph_builder.cc',
+    'flutter/txt/src/txt/text_style.h',
+    'flutter/txt/src/txt/paragraph_style.h',
+    'flutter/txt/src/skia/paragraph_builder_skia.cc',
+    'flutter/third_party/skia/modules/skparagraph/include/TextStyle.h',
+    'flutter/third_party/skia/modules/skparagraph/include/ParagraphStyle.h',
+    'flutter/third_party/skia/modules/skparagraph/src/TextLine.cpp',
+    'flutter/third_party/skia/modules/skparagraph/src/ParagraphCache.cpp',
     'flutter/third_party/dart/sdk/lib/io/platform.dart',
   ]) {
     assert.ok(script.includes(file), `apply.py does not patch ${file}`);
+  }
+
+  // The private text flags are encoded exactly like the recovered dart:ui:
+  // TextStyle bits 20..22, ParagraphStyle bits 13..15, with lineHeight passed
+  // separately to ParagraphBuilder::Create/pushStyle.
+  for (const marker of [
+    'result[0] |= 1 << 20;\\n',
+    'result[0] |= 1 << 21;\\n',
+    'result[0] |= 1 << 22;\\n',
+    'result[0] |= 1 << 13;\\n',
+    'result[0] |= 1 << 14;\\n',
+    'result[0] |= 1 << 15;\\n',
+    'kPSBackgroundUseLineMetricsMask',
+    'kTSUseCoreTextWordBreakMask',
+    'getBackgroundUseLineMetrics()',
+  ]) {
+    assert.ok(script.includes(marker), `private text flag patch marker missing: ${marker}`);
   }
 });
 

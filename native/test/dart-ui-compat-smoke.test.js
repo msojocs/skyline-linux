@@ -3,10 +3,12 @@
 // Phase-3 runtime smoke test for the Skyline `dart:ui` compatibility layer.
 //
 // The page exercises Application, WindowStatus, FramePhase.vsyncTarget,
-// createNativeParagraph, warmUpFont and the SceneBuilder/PlatformDispatcher
-// additions, then renders a solid green frame.  A green first pixel proves the
-// engine was rebuilt from the patched platform SDK (the kernel alone cannot
-// prove that the compat classes exist in the core snapshot).
+// createNativeParagraph, warmUpFont, the SceneBuilder/PlatformDispatcher
+// additions and the private text flags, then renders a green frame with two
+// span-background paragraphs.  A green first pixel proves the engine was
+// rebuilt from the patched platform SDK (the kernel alone cannot prove that
+// the compat classes exist in the core snapshot); the paragraph pixels prove
+// `backgroundUseLineMetrics` reaches SkParagraph.
 //
 // Skips when the engine, host, patched SDK or compiled smoke app is missing.
 // Set SKYLINE_REQUIRE_ENGINE=1 to fail instead of skipping in CI.
@@ -104,9 +106,55 @@ test('dart:ui compat: engine runs Application and renders a green frame', {
     const frameSize = data.readUInt32LE(4);
     assert.equal(frameSize, expectedFrameSize);
     const pixels = data.subarray(8, 8 + frameSize);
-    assert.deepEqual([...pixels.subarray(0, 4)], [0, 255, 0, 255], 'first pixel must be opaque green');
-    const center = (Math.floor(height / 2) * width + Math.floor(width / 2)) * 4;
-    assert.deepEqual([...pixels.subarray(center, center + 4)], [0, 255, 0, 255], 'center pixel must be opaque green');
+    const pixelAt = (x, y) => {
+      const offset = (y * width + x) * 4;
+      return [...pixels.subarray(offset, offset + 4)];
+    };
+    assert.deepEqual(pixelAt(0, 0), [0, 255, 0, 255], 'first pixel must be opaque green');
+    assert.deepEqual(
+      pixelAt(Math.floor(width / 2), Math.floor(height / 2)),
+      [0, 255, 0, 255],
+      'center pixel must be opaque green',
+    );
+
+    // The smoke app draws two 40px-tall line boxes (strut) with 10px runs and
+    // a blue span background.  Only `backgroundUseLineMetrics: true` fills the
+    // whole line box; the default path stays within the run's font metrics.
+    assert.deepEqual(
+      pixelAt(8, 10),
+      [0, 0, 255, 255],
+      'backgroundUseLineMetrics must paint the top of the line box',
+    );
+    assert.deepEqual(
+      pixelAt(8, 44),
+      [0, 0, 255, 255],
+      'backgroundUseLineMetrics must paint the bottom of the line box',
+    );
+    assert.deepEqual(
+      pixelAt(40, 10),
+      [0, 255, 0, 255],
+      'default background must not cover the line box',
+    );
+    assert.deepEqual(
+      pixelAt(40, 44),
+      [0, 255, 0, 255],
+      'default background must not cover the line box',
+    );
+    // The unflagged run still paints its tight background near the baseline;
+    // scan the column so the assertion does not depend on font metrics.
+    let tightBackground = false;
+    for (const x of [40, 41]) {
+      for (let y = 8; y < 48; y++) {
+        const pixel = pixelAt(x, y);
+        if (pixel[2] > 100 && pixel[0] < 50 && pixel[1] < 50) {
+          tightBackground = true;
+        }
+      }
+    }
+    assert.ok(
+      tightBackground,
+      'default background should still paint near the run',
+    );
   } finally {
     try {
       fs.unlinkSync(shmPath);

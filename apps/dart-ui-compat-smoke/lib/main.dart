@@ -1,8 +1,9 @@
 // Runtime smoke test for the Skyline `dart:ui` compatibility layer.
 //
-// It touches every additive member that `package:skyline` relies on and then
-// renders a solid green frame, so the engine smoke test can assert that the
-// patched core snapshot was loaded (not just that the app kernel compiled).
+// It touches every additive member that `package:skyline` relies on, renders
+// two paragraphs that exercise the private text flags, and then fills a solid
+// green frame, so the engine smoke test can assert that the patched core
+// snapshot was loaded (not just that the app kernel compiled).
 //
 // Compile against the patched SDK:
 //   SKYLINE_APP_DIR=apps/dart-ui-compat-smoke \
@@ -79,6 +80,39 @@ void main() {
     );
     canvas.restore();
     canvas.drawRect(rect, ui.Paint()..color = _pageColor);
+
+    // Exercise the private text flags end to end.  The strut forces a 40px line
+    // box while the run is 10px tall, so only `backgroundUseLineMetrics` paints
+    // the span background across the full line height.
+    final ui.Paint textBackground = ui.Paint()..color = const ui.Color(0xFF0000FF);
+    void drawFlaggedParagraph(bool useLineMetrics, double x) {
+      final ui.ParagraphStyle style = ui.ParagraphStyle(
+        textDirection: ui.TextDirection.ltr,
+        backgroundUseLineMetrics: useLineMetrics,
+        strutStyle: ui.StrutStyle(
+          fontSize: 20,
+          height: 2,
+          forceStrutHeight: true,
+        ),
+      );
+      final ui.TextStyle textStyle = ui.TextStyle(
+        color: const ui.Color(0xFF000000),
+        background: textBackground,
+        fontSize: 10,
+        useCoreTextWordBreak: true,
+        ignoreClusterLetterSpacing: true,
+      );
+      final ui.ParagraphBuilder builder = ui.ParagraphBuilder(style)
+        ..pushStyle(textStyle)
+        ..addText('I');
+      final ui.Paragraph paragraph = builder.build()
+        ..layout(const ui.ParagraphConstraints(width: 24));
+      canvas.drawParagraph(paragraph, ui.Offset(x, 8));
+      paragraph.dispose();
+    }
+
+    drawFlaggedParagraph(true, 8);
+    drawFlaggedParagraph(false, 40);
     final ui.Picture picture = recorder.endRecording();
 
     final ui.SceneBuilder builder = ui.SceneBuilder()

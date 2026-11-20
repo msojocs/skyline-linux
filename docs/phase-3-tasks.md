@@ -5,8 +5,8 @@
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
 > 核心验收：**22 / 22（100%）**
-> 长尾/外部阻塞：**1 / 12**
-> 全部任务：**23 / 34（67.6%）**
+> 长尾/外部阻塞：**2 / 12**
+> 全部任务：**24 / 34（70.6%）**
 >
 > 勾选项表示已在 Linux 回放运行时上实现并通过测试；标有 `blocked` 的任务
 > 依赖外部环境或私有引擎能力。
@@ -17,8 +17,8 @@
 | --- | ---: | ---: | ---: |
 | A. 原始阶段 3 验收项 | 8 | 8 | 100% |
 | B. 后续运行时增量 | 14 | 14 | 100% |
-| C. 长尾 / 外部阻塞 | 1 | 12 | 8.3% |
-| **合计** | **23** | **34** | **67.6%** |
+| C. 长尾 / 外部阻塞 | 2 | 12 | 16.7% |
+| **合计** | **24** | **34** | **70.6%** |
 
 ## A. 原始阶段 3 验收项（8 / 8）
 
@@ -42,7 +42,7 @@
     URL 缓存/等待者、`CancelRequestHttpResource`。
 - [x] **A7** 文本 lineHeight / CJK
   - CSS line-height 经公开 span `height` 生效；CJK `fontFamilyFallback`。
-  - 私有 `dart:ui` 文本标志仍受限，见 C2。
+  - 私有文本编码标志已按 C2 落地。
 - [x] **A8** L5 Linux 基线/harness
   - `test/lib/l5.js`、`tools/l5-baseline.js`、`spec/l5-baseline.json`、
     `npm run test:l5`；Windows 官方 guest 采集见 C1。
@@ -64,7 +64,7 @@
 - [x] **B13** 资源路径缓存（`LoadResourceSync`/`Async`，≤4 MB）
 - [x] **B14** L5 夹具扩展（transform-origin/fixed-scroll/align-gap/flex-wrap/order/overflow）
 
-## C. 长尾 / 外部阻塞（1 / 12）
+## C. 长尾 / 外部阻塞（2 / 12）
 
 - [x] **C1** 官方 Windows appservice guest 的真实 L5 采集与像素对比
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
@@ -77,9 +77,20 @@
     `gridview`/`listview` 的合成 op 流无法触发官方 native builder 回调，标记为
     不可比。详见 `docs/feasibility.md` §3.1。
   - 采集命令：`npm run l5:windows`；复用已采集帧：`npm run l5:windows:reuse`。
-- [ ] **C2** 私有 `dart:ui` 文本标志
-  - `blocked`：`backgroundUseLineMetrics`、`useCoreTextWordBreak` 仅能编译，
-    公开引擎文本实现不会应用；需在 `skyline_ext` 文本实现中处理。
+- [x] **C2** 私有 `dart:ui` 文本标志
+  - `dart:ui` 按官方恢复源码的位布局编码：TextStyle bit 20–22
+    （`lineHeight` / `ignoreClusterLetterSpacing` / `useCoreTextWordBreak`），
+    ParagraphStyle bit 13–15（`lineHeight` / `ignoreClusterLetterSpacing` /
+    `backgroundUseLineMetrics`）；`lineHeight` 另经 `ParagraphBuilder::Create`/
+    `pushStyle` 单独传入。
+  - `paragraph_builder.cc` 解码到 `txt` 样式；`paragraph_builder_skia.cc` 再把
+    `lineHeight`（px → 字号倍数）、两个布尔标志与 `backgroundUseLineMetrics`
+    写入 SkParagraph。
+  - SkParagraph 在 `backgroundUseLineMetrics` 下用完整行框绘制 span 背景与选区，
+    `useCoreTextWordBreak` 保留给 CoreText 分词平台（Linux/Windows 与官方
+    Windows 一致，继续使用 ICU line breaker）。
+  - `npm run test:ui-compat` 用 40px strut + 10px run 的两段段落验证：开启标志时
+    蓝色背景覆盖整行框，关闭时仅覆盖字体度量区域。
 - [ ] **C3** `HandleNativeViewPointerEvent` / native view 通道
 - [ ] **C4** `flex-basis` / `flex-shrink`
 - [ ] **C5** `background-position` / `object-position`

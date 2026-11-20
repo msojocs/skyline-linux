@@ -243,7 +243,7 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   `dart:ui` 源码（`application.dart`、`mmtrace.dart`）与增量补丁脚本
   (`apply.py`)；涵盖 `Application`、`WindowStatus`、`createNativeParagraph`、
   `warmUpFont`、`PlatformDispatcher` 的刷新率/GC/阈值/慢栈回调、
-  `FramePhase.vsyncTarget`、`TextStyle.lineHeight` 等。
+  `FramePhase.vsyncTarget`、`TextStyle.lineHeight` 及私有文本编码标志等。
 - `native/engine/patch-dart-ui.sh` + `build-skyline-kernel.sh`：给固定引擎打补丁、
   重建 `platform_strong.dill`，再用公开 SDK 编译
   `package:skyline` + `package:sample/devtools.dart`。
@@ -279,10 +279,11 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   后续增量：`transform-origin`、逐角圆角/gradient 增量更新、root 样式 targeted
   update、fixed 节点提升到页面根连接器、录制器 JS worklet/derived value 采样、
   `align-self`/`order`/按轴 gap/`flex-wrap`/`align-content`、逐边 border、
-  `overflow: hidden` 裁剪、逐角圆角与资源路径缓存。
+  `overflow: hidden` 裁剪、逐角圆角与资源路径缓存，以及私有 `dart:ui` 文本编码
+  标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`，按官方位布局写入
+  native 并在 SkParagraph 中应用行框背景/选区）。
 - 未完成：完整 yoga 属性；`transform3d` 与官方引擎的保真差异；grid/list 合成 op 流
-  触发官方 native builder 回调；私有 `dart:ui` 文本编码标志
-  （`backgroundUseLineMetrics`/`useCoreTextWordBreak`）；
+  触发官方 native builder 回调；
   `HandleNativeViewPointerEvent` 等 native view 通道。
 
 ### `reference/skyline-node.js`
