@@ -517,7 +517,13 @@ npm run test:ops
   `compositionStart/Update/End` 支持 IME 组合预览与提交。`name=="input"` 的节点
   额外通过 `NewInput` 创建一个离屏 `SkylineInput` 句柄，`InputValue/Cursor/
   SelectionStart/End/HoldKeyboard/Focus` 回调均在该句柄上实际调用；文本仍由
-  `NewText` 渲染以保持确定性帧。`HandleNativeViewPointerEvent` 等仍为 no-op。
+  `NewText` 渲染以保持确定性帧。
+- native view：`tag=="texture"` 节点经 `NewTexture(id, type, useTexture)` 创建
+  `SkylineTextureView`，按 JS `viewId` 建立索引；Linux 无平台视图注册表，使用
+  黑色占位 slot + `RenderPointerListener`，`HandleNativeViewPointerEvent`
+  解析 `NativePointerEvent` 并按 `viewId` 定位节点输出 down/move/up 局部坐标
+  （`SKYLINE_APP_SERVICE_DEBUG`）。`TextureDispose` 在节点释放/重建时清理通道
+  状态；`test:ops` 覆盖指针转发与释放。
 - `LoadResourceSync`/`LoadResourceAsync` 共用按解析后路径的资源缓存（≤4 MB，
   日志带 `, cache`）；`data:` 内存字体由 Dart `fetchFont` 直接解码，native
   只需完成普通文件/网络资源通道。`AddPendingFont`/`RemovePendingFont` 仍为

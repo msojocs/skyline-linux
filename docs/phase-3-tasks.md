@@ -5,8 +5,8 @@
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
 > 核心验收：**22 / 22（100%）**
-> 长尾/外部阻塞：**2 / 12**
-> 全部任务：**24 / 34（70.6%）**
+> 长尾/外部阻塞：**3 / 12**
+> 全部任务：**25 / 34（73.5%）**
 >
 > 勾选项表示已在 Linux 回放运行时上实现并通过测试；标有 `blocked` 的任务
 > 依赖外部环境或私有引擎能力。
@@ -17,8 +17,8 @@
 | --- | ---: | ---: | ---: |
 | A. 原始阶段 3 验收项 | 8 | 8 | 100% |
 | B. 后续运行时增量 | 14 | 14 | 100% |
-| C. 长尾 / 外部阻塞 | 2 | 12 | 16.7% |
-| **合计** | **24** | **34** | **70.6%** |
+| C. 长尾 / 外部阻塞 | 3 | 12 | 25.0% |
+| **合计** | **25** | **34** | **73.5%** |
 
 ## A. 原始阶段 3 验收项（8 / 8）
 
@@ -64,7 +64,7 @@
 - [x] **B13** 资源路径缓存（`LoadResourceSync`/`Async`，≤4 MB）
 - [x] **B14** L5 夹具扩展（transform-origin/fixed-scroll/align-gap/flex-wrap/order/overflow）
 
-## C. 长尾 / 外部阻塞（2 / 12）
+## C. 长尾 / 外部阻塞（3 / 12）
 
 - [x] **C1** 官方 Windows appservice guest 的真实 L5 采集与像素对比
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
@@ -91,7 +91,17 @@
     Windows 一致，继续使用 ICU line breaker）。
   - `npm run test:ui-compat` 用 40px strut + 10px run 的两段段落验证：开启标志时
     蓝色背景覆盖整行框，关闭时仅覆盖字体度量区域。
-- [ ] **C3** `HandleNativeViewPointerEvent` / native view 通道
+- [x] **C3** `HandleNativeViewPointerEvent` / native view 通道
+  - `tag=="texture"` 节点经 `NewTexture(id, type, useTexture)` 物化为
+    `SkylineTextureView`，按 `viewId` 注册到 native view 表；`TextureDispose`
+    在节点移除/重建时释放 Dart 通道状态。
+  - Linux 兼容层为 `SkylineTextureView` 增加无平台视图的占位渲染路径
+    （黑色 slot + `RenderPointerListener`），并让 `kTexture` YGNode 将命中测试
+    转发给 texture 子节点。
+  - `HandleNativeViewPointerEvent` 解析 Dart `NativePointerEvent`，按 `viewId`
+    定位节点并在 `SKYLINE_APP_SERVICE_DEBUG` 下输出 down/move/up 与局部坐标；
+    Linux/Windows 无 CoreText 原生视图内容时以占位 slot 呈现。
+  - `npm run test:ops` 新增 native view 指针转发与释放两个用例（52 / 52）。
 - [ ] **C4** `flex-basis` / `flex-shrink`
 - [ ] **C5** `background-position` / `object-position`
 - [ ] **C6** `box-sizing`（`content-box`）
@@ -106,8 +116,8 @@
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **145 / 169** | 24 skipped，0 fail |
-| `npm run test:ops` | **50 / 50** | appservice 操作流回放 |
+| `npm test` | **147 / 171** | 24 skipped，0 fail |
+| `npm run test:ops` | **52 / 52** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

@@ -281,10 +281,11 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   `align-self`/`order`/按轴 gap/`flex-wrap`/`align-content`、逐边 border、
   `overflow: hidden` 裁剪、逐角圆角与资源路径缓存，以及私有 `dart:ui` 文本编码
   标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`，按官方位布局写入
-  native 并在 SkParagraph 中应用行框背景/选区）。
+  native 并在 SkParagraph 中应用行框背景/选区）、native view 通道
+  （`<texture>` → `NewTexture`/`TextureDispose`，指针经
+  `HandleNativeViewPointerEvent` 转发；Linux 使用占位 slot）。
 - 未完成：完整 yoga 属性；`transform3d` 与官方引擎的保真差异；grid/list 合成 op 流
-  触发官方 native builder 回调；
-  `HandleNativeViewPointerEvent` 等 native view 通道。
+  触发官方 native builder 回调；native view 的真实原生内容。
 
 ### `reference/skyline-node.js`
 

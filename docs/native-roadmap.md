@@ -284,8 +284,8 @@
   `addAnimatedStyle` 时间线；flexbox 增加 `align-self`、`order`、按轴 gap、
   `flex-wrap`/`align-content`、逐边 border 与 `overflow: hidden` 裁剪；资源加载
   按路径缓存（≤4 MB）。
-- **下一步**：`HandleNativeViewPointerEvent`/native view、`transform3d` 保真对齐，
-  以及继续补全 yoga 属性。
+- **下一步**：`transform3d` 保真对齐、native view 真实内容接入（当前 Linux
+  为占位 slot），以及继续补全 yoga 属性。
 
 按依赖顺序推进，每一块都以 Windows 官方输出为基准：
 

@@ -108,9 +108,10 @@ stub：
   `runApplication()`；宿主传入的 holder 若不是本库创建的指针，则使用 fallback
   holder，避免解引用无效地址；
 - `GetFeatureToggle` 全部返回 false，日志函数输出到 stderr；
-- 资源加载、HTTP 转发、路由/触摸/鼠标通道、图片原生绘制与滚动/list/grid 已在
-  嵌入式运行时实现；`LayoutParagraph*`、`YogaTriggerIntersection*`、键盘与
-  native-view 指针等导出仍返回零值或 no-op（见
+- 资源加载、HTTP 转发、路由/触摸/鼠标通道、native view
+  （`<texture>`/`HandleNativeViewPointerEvent`）、图片原生绘制与滚动/list/grid
+  已在嵌入式运行时实现；`LayoutParagraph*`、`YogaTriggerIntersection*`、键盘
+  等导出仍返回零值或 no-op（见
   [appservice-ops.md](appservice-ops.md) 第 6 节）。
 
 宿主新增 `--entrypoint-arg`（可重复）把参数传给 `devtools.dart main`，以及

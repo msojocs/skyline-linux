@@ -2079,3 +2079,83 @@ test('appservice ops: composition replaces the selected range', {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('appservice ops: native view forwards pointer events', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-native-view.ops.json');
+  const script = path.join(os.tmpdir(), `skyline-native-view-${process.pid}.txt`);
+  fs.writeFileSync(script, [
+    '1200 add 60 60 1',
+    '1300 down 60 60 1',
+    '1400 move 70 70 1',
+    '1500 up 70 70 1',
+    '',
+  ].join('\n'));
+  try {
+    const { result, logs, pixels } = runHost(fixture, {
+      timeoutMs: 2500,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+      args: ['--pointer-script', script],
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+
+    // The `<texture>` node materialises as a native-view slot and keeps its
+    // JS-visible viewId for pointer routing.
+    assert.match(logs, /native view #4: viewId=77 type=canvas/);
+    assert.match(logs,
+      /HandleNativeViewPointerEvent: viewId=77 node=4 type=down .*pos=\(40,40\)/);
+    assert.match(logs,
+      /HandleNativeViewPointerEvent: viewId=77 node=4 type=move .*pos=\(50,50\).*delta=\(10,10\)/);
+    assert.match(logs,
+      /HandleNativeViewPointerEvent: viewId=77 node=4 type=up .*pos=\(50,50\)/);
+
+    // The red page shows the opaque native-view placeholder at 20,20 100x80.
+    assert.deepEqual(pixelAt(pixels, 10, 10), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 60, 60), [0, 0, 0, 255]);
+  } finally {
+    try {
+      fs.unlinkSync(script);
+    } catch {
+      // Missing file is fine.
+    }
+  }
+});
+
+test('appservice ops: releasing a native view disposes its texture handle', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-native-view-release.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 2500,
+    frames: 0,
+    env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+  });
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  assert.match(logs, /native view #4: viewId=77 type=canvas/);
+  assert.match(logs, /native view dispose: viewId=77/);
+
+  // The update removes the texture; the red page fills its slot again.
+  assert.deepEqual(pixelAt(pixels, 60, 60), [255, 0, 0, 255]);
+});

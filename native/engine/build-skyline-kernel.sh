@@ -71,6 +71,10 @@ if [ "$check_only" -eq 1 ]; then
   fi
   grep -q 'enableStackingPaint ?? false' "$app/packages/skyline/lib/widgets/yoga.dart" \
     || die "app compat patch missing; run without --check"
+  grep -q 'WidgetType.kTexture)' "$app/packages/skyline/lib/widgets/yoga.dart" \
+    || die "native view hit-test patch missing; run without --check"
+  grep -q 'Headless Linux' "$app/packages/skyline/lib/widgets/texture.dart" \
+    || die "native view compat patch missing; run without --check"
   log "kernel ok: $out"
   exit 0
 fi

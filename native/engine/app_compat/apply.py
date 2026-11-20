@@ -67,6 +67,168 @@ else:
         raise SystemExit(f"cannot find coordinateStackingChildren anchors in {path}")
     print(f"already patched {path}")
 
+# Native-view hit testing: plain YGNode render objects do not forward hit tests
+# to their single child, so the texture widget's RenderPointerListener would
+# never see pointers.  Treat kTexture like a proxy for hit testing.
+if "WidgetType.kTexture)" not in text:
+    old = (
+        "    if (concreteWidgetType == WidgetType.kHero) {\n"
+        "      return hitTestHero(result, position);\n"
+        "    }\n"
+    )
+    new = (
+        "    if (concreteWidgetType == WidgetType.kTexture) {\n"
+        "      // Native views: report the hit without adding the listener here;\n"
+        "      // hitTestWithPaintTransform adds it exactly once.\n"
+        "      final RenderBox? textureChild = child;\n"
+        "      return textureChild != null &&\n"
+        "          textureChild.hasSize &&\n"
+        "          textureChild.size.contains(position);\n"
+        "    }\n"
+        "\n"
+        "    if (concreteWidgetType == WidgetType.kHero) {\n"
+        "      return hitTestHero(result, position);\n"
+        "    }\n"
+    )
+    if old not in text:
+        raise SystemExit(f"cannot find hitTestChildren anchor in {path}")
+    text = text.replace(old, new, 1)
+    path.write_text(text, encoding="utf-8")
+    print(f"patched native-view hit test in {path}")
+else:
+    # Upgrade checkouts patched with the first (double-add) variant.
+    old_ht = (
+        "    if (concreteWidgetType == WidgetType.kTexture) {\n"
+        "      // Native views: let the texture widget's RenderPointerListener\n"
+        "      // receive events (Linux headless placeholder path).\n"
+        "      final RenderBox? textureChild = child;\n"
+        "      return textureChild != null &&\n"
+        "          textureChild.hitTest(result, position: position);\n"
+        "    }\n"
+    )
+    new_ht = (
+        "    if (concreteWidgetType == WidgetType.kTexture) {\n"
+        "      // Native views: report the hit without adding the listener here;\n"
+        "      // hitTestWithPaintTransform adds it exactly once.\n"
+        "      final RenderBox? textureChild = child;\n"
+        "      return textureChild != null &&\n"
+        "          textureChild.hasSize &&\n"
+        "          textureChild.size.contains(position);\n"
+        "    }\n"
+    )
+    if old_ht in text:
+        text = text.replace(old_ht, new_ht, 1)
+        path.write_text(text, encoding="utf-8")
+        print(f"upgraded native-view hit test in {path}")
+    else:
+        print(f"native-view hit test already patched in {path}")
+
+# Headless Linux native-view fallback.  The public engine has no platform-view
+# registry, so `SkylineTextureView` uses a synthetic texture id and a
+# pointer-listening placeholder.  Pointer events still flow through
+# `SkylineWidgetsFlutterBinding.forwardNativeViewPointerEvent` into the
+# runtime's `HandleNativeViewPointerEvent`.
+texture = app / "packages" / "skyline" / "lib" / "widgets" / "texture.dart"
+texture_text = texture.read_text(encoding="utf-8")
+if "Headless Linux" in texture_text:
+    print(f"already patched {texture}")
+else:
+    old = (
+        "    } else {\n"
+        "      _controller = PlatformViewsService.initAndroidView(\n"
+    )
+    new = (
+        "    } else if (Platform.isLinux) {\n"
+        "      // Headless Linux: no platform-view registry.  Use a synthetic\n"
+        "      // texture id and the pointer-listening placeholder below.\n"
+        "      _textureId = id;\n"
+        "    } else {\n"
+        "      _controller = PlatformViewsService.initAndroidView(\n"
+    )
+    if old not in texture_text:
+        raise SystemExit(f"cannot find initialize anchor in {texture}")
+    texture_text = texture_text.replace(old, new, 1)
+
+    old = (
+        "    } else {\n"
+        "      return createScaleRender(TransparentRenderAndroidView(\n"
+    )
+    new = (
+        "    } else if (Platform.isLinux) {\n"
+        "      // Headless Linux native-view placeholder.  Keep the pointer\n"
+        "      // listener so events reach HandleNativeViewPointerEvent.\n"
+        "      _decoratedBox = createScaleRender(RenderConstrainedBox(\n"
+        "          additionalConstraints: const BoxConstraints.expand()));\n"
+        "      return RenderPointerListener(\n"
+        "        onPointerMove: sendPointerEvent,\n"
+        "        onPointerCancel: sendPointerEvent,\n"
+        "        onPointerDown: sendPointerEvent,\n"
+        "        onPointerUp: sendPointerEvent,\n"
+        "        child: _decoratedBox,\n"
+        "      );\n"
+        "    } else {\n"
+        "      return createScaleRender(TransparentRenderAndroidView(\n"
+    )
+    if old not in texture_text:
+        raise SystemExit(f"cannot find createRenderObject anchor in {texture}")
+    texture_text = texture_text.replace(old, new, 1)
+
+    old = (
+        "    } else {\n"
+        "      RenderAndroidView render =\n"
+        "          updateScaleRender(renderObject) as RenderAndroidView;\n"
+    )
+    new = (
+        "    } else if (Platform.isLinux) {\n"
+        "      RenderPointerListener listener = renderObject as RenderPointerListener;\n"
+        "      _decoratedBox = listener.child as RenderDecoratedBox;\n"
+        "      updateScaleRender(_decoratedBox!);\n"
+        "    } else {\n"
+        "      RenderAndroidView render =\n"
+        "          updateScaleRender(renderObject) as RenderAndroidView;\n"
+    )
+    if old not in texture_text:
+        raise SystemExit(f"cannot find updateRenderObject anchor in {texture}")
+    texture_text = texture_text.replace(old, new, 1)
+
+    old = "    // Android: scale模式下任一方向有缩放即用黑色背景填充留白\n"
+    new = (
+        "    if (Platform.isLinux) {\n"
+        "      // Opaque placeholder slot; native content lives outside the\n"
+        "      // headless replay runtime.\n"
+        "      return const BoxDecoration(color: Colors.black);\n"
+        "    }\n"
+        "\n"
+        "    // Android: scale模式下任一方向有缩放即用黑色背景填充留白\n"
+    )
+    if old not in texture_text:
+        raise SystemExit(f"cannot find getBoxDecoration anchor in {texture}")
+    texture_text = texture_text.replace(old, new, 1)
+
+    texture.write_text(texture_text, encoding="utf-8")
+    print(f"patched {texture}")
+
+# The placeholder's child does not hit-test itself, so make the listener
+# opaque.  Kept separate so checkouts patched before this edit upgrade cleanly.
+texture_text = texture.read_text(encoding="utf-8")
+if "behavior: HitTestBehavior.opaque" not in texture_text:
+    old = (
+        "      return RenderPointerListener(\n"
+        "        onPointerMove: sendPointerEvent,\n"
+    )
+    new = (
+        "      return RenderPointerListener(\n"
+        "        behavior: HitTestBehavior.opaque,\n"
+        "        onPointerMove: sendPointerEvent,\n"
+    )
+    if old not in texture_text:
+        raise SystemExit(f"cannot find pointer listener anchor in {texture}")
+    texture_text = texture_text.replace(old, new, 1)
+    texture.write_text(texture_text, encoding="utf-8")
+    print(f"patched native-view hit test behavior in {texture}")
+else:
+    print(f"native-view hit test behavior already patched in {texture}")
+
 # Optional HTTP platform-channel smoke hook: when SKYLINE_HTTP_TEST_URL is set,
 # the devtools entrypoint performs one HttpForwarder.httpGet and prints the
 # result.  This exercises ForwardHttpGet -> RequestHttpResource ->

@@ -457,6 +457,13 @@ using NewTextFn = Dart_Handle (*)(
     uint8_t enableNativeParagraph,
     Dart_Handle children);
 
+// Native views: `package:skyline/widgets/texture.dart`.  `NewTexture` creates
+// the Dart leaf widget; `TextureDispose` lets it release channel state.
+using NewTextureFn = Dart_Handle (*)(int32_t id,
+                                     Dart_Handle type,
+                                     uint8_t useTexture);
+using TextureDisposeFn = void (*)(Dart_Handle texture);
+
 using NewOpacityFn = Dart_Handle (*)(double opacity, Dart_Handle child);
 
 using NewLinearGradientFn = Dart_Handle (*)(
@@ -726,6 +733,8 @@ constexpr uint32_t kNewYGNodeHash = 644570152u;
 constexpr uint32_t kNewYGConnectorHash = 517238689u;
 constexpr uint32_t kNewTextHash = 738901768u;
 constexpr uint32_t kNewTextSpanHash = 553157049u;
+constexpr uint32_t kNewTextureHash = 669864072u;
+constexpr uint32_t kTextureDisposeHash = 664334829u;
 constexpr uint32_t kNewOpacityHash = 357244940u;
 constexpr uint32_t kNewClipRRectHash = 744380804u;
 constexpr uint32_t kNewLinearGradientHash = 753559496u;
@@ -2179,8 +2188,13 @@ struct AppNode {
   Dart_Handle connector = nullptr;
   Dart_Handle decorated_box = nullptr;
   Dart_Handle text_widget = nullptr;
+  Dart_Handle texture_widget = nullptr;
   Dart_Handle opacity_widget = nullptr;
   Dart_Handle clip_widget = nullptr;
+
+  // Native view (`tag == "texture"`) identity and pointer-event routing.
+  int texture_view_id = -1;
+  std::string texture_type;
 
   // Persistent handles keep the attached tree addressable across update tasks.
   Dart_PersistentHandle layout_buffer_p = nullptr;
@@ -2189,6 +2203,7 @@ struct AppNode {
   Dart_PersistentHandle clip_widget_p = nullptr;
   Dart_PersistentHandle text_widget_p = nullptr;
   Dart_PersistentHandle text_span_p = nullptr;
+  Dart_PersistentHandle texture_widget_p = nullptr;
   Dart_PersistentHandle yoga_node_p = nullptr;
   Dart_PersistentHandle scroll_view_p = nullptr;
   // Float64List(16) backing YGNodeSetupTransform while the Matrix4 reads it.
@@ -2261,6 +2276,14 @@ std::unordered_map<intptr_t, AppNode*> g_image_nodes;
 
 // Nodes whose decorated box paints a CSS background-image.
 std::unordered_map<intptr_t, AppNode*> g_background_image_nodes;
+
+// Native views (`<texture>`) keyed by the JS-visible `viewId`.  Pointer events
+// arriving from Dart via `HandleNativeViewPointerEvent` carry that id.
+std::unordered_map<int, AppNode*> g_texture_nodes;
+
+// Set while materialising a texture node; `ResetNodeHandles` uses it to let
+// Dart release the texture channel state.
+TextureDisposeFn g_texture_dispose = nullptr;
 
 // Decoded image cache shared by <image>, CSS backgrounds and SVG results.
 // Deliberately leaked: DlImageGPU created with a null unref queue asserts when
@@ -4952,6 +4975,14 @@ double AttrNumber(const AppNode* node, const char* key, double fallback) {
   return value;
 }
 
+std::string AttrText(const AppNode* node,
+                     const char* key,
+                     const char* fallback) {
+  const auto found = node->attrs.find(key);
+  if (found == node->attrs.end() || found->second.empty()) return fallback;
+  return found->second;
+}
+
 void DeletePersistent(Dart_PersistentHandle* handle) {
   if (*handle != nullptr) {
     Dart_DeletePersistentHandle(*handle);
@@ -4969,6 +5000,24 @@ void ResetNodeHandles(AppNode* node, bool include_layout) {
   DeletePersistent(&node->clip_widget_p);
   DeletePersistent(&node->text_widget_p);
   DeletePersistent(&node->text_span_p);
+  if (node->texture_widget_p != nullptr) {
+    // Let Dart clear SkylineTextureChannel state before the handle goes away.
+    if (g_texture_dispose != nullptr) {
+      Dart_Handle texture = Dart_HandleFromPersistent(node->texture_widget_p);
+      if (!Dart_IsError(texture)) g_texture_dispose(texture);
+    }
+    DeletePersistent(&node->texture_widget_p);
+    node->texture_widget = nullptr;
+  }
+  if (node->texture_view_id >= 0) {
+    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] native view dispose: viewId=%d\n",
+                   node->texture_view_id);
+    }
+    g_texture_nodes.erase(node->texture_view_id);
+    node->texture_view_id = -1;
+  }
   DeletePersistent(&node->yoga_node_p);
   DeletePersistent(&node->scroll_view_p);
   DeletePersistent(&node->transform_p);
@@ -5882,6 +5931,40 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     if (span_handle != nullptr) {
       node->text_span_p = Dart_NewPersistentHandle(span_handle);
     }
+  } else if (node->tag == "texture") {
+    // Native view slot (`wx-canvas`, map/video placeholders, ...).  Dart owns
+    // hit-testing and forwards pointer events back through
+    // `HandleNativeViewPointerEvent`.
+    if (g_page != nullptr && g_page->holder != nullptr) {
+      auto* newTexture = reinterpret_cast<NewTextureFn>(
+          FindCallback(g_page->holder->ffi_table, kNewTextureHash));
+      auto* disposeTexture = reinterpret_cast<TextureDisposeFn>(
+          FindCallback(g_page->holder->ffi_table, kTextureDisposeHash));
+      if (disposeTexture != nullptr) g_texture_dispose = disposeTexture;
+      if (newTexture != nullptr) {
+        const int view_id =
+            static_cast<int>(AttrNumber(node, "viewId", node->id));
+        const std::string type = AttrText(node, "type", "canvas");
+        node->texture_view_id = view_id;
+        node->texture_type = type;
+        Dart_Handle type_handle = Dart_NewStringFromCString(type.c_str());
+        if (!Dart_IsError(type_handle)) {
+          Dart_Handle texture = newTexture(view_id, type_handle, 1);
+          if (Dart_IsError(texture)) {
+            ReportDartError("appservice NewTexture", texture);
+          } else {
+            inner = texture;
+            node->texture_widget = texture;
+            node->texture_widget_p = Dart_NewPersistentHandle(texture);
+            g_texture_nodes[view_id] = node;
+            std::fprintf(stderr,
+                         "[skyline-runtime] native view #%u: viewId=%d "
+                         "type=%s\n",
+                         node->id, view_id, type.c_str());
+          }
+        }
+      }
+    }
   } else if (IsImageName(node->name) && newDirectRenderWidget != nullptr) {
     // Network images are fetched asynchronously; the widget is installed
     // immediately and repaints after the page is rebuilt on response.
@@ -6295,10 +6378,13 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
   constexpr uint32_t kWidgetTypeYogaNode = 1;
   constexpr uint32_t kWidgetTypeYGConnector = 3;
   constexpr uint32_t kWidgetTypeScrollView = 13;
+  constexpr uint32_t kWidgetTypeTexture = 15;
   uint32_t concrete_type = kWidgetTypeYogaNode;
   Dart_Handle yoga_connector = Dart_Null();
   if (node->tag != "text") {
-    if (node->name == "scrollview" && newScrollView != nullptr) {
+    if (node->tag == "texture") {
+      concrete_type = kWidgetTypeTexture;
+    } else if (node->name == "scrollview" && newScrollView != nullptr) {
       concrete_type = kWidgetTypeScrollView;
     } else if (node->connector != nullptr) {
       concrete_type = kWidgetTypeYGConnector;
@@ -9073,6 +9159,37 @@ struct NativeTouchEventLayout {
   int32_t composed;
 };
 
+// Layout mirrors `NativePointerEvent` in package:skyline/gestures/touch_event.dart.
+struct NativePointerEventLayout {
+  int32_t embedder_id;
+  int64_t time_stamp_microseconds;
+  int32_t pointer;
+  int32_t kind;
+  int32_t device;
+  double position_x;
+  double position_y;
+  double delta_x;
+  double delta_y;
+  int32_t buttons;
+  uint8_t down;
+  uint8_t obscured;
+  double pressure;
+  double pressure_min;
+  double pressure_max;
+  double distance;
+  double distance_max;
+  double size;
+  double radius_major;
+  double radius_minor;
+  double radius_min;
+  double radius_max;
+  double orientation;
+  double tilt;
+  int32_t platform_data;
+  uint8_t synthesized;
+  uint8_t type;
+};
+
 }  // namespace
 
 SKYLINE_EXPORT extern "C" void HandleMouseEvent(void* /*runtime_ptr*/,
@@ -9104,6 +9221,36 @@ SKYLINE_EXPORT extern "C" void HandleTouchEvent(void* /*runtime_ptr*/,
                first != nullptr ? first->client_x : 0.0,
                first != nullptr ? first->client_y : 0.0);
 }
+
+#ifdef SKYLINE_EMBEDDED
+SKYLINE_EXPORT extern "C" void HandleNativeViewPointerEvent(
+    void* /*runtime_ptr*/, int64_t view_id, void* event) {
+  if (event == nullptr) return;
+  const auto* pointer = static_cast<const NativePointerEventLayout*>(event);
+  appservice::AppNode* node = nullptr;
+  auto found = appservice::g_texture_nodes.find(static_cast<int>(view_id));
+  if (found != appservice::g_texture_nodes.end()) node = found->second;
+  if (!DebugChannels()) return;
+  static const char* const kTypes[] = {"down", "move", "up", "cancel"};
+  const char* type =
+      pointer->type < 4 ? kTypes[pointer->type] : "unknown";
+  std::fprintf(stderr,
+               "[skyline-runtime] HandleNativeViewPointerEvent: viewId=%ld "
+               "node=%u type=%s pointer=%d kind=%d down=%u pos=(%g,%g) "
+               "delta=(%g,%g) pressure=%g time=%ld\n",
+               static_cast<long>(view_id), node != nullptr ? node->id : 0u,
+               type, pointer->pointer, pointer->kind,
+               static_cast<unsigned>(pointer->down), pointer->position_x,
+               pointer->position_y, pointer->delta_x, pointer->delta_y,
+               pointer->pressure,
+               static_cast<long>(pointer->time_stamp_microseconds));
+}
+#else
+// Native views only exist in the embedded runtime; keep the export for the
+// standalone DL-only library.
+SKYLINE_EXPORT extern "C" void HandleNativeViewPointerEvent(
+    void* /*runtime_ptr*/, int64_t /*view_id*/, void* /*event*/) {}
+#endif
 
 SKYLINE_EXPORT extern "C" void HandlePageRoute(void* /*runtime_ptr*/,
                                                void* name, double duration,
@@ -9426,7 +9573,6 @@ SKYLINE_VOID_STUB(ForwardHttpGet)
 #ifndef SKYLINE_EMBEDDED
 SKYLINE_VOID_STUB(HandleGestureEvent)
 #endif
-SKYLINE_VOID_STUB(HandleNativeViewPointerEvent)
 SKYLINE_VOID_STUB(InitializeUITaskRunner)
 SKYLINE_VOID_STUB(InstallJSEngineFromDart)
 SKYLINE_VOID_STUB(LayoutParagraphMarkNeedsLayout)
