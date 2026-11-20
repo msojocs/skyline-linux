@@ -20,7 +20,11 @@
 > 图片原生绘制与 `objectFit`/网络图片、HTTP/路由栈/键盘/触摸/鼠标/日志平台
 > 通道。路由栈回放支持 `notifyNavigateTo`/`notifySwitchTab`/`notifyNavigateBack`
 > 与多条 `CreatePageRoute`；宿主 `--key-script` 经 `FlutterEngineSendKeyEvent`
-> 和 `skyline/keyboard` 平台消息驱动焦点文本更新。
+> 和 `skyline/keyboard` 平台消息驱动焦点文本更新。本轮已补齐阶段 3 的边界项：
+> CSS `transition` 与 `addAnimatedStyle` 时间线、builder 二次变更回调、
+> `position: fixed` 视口定位、3D/skew/perspective transform、图片
+> `repeat`/`background-image`/SVG/网络缓存与取消、输入法选区/光标/组合输入、
+> CJK 字体回退，以及 L5 Linux 基线/容差比较 harness。
 > 渲染引擎的原生 Linux 实现受闭源限制，详见
 > [docs/feasibility.md](docs/feasibility.md) 与
 > [docs/appservice-ops.md](docs/appservice-ops.md)。
@@ -52,10 +56,11 @@ Skyline 运行时与嵌入层。该路线周期长，因此先交付可执行的
 | L2 参数校验 | 每个方法的参数数量/类型/越界错误、窗口生命周期 | 任意目标模块 | Wine + 官方 Electron |
 | L3 共享内存 | 外层头、key 校验、零初始化、跨进程可见性、代际替换 | `skyline-shared-memory` | Wine + 官方 `sharedMemory.node` |
 | L4 帧协议 | 帧头（frameId/frameSize）、拷贝语义、跨平台读写互通 | `skyline-shared-memory` | Wine 写入 / Linux 读取 |
-| L5 引擎渲染 | 确定性页面帧的像素/哈希对比 | 待实现 | 需完整官方 DevTools 环境 |
+| L5 引擎渲染 | 确定性页面帧的像素/哈希对比 | `skyline_host` + `spec/l5-baseline.json` | 需完整官方 DevTools 环境 |
 
-L1–L4 可在本仓库直接运行；L5 需要完整复刻官方 appservice guest 环境，当前未实现，
-受控于 `docs/feasibility.md` 第 3 节的阻塞项。
+L1–L4 可在本仓库直接运行；L5 的 Linux 基线/容差 harness 已实现
+（`npm run test:l5`），Windows ↔ Linux 对比仍需完整复刻官方 appservice guest
+环境，受控于 `docs/feasibility.md` 第 3 节的阻塞项。
 
 ## 快速开始
 
@@ -108,6 +113,8 @@ npm run test:ops                    # 回放节点操作流（CSS/flexbox/滚动
 npm run ops:record -- --tap-option 1  # 录制真实 tap 触发的增量操作
 npm run ops:record -- --tap-text "Jump To PageB"  # 录制 SPA 路由切换
 npm run test:ops                     # 含路由栈/builder/objectFit/网络图片/键盘
+npm run l5:baseline                  # 生成 Linux L5 帧哈希基线
+npm run test:l5                      # L5 基线 + 可选 Windows 容差比较
 
 # 2. 记录官方 Windows 模块的契约快照（需要 Wine 11 + Windows Electron）
 export SKYLINE_WIN_RESOURCES=/path/to/resources/app.asar.unpacked
@@ -131,10 +138,12 @@ npm run test:contract
 测试不依赖网络；仓库不提交任何官方二进制。`npm run spec:record` 产生的
 `spec/skyline-node.win32.json` 是唯一提交的基准文件（不含绝对路径）。
 
-### 当前结果（2026-11-19）
+### 当前结果（2026-11-20）
 
 ```
-npm test: 123 tests, 99 pass, 0 fail, 24 skipped
+npm test: 157 tests, 132 pass, 0 fail, 25 skipped
+npm run test:ops: 38 tests, 38 pass
+npm run test:l5: 2 tests, 1 pass, 1 skipped (Windows guest 基线与 L2 engine-context 用例)
 ```
 
 - 通过：L1/L2 契约对比（默认目标 `reference/skyline-node.js`；`native/build/skyline.node`
@@ -249,9 +258,13 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   细粒度更新、tap 手势驱动的 `setData` 更新、字体资源加载平台通道、scroll-view
   渲染与程序化滚动、触摸/鼠标拖拽与滚轮（含 `concreteWidgetType` 命中测试修复）、
   `list-view`/`grid-view` sliver、`NewDirectRenderWidget` 图片原生绘制，以及
-  HTTP/路由/触摸/鼠标/日志平台通道。
-- 未完成：完整 yoga 属性；list/grid builder 的增量 mount；图片 `objectFit` 与
-  网络图片；键盘输入路径；路由栈的页面切换回放。
+  HTTP/路由/触摸/鼠标/日志平台通道。阶段 3 边界项已补齐：CSS `transition` 与
+  `addAnimatedStyle` 时间线、builder 二次变更回调、`position: fixed`、
+  `transform` 3D/skew/perspective、图片 `repeat`/`background-image`/SVG/缓存与
+  取消、输入法选区/光标/组合输入、CJK 字体回退与 L5 Linux 基线/harness。
+- 未完成：完整 yoga 属性；官方 Windows appservice guest 的 L5 像素采集；
+  滚动祖先内的 fixed 偏移；JS worklet 动态 `addAnimatedStyle` 采样；私有
+  `dart:ui` 文本编码标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`）。
 
 ### `reference/skyline-node.js`
 
@@ -275,11 +288,14 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
    `skyline.node`（每窗口独立 platform thread、多窗口、共享内存出帧与
    `onWindowRasterized` 回调）；阶段 3 已完成私有 `dart:ui` 兼容层、
    `package:skyline` 重编译、stub/嵌入式运行时，并覆盖 appservice/V8 真实操作流、
-   增量更新、滚动/手势、list/grid 与 builder、图片（含 `objectFit`/网络图片）、
-   路由栈、键盘、HTTP/输入平台通道。阶段 2 已同时支持 JIT 与 release/AOT
+   增量更新、滚动/手势、list/grid 与 builder（含二次变更）、图片（`objectFit`/
+   网络/`repeat`/`background-image`/SVG/缓存/取消）、路由栈、键盘、HTTP/输入
+   平台通道、CSS `transition`/`addAnimatedStyle`、`position: fixed` 与
+   `transform` 3D/skew/perspective、输入法选区/光标/组合输入，以及 L5 Linux
+   基线/harness。阶段 2 已同时支持 JIT 与 release/AOT
    （`libapp.so` + `FlutterEngineCreateAOTData`）；剩余项见
    [docs/native-roadmap.md](docs/native-roadmap.md)（viewport resize、
-   Skyline appservice 的 AOT 帧级验证）。
+   Skyline appservice 的 AOT 帧级验证、Windows L5 guest）。
 4. 共享内存缺失 key / 返回值语义已于 2026-11-19 对齐 Windows
    （`skyline-shared-memory`）。
 

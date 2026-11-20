@@ -244,12 +244,15 @@ native/engine/out/linux-x64-debug/patched_sdk/      platform_strong.dill + vm_ou
 
 1. **Skyline 运行时仍是简化实现**：73 个导出已可加载，引导路径、合成页面与
    appservice/V8 节点操作流回放已跑通，attach 后增量更新、tap 手势、拖拽/滚轮
-   滚动、list/grid、builder 增量 mount、图片原生绘制与 `objectFit`/网络图片、
-   资源加载、路由栈回放、键盘通道与 HTTP/输入通道也已覆盖，并支持
-   `position: absolute` 与 `transform`；但 `transition` 动画、builder item
-   二次变更与输入法选区/光标尚未实现。
-2. `lineHeight`、`backgroundUseLineMetrics`、`useCoreTextWordBreak` 仅保证编译，
-   公开引擎的文本引擎不会应用这些属性；后续需在 `skyline_ext` 文本实现中处理。
+   滚动、list/grid、builder 增量 mount 与二次变更、图片原生绘制与
+   `objectFit`/网络图片/`repeat`/`background-image`/SVG、资源加载、路由栈回放、
+   键盘通道与 HTTP/输入通道也已覆盖，并支持
+   `position: absolute|fixed`、`transform` 3D/skew/perspective、CSS `transition`
+   与 `addAnimatedStyle` 时间线、输入法选区/光标/组合输入；剩余边界见
+   [appservice-ops.md](appservice-ops.md) 第 6 节。
+2. `lineHeight` 已通过公开文本 span 的 `height` 参数生效；
+   `backgroundUseLineMetrics`、`useCoreTextWordBreak` 仅保证编译，公开引擎的文本
+   实现不会应用这两个私有标志；后续需在 `skyline_ext` 文本实现中处理。
 3. `Canvas.clipRRect(clipOp: difference)` 已用 `Path.combine` 差值路径 +
    `clipPath` 模拟（见 `apply.py`）；`intersect` 仍走原生快速路径。
 4. 多 `Application`（每个 Shell 一个）未实现；公开引擎是单应用模型，兼容层复用

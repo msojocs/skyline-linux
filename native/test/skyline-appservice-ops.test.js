@@ -1216,3 +1216,447 @@ test('appservice ops: CSS box-shadow offsets paint behind the node', {
   assert.deepEqual(pixelAt(pixels, 125, 125), [128, 128, 128, 255]);
   assert.deepEqual(pixelAt(pixels, 200, 200), [255, 255, 255, 255]);
 });
+
+test('appservice ops: position fixed resolves against the viewport', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-fixed.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // flow child inside the offset parent.
+  assert.deepEqual(pixelAt(pixels, 80, 80), [255, 0, 0, 255]);
+  // fixed right:10 bottom:10 -> viewport (270..309, 200..229), not the parent
+  // content box at (70,70).
+  assert.deepEqual(pixelAt(pixels, 285, 215), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 200, 100), [221, 221, 221, 255]);
+  // fixed left:10 top:10 -> viewport corner.
+  assert.deepEqual(pixelAt(pixels, 15, 15), [0, 170, 0, 255]);
+});
+
+test('appservice ops: skew and 3D transforms paint', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-transform3d.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // skewX(45deg) shifts the top edge left and the bottom edge right.
+  assert.deepEqual(pixelAt(pixels, 80, 30), [0, 170, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 5, 30), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 150, 110), [0, 170, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 50, 110), [255, 255, 255, 255]);
+  // perspective(200px) rotateY(60deg) narrows the 100px blue box around its
+  // centre; the outer edge is now background.
+  assert.deepEqual(pixelAt(pixels, 250, 70), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 210, 70), [255, 255, 255, 255]);
+  // skewY(45deg) shifts the left edge up and the right edge down.
+  assert.deepEqual(pixelAt(pixels, 80, 150), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 140, 150), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 100, 200), [255, 0, 0, 255]);
+});
+
+test('appservice ops: CSS transitions interpolate before the final frame', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-transition.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 3000,
+    frames: 0,
+    env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.match(logs, /transition #3 start: mask=0x3 duration=400ms/);
+  assert.match(logs, /transition #3 t=0\.[0-9]+ opacity=0\.[0-9]+ background=/);
+  assert.match(logs, /transition #3 done/);
+  assert.ok(pixels, 'no frame was captured');
+  // 400ms later: blue at 50% opacity over the white page.
+  assert.deepEqual(pixelAt(pixels, 80, 80), [127, 127, 255, 255]);
+});
+
+test('appservice ops: addAnimatedStyle timelines replay', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-animated-style.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 3000,
+    frames: 0,
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.match(logs, /addAnimatedStyle: #3/);
+  assert.match(logs, /animated style scheduled: #3 in 200ms/);
+  assert.match(logs, /animated style #3 at 200ms: background-color:#00FF00;opacity:0.5;/);
+  assert.match(logs, /animated style #3 at 600ms: background-color:#0000FF;opacity:1;/);
+  assert.ok(pixels, 'no frame was captured');
+  assert.deepEqual(pixelAt(pixels, 80, 80), [0, 0, 255, 255]);
+});
+
+test('appservice ops: builder updates use fine-grained callbacks', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-builder-update.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 3600,
+    frames: 0,
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.match(logs, /ListBuilderUpdateChildCount: #4 childCount=30/);
+  assert.match(logs, /ListBuilderItemUpdateChildren: #4 index=0/);
+  assert.match(logs, /ListBuilderUpdateChildHeight: #4 height=50/);
+  assert.match(logs, /ListBuilderUpdateChildren: #4 \(5 item\(s\), 2 updated\)/);
+  assert.ok(!/appservice flush:/.test(logs),
+    `builder updates should not rebuild the attached page:\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // item 0 (y=0..49) is magenta, item 1 (y=50..99) keeps its green class,
+  // item 2 (y=100..149) is yellow.
+  assert.deepEqual(pixelAt(pixels, 160, 10), [255, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 160, 60), [0, 255, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 160, 110), [255, 255, 0, 255]);
+});
+
+test('appservice ops: network images share one request per URL', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-netcache-'));
+  const bmp = path.join(dir, 'quad.bmp');
+  writeQuadBmp(bmp);
+  const encoded = fs.readFileSync(bmp).toString('base64');
+  const server = spawn(process.execPath, ['-e', `
+    const http = require('http');
+    const bytes = Buffer.from('${encoded}', 'base64');
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'image/bmp',
+        'Content-Length': String(bytes.length),
+      });
+      res.end(bytes);
+    });
+    server.listen(0, '127.0.0.1', () => console.log(server.address().port));
+  `], { stdio: ['ignore', 'pipe', 'inherit'] });
+  let port = 0;
+  try {
+    port = await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('image server did not start')), 5000);
+      server.stdout.once('data', (data) => {
+        clearTimeout(timer);
+        resolve(Number(String(data).trim()));
+      });
+    });
+    const url = `http://127.0.0.1:${port}/quad.bmp`;
+    const ops = path.join(dir, 'two.ops.json');
+    fs.writeFileSync(ops, JSON.stringify({
+      ops: [
+        { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+        { op: 'setStyle', id: 2, value: 'width:320px;height:240px;background:#FFFFFF;' },
+        { op: 'createElement', id: 3, tag: 'empty', name: 'image' },
+        { op: 'setStyle', id: 3, value: 'width:160px;height:120px;' },
+        { op: 'setAttribute', id: 3, name: 'src', value: url },
+        { op: 'createElement', id: 4, tag: 'empty', name: 'image' },
+        { op: 'setStyle', id: 4, value: 'position:absolute;left:160px;top:0px;width:160px;height:120px;' },
+        { op: 'setAttribute', id: 4, name: 'src', value: url },
+        { op: 'appendChild', id: 2, child: 3 },
+        { op: 'appendChild', id: 2, child: 4 },
+        { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+        { op: 'appendChild', id: 1, child: 2 },
+        { op: 'attach', root: 1 },
+        { op: 'startRender' },
+      ],
+    }));
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 4000,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    const fetches = (logs.match(/image #\d+: fetch http:\/\//g) || []).length;
+    assert.equal(fetches, 1, `expected one fetch, got ${fetches}:\n${logs}`);
+    assert.match(logs, /join pending fetch/);
+    assert.ok(pixels, 'no frame was captured');
+    assert.deepEqual(pixelAt(pixels, 40, 30), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 280, 30), [0, 255, 0, 255]);
+  } finally {
+    server.kill();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: images repeat and cache by URL', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-repeat-'));
+  writeQuadBmp(path.join(dir, 'quad.bmp'));
+  const ops = path.join(dir, 'repeat.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2, value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'image' },
+      { op: 'setStyle', id: 3, value: 'width:32px;height:32px;' },
+      { op: 'setAttributes', id: 3, attrs: { src: 'quad.bmp', repeat: 'repeat' } },
+      { op: 'createElement', id: 4, tag: 'empty', name: 'image' },
+      { op: 'setStyle', id: 4, value: 'width:16px;height:16px;' },
+      { op: 'setAttribute', id: 4, name: 'src', value: 'quad.bmp' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'appendChild', id: 2, child: 4 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      env: { SKYLINE_RESOURCE_ROOT: dir },
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /cache hit quad\.bmp/);
+    assert.ok(pixels, 'no frame was captured');
+    // 8x8 tiles: red / green on top, blue / yellow below, repeated.
+    assert.deepEqual(pixelAt(pixels, 2, 2), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 6, 2), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 2, 6), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 6, 6), [255, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 18, 2), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 22, 2), [0, 255, 0, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: CSS background-image paints through NewDecoratedBox', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-bg-'));
+  writeQuadBmp(path.join(dir, 'quad.bmp'));
+  const ops = path.join(dir, 'background.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2, value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'width:160px;height:80px;background-image:url(quad.bmp);' +
+          'background-size:cover;background-repeat:no-repeat;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      env: { SKYLINE_RESOURCE_ROOT: dir },
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /background image #3: quad\.bmp/);
+    assert.ok(pixels, 'no frame was captured');
+    assert.deepEqual(pixelAt(pixels, 40, 20), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 120, 20), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 40, 60), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 120, 60), [255, 255, 0, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: SVG images decode through SvgToRgba', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-svg-'));
+  fs.writeFileSync(path.join(dir, 'half.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" ' +
+    'viewBox="0 0 20 20"><rect width="10" height="20" fill="#FF0000"/>' +
+    '<rect x="10" width="10" height="20" fill="#0000FF"/></svg>\n');
+  const ops = path.join(dir, 'svg.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2, value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'image' },
+      { op: 'setStyle', id: 3, value: 'width:100px;height:100px;' },
+      { op: 'setAttribute', id: 3, name: 'src', value: 'half.svg' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 4000,
+      frames: 0,
+      env: { SKYLINE_RESOURCE_ROOT: dir },
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /SVG half\.svg/);
+    assert.ok(pixels, 'no frame was captured');
+    assert.deepEqual(pixelAt(pixels, 25, 50), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 75, 50), [0, 0, 255, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: CJK text resolves through the font fallback list', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, (t) => {
+  const fonts = spawnSync('fc-list', [':lang=zh'], { encoding: 'utf8' });
+  if (fonts.status !== 0 || !String(fonts.stdout || '').trim()) {
+    t.skip('no CJK fonts installed');
+    return;
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-cjk-'));
+  const ops = path.join(dir, 'cjk.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'text', name: 'text' },
+      { op: 'setText', id: 3, text: '你好' },
+      { op: 'setStyle', id: 3, value: 'font-size:48px;color:#000000;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops);
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    const dark = countColor(pixels,
+      (r, g, b) => r < 100 && g < 100 && b < 100);
+    assert.ok(dark > 300, `expected CJK glyph pixels, found ${dark}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: editing keys move the cursor and replace selections', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-edit-'));
+  const ops = path.join(dir, 'edit.ops.json');
+  const script = path.join(dir, 'edit.script');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'text', name: 'input' },
+      { op: 'setText', id: 3, text: 'Ab' },
+      { op: 'setStyle', id: 3, value: 'font-size:48px;color:#000000;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+      { op: 'focusInput', id: 3, holdKeyboard: 1 },
+    ],
+  }));
+  fs.writeFileSync(script, [
+    '1500 down 0 37',
+    '1600 down 0 88 X',
+    '1700 down 0 36',
+    '1800 down 0 46',
+    '',
+  ].join('\n'));
+  try {
+    const { result, logs } = runHost(ops, {
+      timeoutMs: 2600,
+      frames: 0,
+      args: ['--key-script', script],
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /InputHoldKeyboard: id=3 hold=1/);
+    assert.match(logs, /key input: id=3 value="AXb" cursor=2/);
+    assert.match(logs, /key input: id=3 value="AXb" cursor=0/);
+    assert.match(logs, /key input: id=3 value="Xb" cursor=0/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: composition replaces the selected range', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-ime-'));
+  const ops = path.join(dir, 'ime.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'text', name: 'input' },
+      { op: 'setText', id: 3, text: 'Ab' },
+      { op: 'setStyle', id: 3, value: 'font-size:48px;color:#000000;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+      { op: 'focusInput', id: 3, holdKeyboard: 1 },
+    ],
+    updates: [
+      { afterMs: 200, ops: [
+        { op: 'setSelection', id: 3, start: 0, end: 1, cursor: 1 },
+      ] },
+      { afterMs: 300, ops: [
+        { op: 'compositionStart', id: 3, text: 'n' },
+      ] },
+      { afterMs: 500, ops: [
+        { op: 'compositionUpdate', id: 3, text: 'ni' },
+      ] },
+      { afterMs: 700, ops: [
+        { op: 'compositionEnd', id: 3, text: '你' },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(ops, {
+      timeoutMs: 2200,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /setSelection: id=3 selection=\[0,1\] cursor=1/);
+    assert.match(logs, /composition start: id=3 text="n"/);
+    assert.match(logs, /composition update: id=3 text="ni"/);
+    assert.match(logs, /composition end: id=3 text="你".*value="你b"/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

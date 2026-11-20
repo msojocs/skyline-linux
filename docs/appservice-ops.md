@@ -107,13 +107,17 @@ tap 触发的 `setData` 会产生 attach 后的操作，录制器把它们写入
 | `notifyNavigateTo` | `args: [window, pageId]` | 记录下一次 `attach` 的 openType（navigateTo=4） |
 | `notifySwitchTab` | `args: [window, pageId]` | 已有页面时调用 `SwitchTab`；否则下一次 attach 按 tab 页创建 |
 | `notifyNavigateBack` | `args: [window, pageId, delta, animated]` | 调用 `NavigateBack`，从路由栈弹出 |
-| `focusInput` | `id` | 设置合成键盘输入的焦点节点 |
+| `focusInput` | `id[, holdKeyboard, cursor, selectionStart, selectionEnd]` | 设置合成输入焦点与光标/选区；创建真实 `NewInput` 句柄并同步 `Input*` 回调 |
+| `setSelection` | `id, start, end[, cursor]` | 更新选区/光标并同步输入句柄 |
+| `compositionStart/Update/End` | `id, text[, start, end]` | IME 组合预览/提交（替换选区） |
 | `keyboardStatus` | `inputKey, height` | 调用 `UpdateKeyboardStatus`（native → Dart 键盘高度通道） |
-| `dispatchKey` | `text` | 向焦点节点追加文本（测试用，等价宿主按键提交） |
+| `dispatchKey` | `text` | 在光标处插入文本（替换选区；测试用） |
+| `addAnimatedStyle` | `id, timeline: [{atMs, style}]` 或 `id, updates` | 按时间线应用动画样式覆盖 |
 
 `setStyleScope` / `associateComponent` / `setListenerOption` /
-`setHitTestBehavior` / `addAnimatedStyle` / `createContext` / `setAsTab` /
-`register*Callback` / `startMapper` 等在静态页面阶段只计数，不改变布局。
+`setHitTestBehavior` / `createContext` / `setAsTab` / `register*Callback` /
+`startMapper` 等在静态页面阶段只计数，不改变布局；`addAnimatedStyle` 已回放
+`timeline`/`updates` 样式帧（JS worklet 的动态采样仍需录制器配合）。
 
 ## 3.1 增量更新
 
@@ -122,7 +126,9 @@ tap 触发的 `setData` 会产生 attach 后的操作，录制器把它们写入
 
 1. **结构变更**（`createElement`/`appendChild`/`insertBefore`/`removeChild`/
    `replaceChild`/`splice`/`release`）：重建 attach 根的子节点，经
-   `YGConnectorUpdateChildren` 交换，再 `MarkYGNodeNeedsLayout`。
+   `YGConnectorUpdateChildren` 交换，再 `MarkYGNodeNeedsLayout`。仅发生在
+   list/grid builder 内部的批次改为 builder 同步（元数据 update、
+   `ItemUpdateChildren`/`UpdateChildren`/`InsertBefore`/`RemoveChild`），不重建根。
 2. **仅样式/文本变更**：逐节点 diff 计算样式，调用真实的细粒度回调：
    - `DecoratedBoxUpdateColor` / `DecoratedBoxUpdateBorder` /
      `DecoratedBoxUpdateShadow`
@@ -473,20 +479,37 @@ npm run test:ops
 
 ## 6. 当前边界
 
-- attach 后的样式/文本更新走细粒度回调；结构变更仍重建 attach 根子树。
+- attach 后的样式/文本更新走细粒度回调；结构变更仍会重建 attach 根子树。
   渐变/圆角等属性更新与 root 自身样式尚未细粒度处理（box-shadow 已支持）。
-- `transition` 动画、`transform` 的 3D/skew/perspective 变体暂未建模；静态
-  `translate`/`scale`/`rotate`/`matrix` 已接入。
-- builder 已按需 mount，但 item 仍来自录制时抓到的节点；滚动后才由 JS 产生的
-  新 item 需要重新录制/追加到操作流。`ListBuilderInsertBefore`、
-  `ListBuilderUpdateChildren` 等二次变更回调尚未回放。
-- 图片支持 `fill`/`contain`/`cover`/`none`/`scale-down` 与 `widthFix`；
-  `repeat`、`background-image`、SVG 解码尚未接入。网络图片缓存与取消
-  （`CancelRequestHttpResource`）未接入。
-- 合成键盘输入向焦点文本节点追加 UTF-8 文本/退格，尚未接入
-  `EditableText` 的选区、光标与输入法组合；`InputHoldKeyboard` 仍无触发点。
-  `HandleNativeViewPointerEvent` 等仍为 no-op。
+- `transition` 已回放：CSS `transition`/`transition-*` 解析为属性掩码、时长、
+  延迟与缓动，16ms 时间线通过 target/override 逐帧走
+  `DecoratedBoxUpdateColor`/`OpacityUpdate`/`TextSpanUpdate*` 与
+  `YGNodeSetupTransform`。`addAnimatedStyle` 支持录制/回放
+  `{timeline:[{atMs,style:{...}}]}`（JS worklet 的动态采样仍需录制器配合）。
+- `transform` 已覆盖 `translate/translate3d/scale/scale3d/rotate/rotateX/
+  rotateY/skewX/skewY/perspective/matrix/matrix3d`；仍绕元素中心绘制，不改变布局。
+  `transform-origin` 目前固定为 CSS 默认中心。
+- builder 已按需 mount，并支持 attach 后的二次变更：
+  `UpdateChildCount/ChildHeight/CrossAxisCount/...`、item 内容
+  `ItemUpdateChildren`、index `ItemUpdateIndex`、`UpdateChildren`、
+  `InsertBefore`/`RemoveChild`；仅 builder 内部的批次不再整页重建。
+- 图片支持 `fill`/`contain`/`cover`/`none`/`scale-down`、`widthFix`、
+  `repeat`/`repeat-x`/`repeat-y`；CSS `background-image` 经
+  `NewDecoratedBox` 的 onPaint 回调原生绘制；SVG 经 Dart 侧 `SvgToRgba`
+  （flutter_svg）解码为 RGBA 后包装成 DlImage。网络/本地/背景图共用 URL 缓存，
+  重复 URL 只发一次请求；节点释放或 `src` 变化时调用
+  `CancelRequestHttpResource`。
+- 合成键盘输入维护 UTF-8 光标与选区：字符插入替换选区，Left/Right/Home/End、
+  Backspace/Delete 生效；`setSelection` 与
+  `compositionStart/Update/End` 支持 IME 组合预览与提交。`name=="input"` 的节点
+  额外通过 `NewInput` 创建一个离屏 `SkylineInput` 句柄，`InputValue/Cursor/
+  SelectionStart/End/HoldKeyboard/Focus` 回调均在该句柄上实际调用；文本仍由
+  `NewText` 渲染以保持确定性帧。`HandleNativeViewPointerEvent` 等仍为 no-op。
 - `LoadResourceSync` 已实现但当前字体链路只走异步接口；缓存、内存字体未接入。
-- 中文字形依赖宿主字体；当前 Linux host 没有 CJK 字体时会显示 tofu 方框。
-- L5 的 Windows ↔ Linux 像素对比仍受官方 appservice guest 阻塞；本阶段提供的是
-  确定性输入与 Linux 侧帧哈希，为 L5 准备可比对的基线。
+- 文本 span 通过 `fontFamilyFallback` 传入常见 CJK/系统字体；宿主无 CJK 字体时
+  仍会显示 tofu。私有 `backgroundUseLineMetrics`/`useCoreTextWordBreak` 仍无法
+  由公开引擎编码（CSS line-height 已通过 span height 生效）。
+- L5：Linux 侧确定性帧哈希与 `test/lib/l5.js` 容差比较已就绪
+  （`npm run test:l5`）；Windows ↔ Linux 像素对比仍受官方 appservice guest
+  阻塞（`docs/feasibility.md` 第 3 节），提供
+  `spec/l5-baseline.win32.json` 后自动启用。

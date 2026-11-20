@@ -252,16 +252,30 @@
   编码限制，保留记录。
 - **absolute / transform（2026-11-20）**：CSS `position: absolute|fixed` 从 flex
   流中移除绝对定位节点，支持 `top/right/bottom/left`（px/%）与 left+right /
-  top+bottom 拉伸；`transform` 支持 `translate`/`scale`/`rotate`/`matrix`，
-  经 `YGNodeSetupTransform` + `YGNodeUpdateTransformOriginAndAlignment` 绕元素
-  中心绘制，不改变布局。测试夹具 `appservice-absolute.ops.json`、
-  `appservice-transform.ops.json`。CSS `box-shadow` 首层经 `NewBoxShadow`
+  top+bottom 拉伸；`transform` 支持 `translate/translate3d`、`scale/scale3d`、
+  `rotate`、`rotateX/rotateY`、`skewX/skewY`、`perspective`、`matrix/matrix3d`，
+  经 `YGNodeSetupTransform` + `YGNodeUpdateTransformOriginAndAlignment`
+  （origin 中心 + alignment topLeft）绕元素中心绘制，不改变布局。测试夹具
+  `appservice-absolute.ops.json`、`appservice-transform.ops.json`、
+  `appservice-transform3d.ops.json`。CSS `box-shadow` 首层经 `NewBoxShadow`
   接入 `NewDecoratedBox`，增量更新走 `DecoratedBoxUpdateShadow`；
   夹具 `appservice-shadow.ops.json`。
-- **下一步**：item 的动态二次变更回调（`ListBuilderInsertBefore`/
-  `UpdateChildren`）、滚动后新 item 的持续录制、`transition` 动画、输入法
-  选区/光标与 `InputHoldKeyboard`；继续补全 yoga 属性。
-  L5 的 Windows 基准仍受官方 appservice guest 阻塞。
+- **二次变更与动画（2026-11-20）**：CSS `transition`/`transition-*` 解析并回放
+  （16ms 时间线、target/override、opacity/background/color/border/transform）；
+  `addAnimatedStyle` 支持 `timeline` 样式帧；`position:fixed` 按视口定位；
+  builder 元数据/item/index 与 `UpdateChildren`/`InsertBefore`/`RemoveChild`
+  细粒度回调，builder-only 批次不再整页重建；图片 `repeat`、CSS
+  `background-image`、Dart `SvgToRgba` SVG 解码、URL 缓存与
+  `CancelRequestHttpResource`；输入光标/选区/组合输入与 `InputHoldKeyboard`
+  触发；CJK `fontFamilyFallback`。`npm run test:ops` 覆盖到 38 个用例。
+- **L5 harness（2026-11-20）**：`test/lib/l5.js` 提供 SHA-256 与逐通道容差比较，
+  `tools/l5-baseline.js --write` 生成 `spec/l5-baseline.json`；
+  `npm run test:l5` 校验 Linux 基线，并在提供 `spec/l5-baseline.win32.json`
+  时启用 Windows ↔ Linux 容差比较。官方 appservice guest 仍阻塞真实 Windows
+  采集。
+- **下一步**：固定定位在滚动祖先内的偏移、私有 `dart:ui` 文本编码标志、
+  录制 JS worklet 的动态 `addAnimatedStyle` 采样、以及 L5 的 Windows 基准。
+  继续补全 yoga 属性。
 
 按依赖顺序推进，每一块都以 Windows 官方输出为基准：
 
@@ -317,5 +331,7 @@
 9. ~~路由栈回放、键盘输入、图片 `objectFit`/网络图片、list/grid builder
    增量 mount~~（已完成，见阶段 3 进度；`clipOp` 也已对齐，
    `lineHeight` 仍受引擎文本编码限制）；
-10. **下一步**：`transition` 动画、builder item 二次变更回调、输入法选区/光标，
-    以及 L5 的 Windows 基准（仍受官方 appservice guest 阻塞）。
+10. ~~`transition` 动画、builder item 二次变更回调、输入法选区/光标~~（已完成，
+    见阶段 3 进度）；~~L5 Linux 基线/harness~~（已完成）。剩余：Windows 官方
+    appservice guest 的真实 L5 采集、滚动祖先内的 fixed、私有 `dart:ui`
+    文本编码标志、JS worklet 动态采样。

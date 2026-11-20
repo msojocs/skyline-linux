@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -51,6 +52,7 @@
 #include "flutter/lib/ui/painting/display_list_image_gpu.h"
 #include "flutter/lib/ui/painting/image.h"
 #include "third_party/skia/include/core/SkData.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/tonic/converter/dart_converter.h"
 #include "third_party/tonic/dart_wrappable.h"
@@ -583,10 +585,45 @@ using NewGridBuilderFn = Dart_Handle (*)(intptr_t ptr, Dart_Handle children,
 using NewListBuilderItemFn = Dart_Handle (*)(Dart_Handle children,
                                               int32_t index);
 using BuilderMutateChildFn = void (*)(Dart_Handle parent, Dart_Handle child);
+using BuilderInsertBeforeFn = void (*)(Dart_Handle parent, Dart_Handle child,
+                                       Dart_Handle pivot);
+using BuilderUpdateChildrenFn = void (*)(Dart_Handle parent,
+                                         Dart_Handle children);
+using BuilderUpdateIntFn = void (*)(Dart_Handle builder, int32_t value);
+using BuilderUpdateFloatFn = void (*)(Dart_Handle builder, double value);
+using BuilderUpdatePaddingFn = void (*)(Dart_Handle builder, double top,
+                                        double right, double bottom,
+                                        double left);
+using BuilderUpdateColorFn = void (*)(Dart_Handle builder, uint32_t color);
 using NavigateBackFn = void (*)(int32_t delta, uint8_t animated,
                                 int32_t callback_id);
 using SwitchTabFn = void (*)(int32_t page_id, int32_t callback_id);
 using UpdateKeyboardStatusFn = void (*)(int32_t input_key, double height);
+using InputValueFn = void (*)(Dart_Handle input, Dart_Handle value);
+using InputIntFn = void (*)(Dart_Handle input, int32_t value);
+using InputBoolFn = void (*)(Dart_Handle input, uint8_t value);
+using InputFocusFn = void (*)(Dart_Handle input, uint8_t focus);
+using NewInputFn = Dart_Handle (*)(
+    intptr_t ptr, void* markDirty, int32_t viewId, uint32_t viewTag,
+    uint8_t multiLine, Dart_Handle value, Dart_Handle type, uint8_t password,
+    Dart_Handle placeholder, double placeholderFontSize,
+    uint8_t placeholderFontWeight, uint32_t placeholderFontColor,
+    uint8_t disable, int32_t maxLength, int32_t cursorSpacing,
+    uint32_t cursorColor, uint8_t focus, uint8_t autoHeight,
+    Dart_Handle confirmType, uint8_t confirmHold, int32_t cursor,
+    int32_t selectionStart, int32_t selectionEnd, uint8_t showConfirmBar,
+    uint8_t adjustPosition, uint8_t holdKeyboard, uint8_t textAlign,
+    uint32_t color, uint32_t backgroundColor, uint8_t textDecoration,
+    uint8_t textDecorationStyle, uint32_t decorationColor,
+    double decorationThickness, void* fontFeatures, uint32_t fontFeaturesLength,
+    double fontSize, double lineHeight, uint8_t fontWeight, uint8_t fontStyle,
+    Dart_Handle fontFamilyFallback, double letterSpacing, double wordSpacing,
+    Dart_Handle shadows, void* nativeOnInput, void* nativeOnFocus,
+    void* nativeOnBlur, void* nativeOnLineChange, void* nativeOnConfirm,
+    void* nativeOnKeyboardHeightChange, void* nativeOnSelectionChange,
+    void* nativeOnCompositionStart, void* nativeOnCompositionEnd,
+    void* nativeOnCompositionUpdate, void* nativeOnSetValueCompleted,
+    void* nativeOnPageBottomPaddingChange);
 using YGNodeSetupTransformFn = void (*)(Dart_Handle yoga_node,
                                         Dart_Handle matrix);
 using YGNodeTransformOriginFn = void (*)(Dart_Handle yoga_node, double origin_x,
@@ -709,13 +746,39 @@ constexpr uint32_t kNewListBuilderHash = 526654284u;
 constexpr uint32_t kNewListBuilderItemHash = 629516111u;
 constexpr uint32_t kListBuilderAppendChildHash = 707989954u;
 constexpr uint32_t kListBuilderRemoveChildHash = 721255976u;
+constexpr uint32_t kListBuilderInsertBeforeHash = 641555288u;
+constexpr uint32_t kListBuilderUpdateChildrenHash = 544349630u;
+constexpr uint32_t kListBuilderUpdateChildCountHash = 769400916u;
+constexpr uint32_t kListBuilderUpdateChildHeightHash = 738571139u;
+constexpr uint32_t kListBuilderUpdatePaddingHash = 527346916u;
+constexpr uint32_t kListBuilderUpdateBackgroundColorHash = 528923708u;
+constexpr uint32_t kListBuilderItemUpdateChildrenHash = 549538126u;
+constexpr uint32_t kListBuilderItemUpdateIndexHash = 556218809u;
 constexpr uint32_t kNewGridBuilderHash = 506712993u;
 constexpr uint32_t kNewGridBuilderItemHash = 615943092u;
 constexpr uint32_t kGridBuilderAppendChildHash = 720875816u;
 constexpr uint32_t kGridBuilderRemoveChildHash = 719309313u;
+constexpr uint32_t kGridBuilderInsertBeforeHash = 639062234u;
+constexpr uint32_t kGridBuilderUpdateChildrenHash = 542877480u;
+constexpr uint32_t kGridBuilderUpdateChildCountHash = 753287585u;
+constexpr uint32_t kGridBuilderUpdateCrossAxisCountHash = 750670620u;
+constexpr uint32_t kGridBuilderUpdateMainAxisSpacingHash = 534430105u;
+constexpr uint32_t kGridBuilderUpdateCrossAxisSpacingHash = 530243228u;
+constexpr uint32_t kGridBuilderUpdateMaxCrossAxisExtentHash = 759854312u;
+constexpr uint32_t kGridBuilderUpdatePaddingHash = 519451945u;
+constexpr uint32_t kGridBuilderUpdateBackgroundColorHash = 514461315u;
+constexpr uint32_t kGridBuilderItemUpdateChildrenHash = 551358966u;
+constexpr uint32_t kGridBuilderItemUpdateIndexHash = 562990716u;
 constexpr uint32_t kNavigateBackHash = 802972930u;
 constexpr uint32_t kSwitchTabHash = 958852003u;
 constexpr uint32_t kUpdateKeyboardStatusHash = 467802059u;
+constexpr uint32_t kInputValueHash = 660826392u;
+constexpr uint32_t kInputCursorHash = 532468509u;
+constexpr uint32_t kInputSelectionStartHash = 760722848u;
+constexpr uint32_t kInputSelectionEndHash = 712315579u;
+constexpr uint32_t kInputHoldKeyboardHash = 720865937u;
+constexpr uint32_t kInputFocusHash = 453329760u;
+constexpr uint32_t kNewInputHash = 762417174u;
 constexpr uint32_t kYGNodeSetupTransformHash = 620430677u;
 constexpr uint32_t kYGNodeTransformOriginHash = 740488219u;
 
@@ -1271,11 +1334,35 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
   if (Dart_IsError(text_handle) || Dart_IsError(no_children)) {
     return Dart_IsError(text_handle) ? text_handle : no_children;
   }
+  // Public engines do not apply the private TextStyle flags, but they do honour
+  // the public `fontFamilyFallback` list.  Listing common CJK/system families
+  // keeps Chinese text from falling back to tofu when the host has them.
+  Dart_Handle fallback = Dart_Null();
+  {
+    static const char* kFallbackFamilies[] = {"Noto Sans CJK SC",
+                                              "Noto Sans CJK",
+                                              "Noto Sans",
+                                              "DejaVu Sans"};
+    Dart_Handle list = Dart_NewList(
+        static_cast<intptr_t>(sizeof(kFallbackFamilies) /
+                              sizeof(kFallbackFamilies[0])));
+    if (!Dart_IsError(list)) {
+      for (size_t i = 0; i < sizeof(kFallbackFamilies) /
+                                 sizeof(kFallbackFamilies[0]);
+           i++) {
+        Dart_Handle family = Dart_NewStringFromCString(kFallbackFamilies[i]);
+        if (!Dart_IsError(family)) {
+          Dart_ListSetAt(list, static_cast<intptr_t>(i), family);
+        }
+      }
+      fallback = list;
+    }
+  }
   const double nan = std::nan("");
   Dart_Handle span = newTextSpan(
       address, text_handle, color, 0, 0, 0, 0, 0.0, nullptr, 0, fontSize,
       static_cast<uint8_t>(fontWeight), static_cast<uint8_t>(fontStyle),
-      Dart_Null(), std::isnan(lineHeight) ? nan : lineHeight,
+      fallback, std::isnan(lineHeight) ? nan : lineHeight,
       std::isnan(letterSpacing) ? nan : letterSpacing, nan, 0, Dart_Null(),
       no_children);
   if (Dart_IsError(span)) {
@@ -1291,8 +1378,7 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
                  0 /* Flutter text */, spans);
 }
 
-bool ReadDescriptor(const char* descriptor, std::string* out) {
-  if (descriptor[0] != '@') {
+bool ReadDescriptor(const char* descriptor, std::string* out) {  if (descriptor[0] != '@') {
     *out = descriptor;
     return true;
   }
@@ -1941,6 +2027,16 @@ namespace appservice {
 
 constexpr float kInf = 1e30f;
 
+// CSS transition properties modelled by the replay runtime.  The bit mask is
+// stored on AppStyle so a style change can start the matching animations.
+enum TransitionProperty : uint32_t {
+  kTransitionOpacity = 1u << 0,
+  kTransitionBackground = 1u << 1,
+  kTransitionColor = 1u << 2,
+  kTransitionBorderColor = 1u << 3,
+  kTransitionTransform = 1u << 4,
+};
+
 struct AppStyle {
   bool row = false;
   int justify = 0;  // 0 start, 1 center, 2 end, 3 space-between
@@ -1949,8 +2045,9 @@ struct AppStyle {
   float margin[4] = {0, 0, 0, 0};
   float gap = 0.0f;
 
-  // CSS position/insets.  position == 1 means absolute/fixed: the node is
-  // removed from flex flow and placed from the parent's content box.
+  // CSS position/insets.  position == 1 absolute, 2 fixed: the node is removed
+  // from flex flow; absolute/fixed insets resolve against the parent content box
+  // or the viewport respectively.
   int position = 0;
   float inset[4] = {std::nanf(""), std::nanf(""), std::nanf(""),
                     std::nanf("")};  // top, right, bottom, left (px)
@@ -1961,6 +2058,12 @@ struct AppStyle {
   bool has_transform = false;
   float transform[16] = {1, 0, 0, 0, 0, 1, 0, 0,
                          0, 0, 1, 0, 0, 0, 0, 1};
+  // CSS transitions.  `transition_mask` selects the animated properties.
+  uint32_t transition_mask = 0;
+  double transition_duration = 0.0;  // ms
+  double transition_delay = 0.0;     // ms
+  int transition_easing = 0;         // 0 linear, 1 ease, 2 ease-in, 3 ease-out
+                                     // 4 ease-in-out
   // First CSS box-shadow layer.
   bool has_shadow = false;
   uint32_t shadow_color = 0u;
@@ -1969,6 +2072,11 @@ struct AppStyle {
   float shadow_blur = 0.0f;
   float shadow_spread = 0.0f;
   bool shadow_inset = false;
+
+  // CSS background image (url(...)); painted behind the node's children.
+  std::string background_image;
+  int background_repeat = 0;  // 0 no-repeat, 1 repeat, 2 repeat-x, 3 repeat-y
+  int background_fit = 0;     // 0 fill, 1 contain, 2 cover
 
   float width = -1.0f;          // px, -1 = auto
   float height = -1.0f;
@@ -2038,9 +2146,33 @@ struct AppNode {
   Dart_PersistentHandle transform_p = nullptr;
   // Decoded image backing a `<image>` node's direct-render paint callback.
   sk_sp<flutter::DlImage> image_dl;
+  // Decoded CSS background-image (painted by the decorated box).
+  sk_sp<flutter::DlImage> background_image_dl;
+  std::string image_source;
+  uint32_t image_request_id = 0;
+  bool image_target_background = false;
   bool image_loaded = false;
   bool image_failed = false;
   bool image_pending = false;
+
+  // Synthetic input state for `name == "input"` nodes.  Indices are UTF-8
+  // codepoint offsets (the replay text model, not Dart UTF-16 offsets).
+  int input_cursor = 0;
+  int input_selection_start = 0;
+  int input_selection_end = 0;
+  bool input_hold_keyboard = false;
+  std::string composition_text;
+  int composition_start = 0;
+  int composition_end = 0;
+  bool composing = false;
+  std::string composition_base_text;
+  Dart_Handle input_widget = nullptr;
+  Dart_PersistentHandle input_widget_p = nullptr;
+
+  // CSS transition override.  When active, ResolveStyles keeps the animated
+  // style instead of the cascade target until the transition completes.
+  bool animation_override_active = false;
+  AppStyle animation_override;
 
   // List/grid builder state (NewListBuilder/NewGridBuilder).  Items are
   // materialized on demand from the captured node table when Flutter's sliver
@@ -2056,7 +2188,17 @@ struct AppNode {
   uint32_t builder_background = 0u;
   // index -> materialized SkylineListBuilderItem/SkylineGridBuilderItem.
   std::unordered_map<int, Dart_PersistentHandle> builder_items;
+  std::unordered_map<int, AppNode*> builder_item_nodes;
   std::unordered_set<int> builder_pending;
+  // Last synced metadata and content signature, used for fine-grained updates.
+  int builder_synced_child_count = 0;
+  float builder_synced_child_height = 0.0f;
+  int builder_synced_cross_axis_count = 1;
+  float builder_synced_main_spacing = 0.0f;
+  float builder_synced_cross_spacing = 0.0f;
+  float builder_synced_max_cross_extent = 0.0f;
+  uint32_t builder_synced_background = 0u;
+  std::unordered_map<int, uint64_t> builder_item_signatures;
 
 
   AppStyle previous_style;
@@ -2067,6 +2209,30 @@ struct AppNode {
 // Nodes with a live native image, keyed by their YGNode address.  The paint
 // callback only receives that address.
 std::unordered_map<intptr_t, AppNode*> g_image_nodes;
+
+// Nodes whose decorated box paints a CSS background-image.
+std::unordered_map<intptr_t, AppNode*> g_background_image_nodes;
+
+// Decoded image cache shared by <image>, CSS backgrounds and SVG results.
+// Deliberately leaked: DlImageGPU created with a null unref queue asserts when
+// destroyed, and the replay runtime lives for the process lifetime.
+std::unordered_map<std::string, sk_sp<flutter::DlImage>>& ImageCache() {
+  static auto* cache =
+      new std::unordered_map<std::string, sk_sp<flutter::DlImage>>();
+  return *cache;
+}
+
+// Replaced images are retired instead of destroyed: DlImageGPU holds a
+// SkiaGPUObject with a null unref queue, and its destructor asserts.
+std::vector<sk_sp<flutter::DlImage>>& RetiredImages() {
+  static auto* retired = new std::vector<sk_sp<flutter::DlImage>>();
+  return *retired;
+}
+
+void CacheImage(const std::string& key, const sk_sp<flutter::DlImage>& image) {
+  auto& cache = ImageCache();
+  if (image && cache.find(key) == cache.end()) cache.emplace(key, image);
+}
 
 // Builder nodes, keyed by YGNode address (the Dart callback only receives the
 // address).  Declared here because teardown clears the entry.
@@ -2083,13 +2249,24 @@ struct FontFaceRequest {
   std::string url;
 };
 
+// One sampled frame of a JS `addAnimatedStyle` worklet.  The recorder stores
+// declarations (CSS syntax) so the replay runtime can apply them without a V8.
+struct PendingAnimatedStyle {
+  uint32_t node_id = 0;
+  int at_ms = 0;
+  std::string declarations;
+};
+
 struct OpPage {
   std::unordered_map<uint32_t, AppNode*> nodes;
   std::vector<CssRule> rules;
   std::vector<FontFaceRequest> fonts;
+  std::vector<PendingAnimatedStyle> animated_styles;
+  size_t scheduled_animated_styles = 0;
   uint32_t root_id = 0;
   int applied_ops = 0;
   bool started = false;
+  bool force_rebuild = false;
 
   // Route stack replay: `notifyNavigateTo`/`notifySwitchTab` record the open
   // type used by the next `attach`; each attach materializes one page route.
@@ -2391,8 +2568,11 @@ void ParseTransform(const std::string& raw, AppStyle* style) {
       double ty = 0.0;
       if (values.empty() || !ParsePxToken(values[0], &tx)) continue;
       if (values.size() > 1) ParsePxToken(values[1], &ty);
+      double tz = 0.0;
+      if (values.size() > 2) ParsePxToken(values[2], &tz);
       local[12] = static_cast<float>(tx);
       local[13] = static_cast<float>(ty);
+      local[14] = static_cast<float>(tz);
     } else if (name == "translatex") {
       double tx = 0.0;
       if (values.empty() || !ParsePxToken(values[0], &tx)) continue;
@@ -2401,14 +2581,21 @@ void ParseTransform(const std::string& raw, AppStyle* style) {
       double ty = 0.0;
       if (values.empty() || !ParsePxToken(values[0], &ty)) continue;
       local[13] = static_cast<float>(ty);
+    } else if (name == "translatez") {
+      double tz = 0.0;
+      if (values.empty() || !ParsePxToken(values[0], &tz)) continue;
+      local[14] = static_cast<float>(tz);
     } else if (name == "scale" || name == "scale3d") {
       double sx = 1.0;
       double sy = 1.0;
+      double sz = 1.0;
       if (values.empty() || !ParseNumber(values[0], &sx)) continue;
       sy = sx;
       if (values.size() > 1) ParseNumber(values[1], &sy);
+      if (values.size() > 2) ParseNumber(values[2], &sz);
       local[0] = static_cast<float>(sx);
       local[5] = static_cast<float>(sy);
+      local[10] = static_cast<float>(sz);
     } else if (name == "scalex") {
       double sx = 1.0;
       if (values.empty() || !ParseNumber(values[0], &sx)) continue;
@@ -2417,6 +2604,10 @@ void ParseTransform(const std::string& raw, AppStyle* style) {
       double sy = 1.0;
       if (values.empty() || !ParseNumber(values[0], &sy)) continue;
       local[5] = static_cast<float>(sy);
+    } else if (name == "scalez") {
+      double sz = 1.0;
+      if (values.empty() || !ParseNumber(values[0], &sz)) continue;
+      local[10] = static_cast<float>(sz);
     } else if (name == "rotate" || name == "rotatez") {
       double radians = 0.0;
       if (values.empty() || !ParseAngleToken(values[0], &radians)) continue;
@@ -2426,6 +2617,51 @@ void ParseTransform(const std::string& raw, AppStyle* style) {
       local[1] = s;
       local[4] = -s;
       local[5] = c;
+    } else if (name == "rotatex") {
+      double radians = 0.0;
+      if (values.empty() || !ParseAngleToken(values[0], &radians)) continue;
+      const float c = static_cast<float>(std::cos(radians));
+      const float s = static_cast<float>(std::sin(radians));
+      // Column-major rotation about X.
+      local[5] = c;
+      local[6] = s;
+      local[9] = -s;
+      local[10] = c;
+    } else if (name == "rotatey") {
+      double radians = 0.0;
+      if (values.empty() || !ParseAngleToken(values[0], &radians)) continue;
+      const float c = static_cast<float>(std::cos(radians));
+      const float s = static_cast<float>(std::sin(radians));
+      // Column-major rotation about Y.
+      local[0] = c;
+      local[2] = -s;
+      local[8] = s;
+      local[10] = c;
+    } else if (name == "skew" || name == "skewx" || name == "skewy") {
+      double ax = 0.0;
+      double ay = 0.0;
+      if (name == "skew") {
+        if (values.empty() || !ParseAngleToken(values[0], &ax)) continue;
+        if (values.size() > 1) ParseAngleToken(values[1], &ay);
+      } else if (name == "skewx") {
+        if (values.empty() || !ParseAngleToken(values[0], &ax)) continue;
+      } else {
+        if (values.empty() || !ParseAngleToken(values[0], &ay)) continue;
+      }
+      local[1] = static_cast<float>(std::tan(ay));
+      local[4] = static_cast<float>(std::tan(ax));
+      if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+        std::fprintf(stderr,
+                     "[skyline-runtime] transform %s: ax=%g ay=%g m1=%g m4=%g\n",
+                     name.c_str(), ax, ay, local[1], local[4]);
+      }
+    } else if (name == "perspective") {
+      double depth = 0.0;
+      if (values.empty() || !ParsePxToken(values[0], &depth) ||
+          std::fabs(depth) < 1e-6) {
+        continue;
+      }
+      local[11] = static_cast<float>(-1.0 / depth);
     } else if (name == "matrix") {
       if (values.size() < 6) continue;
       double v[6] = {0, 0, 0, 0, 0, 0};
@@ -2443,8 +2679,20 @@ void ParseTransform(const std::string& raw, AppStyle* style) {
       local[5] = static_cast<float>(v[3]);   // d
       local[12] = static_cast<float>(v[4]);  // e
       local[13] = static_cast<float>(v[5]);  // f
+    } else if (name == "matrix3d") {
+      if (values.size() < 16) continue;
+      bool ok = true;
+      for (size_t i = 0; i < 16; i++) {
+        double value = 0.0;
+        if (!ParseNumber(values[i], &value)) {
+          ok = false;
+          break;
+        }
+        local[i] = static_cast<float>(value);
+      }
+      if (!ok) continue;
     } else {
-      continue;  // skew/perspective/3d rotations are not modelled
+      continue;  // unsupported transform function
     }
     any = true;
     MatrixMultiply(matrix, local, matrix);
@@ -2472,6 +2720,147 @@ std::vector<std::string> SplitTopLevelComma(const std::string& value) {
   }
   if (!TrimAscii(current).empty()) out.push_back(TrimAscii(current));
   return out;
+}
+
+// CSS time values (`250ms`, `0.3s`).  Bare numbers are treated as ms.
+bool ParseTimeMs(const std::string& raw, double* out) {
+  std::string value = TrimAscii(raw);
+  if (value.empty()) return false;
+  double number = 0.0;
+  if (EndsWith(value, "ms")) {
+    value.resize(value.size() - 2);
+    if (!ParseNumber(value, &number)) return false;
+    *out = number;
+    return true;
+  }
+  if (EndsWith(value, "s")) {
+    value.resize(value.size() - 1);
+    if (!ParseNumber(value, &number)) return false;
+    *out = number * 1000.0;
+    return true;
+  }
+  if (!ParseNumber(value, &number)) return false;
+  *out = number;
+  return true;
+}
+
+uint32_t TransitionPropertyBit(const std::string& raw) {
+  const std::string name = LowerAscii(TrimAscii(raw));
+  if (name == "all" || name.empty()) {
+    return kTransitionOpacity | kTransitionBackground | kTransitionColor |
+           kTransitionBorderColor | kTransitionTransform;
+  }
+  if (name == "opacity") return kTransitionOpacity;
+  if (name == "background" || name == "background-color") {
+    return kTransitionBackground;
+  }
+  if (name == "color") return kTransitionColor;
+  if (name == "border" || name == "border-color") {
+    return kTransitionBorderColor;
+  }
+  if (name == "transform") return kTransitionTransform;
+  return 0u;
+}
+
+int TransitionEasing(const std::string& raw) {
+  const std::string value = LowerAscii(TrimAscii(raw));
+  if (value == "ease") return 1;
+  if (value == "ease-in") return 2;
+  if (value == "ease-out") return 3;
+  if (value == "ease-in-out") return 4;
+  if (StartsWith(value, "cubic-bezier")) return 1;  // approximate with ease
+  return 0;                                          // linear
+}
+
+bool IsTransitionTimingKeyword(const std::string& raw) {
+  const std::string value = LowerAscii(TrimAscii(raw));
+  return value == "linear" || value == "ease" || value == "ease-in" ||
+         value == "ease-out" || value == "ease-in-out" ||
+         StartsWith(value, "cubic-bezier") || StartsWith(value, "steps");
+}
+
+void ParseTransitionShorthand(AppStyle* style, const std::string& raw) {
+  const std::vector<std::string> layers = SplitTopLevelComma(raw);
+  uint32_t mask = 0;
+  double duration = 0.0;
+  double delay = 0.0;
+  int easing = 0;
+  bool have_duration = false;
+  bool have_delay = false;
+  for (const std::string& layer : layers) {
+    // CSS allows one duration/delay/timing per comma-separated transition;
+    // reset per layer so a second layer's duration is not mistaken for delay.
+    double layer_duration = 0.0;
+    double layer_delay = 0.0;
+    bool layer_has_duration = false;
+    bool layer_has_delay = false;
+    int layer_easing = 0;
+    uint32_t layer_mask = 0;
+    for (const std::string& token : SplitWhitespace(layer)) {
+      double time = 0.0;
+      if (ParseTimeMs(token, &time)) {
+        if (!layer_has_duration) {
+          layer_duration = time;
+          layer_has_duration = true;
+        } else if (!layer_has_delay) {
+          layer_delay = time;
+          layer_has_delay = true;
+        }
+      } else if (IsTransitionTimingKeyword(token)) {
+        layer_easing = TransitionEasing(token);
+      } else {
+        layer_mask |= TransitionPropertyBit(token);
+      }
+    }
+    mask |= layer_mask != 0 ? layer_mask : TransitionPropertyBit("all");
+    if (!have_duration && layer_has_duration) {
+      duration = layer_duration;
+      have_duration = true;
+    }
+    if (!have_delay && layer_has_delay) {
+      delay = layer_delay;
+      have_delay = true;
+    }
+    if (easing == 0) easing = layer_easing;
+  }
+  style->transition_mask = mask != 0 ? mask : TransitionPropertyBit("all");
+  style->transition_duration = duration;
+  style->transition_delay = delay;
+  style->transition_easing = easing;
+}
+
+// Extracts `url(...)` from a CSS background value.
+std::string ParseCssUrl(const std::string& raw) {
+  const size_t start = raw.find("url(");
+  if (start == std::string::npos) return std::string();
+  size_t value_start = start + 4;
+  while (value_start < raw.size() &&
+         std::isspace(static_cast<unsigned char>(raw[value_start]))) {
+    value_start++;
+  }
+  const size_t end = raw.find(')', value_start);
+  if (end == std::string::npos) return std::string();
+  std::string value = TrimAscii(raw.substr(value_start, end - value_start));
+  if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+      value.back() == value.front()) {
+    value = value.substr(1, value.size() - 2);
+  }
+  return value;
+}
+
+int ParseBackgroundRepeat(const std::string& raw) {
+  const std::string value = LowerAscii(TrimAscii(raw));
+  if (value == "repeat" || value == "repeat repeat") return 1;
+  if (value == "repeat-x") return 2;
+  if (value == "repeat-y") return 3;
+  return 0;
+}
+
+int ParseBackgroundFit(const std::string& raw) {
+  const std::string value = LowerAscii(TrimAscii(raw));
+  if (value == "cover") return 2;
+  if (value == "contain") return 1;
+  return 0;  // fill / auto
 }
 
 // Whitespace tokenizer that keeps `rgba(0, 0, 0, 0.5)` together.
@@ -2547,8 +2936,7 @@ void ApplyDeclaration(AppStyle* style,
   if (key == "display") {
     style->display_none = value == "none";
   } else if (key == "position") {
-    style->position =
-        (value == "absolute" || value == "fixed") ? 1 : 0;
+    style->position = value == "fixed" ? 2 : value == "absolute" ? 1 : 0;
   } else if (key == "top" || key == "right" || key == "bottom" ||
              key == "left") {
     int index = key == "top" ? 0 : key == "right" ? 1 : key == "bottom" ? 2 : 3;
@@ -2572,8 +2960,59 @@ void ApplyDeclaration(AppStyle* style,
     }
   } else if (key == "transform") {
     if (value != "none") ParseTransform(value, style);
+  } else if (key == "transition") {
+    ParseTransitionShorthand(style, value);
+  } else if (key == "transition-property") {
+    uint32_t mask = 0;
+    for (const std::string& part : SplitTopLevelComma(value)) {
+      mask |= TransitionPropertyBit(part);
+    }
+    style->transition_mask = mask;
+  } else if (key == "transition-duration") {
+    double duration = 0.0;
+    const std::vector<std::string> parts = SplitTopLevelComma(value);
+    if (!parts.empty() && ParseTimeMs(parts[0], &duration)) {
+      style->transition_duration = duration;
+    }
+  } else if (key == "transition-delay") {
+    double delay = 0.0;
+    const std::vector<std::string> parts = SplitTopLevelComma(value);
+    if (!parts.empty() && ParseTimeMs(parts[0], &delay)) {
+      style->transition_delay = delay;
+    }
+  } else if (key == "transition-timing-function") {
+    style->transition_easing = TransitionEasing(value);
   } else if (key == "box-shadow") {
     ParseBoxShadow(value, style);
+  } else if (key == "background-image" || key == "background") {
+    const std::string url = ParseCssUrl(value);
+    if (!url.empty()) style->background_image = url;
+    if (value.find("repeat-x") != std::string::npos) {
+      style->background_repeat = 2;
+    } else if (value.find("repeat-y") != std::string::npos) {
+      style->background_repeat = 3;
+    } else if (value.find("no-repeat") != std::string::npos) {
+      style->background_repeat = 0;
+    } else if (value.find("repeat") != std::string::npos) {
+      style->background_repeat = 1;
+    }
+    if (value.find("cover") != std::string::npos) style->background_fit = 2;
+    else if (value.find("contain") != std::string::npos) style->background_fit = 1;
+    if (key == "background") {
+      // The shorthand may also carry a colour token.
+      for (const std::string& token : TokenizeCssValue(value)) {
+        uint32_t color = 0u;
+        if (ParseCssColor(token, &color)) {
+          style->background = color;
+          style->has_background = true;
+          break;
+        }
+      }
+    }
+  } else if (key == "background-repeat") {
+    style->background_repeat = ParseBackgroundRepeat(value);
+  } else if (key == "background-size") {
+    style->background_fit = ParseBackgroundFit(value);
   } else if (key == "flex-direction") {
     style->row = StartsWith(value, "row");
   } else if (key == "justify-content") {
@@ -2955,6 +3394,12 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
     ApplyDeclarations(&style, ParseDeclarations(node->inline_style));
   }
   node->style = style;
+  // A running CSS transition writes an interpolated style over the cascade
+  // result.  Children inherit from the animated style so text colour/opacity
+  // transitions stay in sync with their container.
+  if (node->animation_override_active) {
+    node->style = node->animation_override;
+  }
   for (AppNode* child : node->children) ResolveStyles(child, &node->style);
 }
 
@@ -3054,6 +3499,8 @@ void Splice(AppNode* parent, int position, int count,
   }
 }
 
+void CancelPendingImage(AppNode* node);
+
 void ApplyAttribute(AppNode* node, const std::string& name,
                     const std::string& value) {
   if (name == "class") {
@@ -3063,6 +3510,13 @@ void ApplyAttribute(AppNode* node, const std::string& name,
       node->inline_style.push_back(';');
     }
     node->inline_style += value;
+  } else if (name == "src" || name == "url" || name == "imageUrl" ||
+             name == "image" || name == "path") {
+    const auto previous = node->attrs.find(name);
+    if (previous == node->attrs.end() || previous->second != value) {
+      CancelPendingImage(node);
+    }
+    node->attrs[name] = value;
   } else {
     node->attrs[name] = value;
   }
@@ -3214,6 +3668,9 @@ bool IsImageName(const std::string& name);
 bool IsListBuilderName(const std::string& name);
 bool IsGridBuilderName(const std::string& name);
 bool LoadImageForNode(AppNode* node);
+bool LoadBackgroundImageForNode(AppNode* node);
+void CancelPendingImage(AppNode* node);
+void ClearTransitions();
 
 bool ImageUsesWidthFix(const AppNode* node) {
   static const char* kKeys[] = {"mode", "objectFit", "object-fit"};
@@ -3417,8 +3874,13 @@ struct NodeMetric {
 // Collects the final rects instead of writing through cached typed-data
 // pointers: Dart's GC may move typed data between API calls, so each buffer is
 // acquired only for the duration of its own write.
+//
+// `abs_x`/`abs_y` are the node's border-box origin relative to the viewport.
+// They let `position: fixed` resolve against the viewport instead of the
+// parent's content box.
 void LayoutNode(AppNode* node, float x, float y, float w, float h,
-                std::vector<NodeMetric>* metrics) {
+                std::vector<NodeMetric>* metrics, float abs_x = 0.0f,
+                float abs_y = 0.0f) {
   if (metrics != nullptr) {
     metrics->push_back(NodeMetric{node, x, y, w, h});
   }
@@ -3453,8 +3915,8 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
   float flex_sum = 0.0f;
   for (AppNode* child : node->children) {
     if (child->released || child->style.display_none) continue;
-    // Absolutely positioned children are laid out after flex flow.
-    if (child->style.position == 1) continue;
+    // Absolutely/fixed positioned children are laid out after flex flow.
+    if (child->style.position != 0) continue;
     ChildLayout layout;
     layout.node = child;
     // Re-measure with the final parent content box so percentages resolve.
@@ -3568,36 +4030,48 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       }
       child_y = cursor;
     }
-    LayoutNode(child.node, child_x, child_y, child.w, child.h, metrics);
+    LayoutNode(child.node, child_x, child_y, child.w, child.h, metrics,
+               abs_x + child_x, abs_y + child_y);
     cursor += child.main + child.margin_main_end + style.gap + extra_gap;
   }
 
-  // Absolute/fixed children: positioned from the parent's content box and
-  // excluded from flex sizing above.
+  // Absolute/fixed children: positioned from the parent's content box (absolute)
+  // or from the viewport (fixed) and excluded from flex sizing above.
   for (AppNode* child : node->children) {
     if (child->released || child->style.display_none ||
-        child->style.position != 1) {
+        child->style.position == 0) {
       continue;
     }
+    const bool fixed = child->style.position == 2;
+    const float inset_w =
+        fixed ? (g_viewport_width > 0.0
+                     ? static_cast<float>(g_viewport_width)
+                     : content_w)
+              : content_w;
+    const float inset_h =
+        fixed ? (g_viewport_height > 0.0
+                     ? static_cast<float>(g_viewport_height)
+                     : content_h)
+              : content_h;
     float left = 0.0f;
     float right = 0.0f;
     float top = 0.0f;
     float bottom = 0.0f;
-    const bool has_left = ResolveInset(child->style, 3, content_w, &left);
-    const bool has_right = ResolveInset(child->style, 1, content_w, &right);
-    const bool has_top = ResolveInset(child->style, 0, content_h, &top);
-    const bool has_bottom = ResolveInset(child->style, 2, content_h, &bottom);
+    const bool has_left = ResolveInset(child->style, 3, inset_w, &left);
+    const bool has_right = ResolveInset(child->style, 1, inset_w, &right);
+    const bool has_top = ResolveInset(child->style, 0, inset_h, &top);
+    const bool has_bottom = ResolveInset(child->style, 2, inset_h, &bottom);
 
     float box_w = -1.0f;
     float box_h = -1.0f;
     if (has_left && has_right && !HasExplicitWidth(child->style)) {
-      box_w = std::max(0.0f, content_w - left - right);
+      box_w = std::max(0.0f, inset_w - left - right);
     }
     if (has_top && has_bottom && !HasExplicitHeight(child->style)) {
-      box_h = std::max(0.0f, content_h - top - bottom);
+      box_h = std::max(0.0f, inset_h - top - bottom);
     }
-    SizeF measured = MeasureNode(child, box_w >= 0.0f ? box_w : content_w,
-                                 box_w >= 0.0f, box_h >= 0.0f ? box_h : content_h,
+    SizeF measured = MeasureNode(child, box_w >= 0.0f ? box_w : inset_w,
+                                 box_w >= 0.0f, box_h >= 0.0f ? box_h : inset_h,
                                  box_h >= 0.0f);
     float child_w = box_w >= 0.0f ? box_w : measured.w;
     float child_h = box_h >= 0.0f ? box_h : measured.h;
@@ -3608,17 +4082,42 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
 
     float child_x = content_x;
     float child_y = content_y;
-    if (has_left) {
-      child_x += left;
-    } else if (has_right) {
-      child_x += content_w - right - child_w;
+    if (fixed) {
+      // Viewport coordinates, then converted back to the parent's coordinate
+      // space because the layout buffer is parent-relative.
+      float viewport_x = 0.0f;
+      float viewport_y = 0.0f;
+      if (has_left) {
+        viewport_x = left;
+      } else if (has_right) {
+        viewport_x = inset_w - right - child_w;
+      } else {
+        // No horizontal inset: keep the static position (parent content origin).
+        viewport_x = abs_x + content_x;
+      }
+      if (has_top) {
+        viewport_y = top;
+      } else if (has_bottom) {
+        viewport_y = inset_h - bottom - child_h;
+      } else {
+        viewport_y = abs_y + content_y;
+      }
+      child_x = viewport_x - abs_x;
+      child_y = viewport_y - abs_y;
+    } else {
+      if (has_left) {
+        child_x += left;
+      } else if (has_right) {
+        child_x += content_w - right - child_w;
+      }
+      if (has_top) {
+        child_y += top;
+      } else if (has_bottom) {
+        child_y += content_h - bottom - child_h;
+      }
     }
-    if (has_top) {
-      child_y += top;
-    } else if (has_bottom) {
-      child_y += content_h - bottom - child_h;
-    }
-    LayoutNode(child, child_x, child_y, child_w, child_h, metrics);
+    LayoutNode(child, child_x, child_y, child_w, child_h, metrics,
+               abs_x + child_x, abs_y + child_y);
   }
 }
 
@@ -3730,12 +4229,16 @@ void ResetNodeHandles(AppNode* node, bool include_layout) {
   DeletePersistent(&node->yoga_node_p);
   DeletePersistent(&node->scroll_view_p);
   DeletePersistent(&node->transform_p);
+  DeletePersistent(&node->input_widget_p);
+  node->input_widget = nullptr;
   if (node->builder_p != nullptr || !node->builder_items.empty()) {
     g_builders_by_address.erase(node->address);
     for (auto& entry : node->builder_items) {
       Dart_DeletePersistentHandle(entry.second);
     }
     node->builder_items.clear();
+    node->builder_item_nodes.clear();
+    node->builder_item_signatures.clear();
     node->builder_pending.clear();
     DeletePersistent(&node->builder_p);
   }
@@ -3745,6 +4248,7 @@ void ResetNodeHandles(AppNode* node, bool include_layout) {
     // no queue is available, so images live for the process lifetime.
     g_image_nodes.erase(node->address);
   }
+  g_background_image_nodes.erase(node->address);
   if (include_layout) DeletePersistent(&node->layout_buffer_p);
   node->decorated_box = nullptr;
   node->opacity_widget = nullptr;
@@ -3806,6 +4310,16 @@ bool IsGridBuilderName(const std::string& name) {
   return name == "gridbuilder" || name == "grid-builder";
 }
 
+// True when `node` is a list/grid builder or lives inside one.
+bool IsBuilderName(const std::string& name);
+bool IsBuilderSubtree(const AppNode* node) {
+  for (const AppNode* current = node; current != nullptr;
+       current = current->parent) {
+    if (IsBuilderName(current->name)) return true;
+  }
+  return false;
+}
+
 bool IsBuilderName(const std::string& name) {
   return IsListBuilderName(name) || IsGridBuilderName(name);
 }
@@ -3822,6 +4336,94 @@ bool IsImageName(const std::string& name) {
 void DirectRenderImageDispose(intptr_t /*ptr*/) {}
 void DirectRenderImageCreate(intptr_t /*ptr*/) {}
 void DirectRenderImageLayout(intptr_t /*ptr*/, double /*w*/, double /*h*/) {}
+
+int ImageRepeatMode(const AppNode* node) {
+  static const char* kKeys[] = {"repeat", "background-repeat", "backgroundRepeat"};
+  for (const char* key : kKeys) {
+    const auto found = node->attrs.find(key);
+    if (found != node->attrs.end() && !found->second.empty()) {
+      return ParseBackgroundRepeat(found->second);
+    }
+  }
+  return node->style.background_repeat;
+}
+
+// Draws `image` into a width x height box, applying a CSS-like object-fit and
+// repeat mode.  Shared by <image> direct-render widgets and CSS background
+// images.
+void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& image,
+                    double width, double height, int fit, int repeat,
+                    double offset_x, double offset_y) {
+  if (!image || !canvas || canvas->builder() == nullptr) return;
+  const double image_width = image->width();
+  const double image_height = image->height();
+  if (image_width <= 0.0 || image_height <= 0.0) return;
+  const double target_w = std::max(0.0, width);
+  const double target_h = std::max(0.0, height);
+  if (target_w <= 0.0 || target_h <= 0.0) return;
+
+  double dest_x = 0.0;
+  double dest_y = 0.0;
+  double dest_w = target_w;
+  double dest_h = target_h;
+  if (fit == 1 || fit == 3 || fit == 4) {
+    double scale = fit == 3 ? 1.0 : std::min(target_w / image_width,
+                                             target_h / image_height);
+    if (fit == 4 && image_width <= target_w && image_height <= target_h) {
+      scale = 1.0;
+    }
+    dest_w = image_width * scale;
+    dest_h = image_height * scale;
+    dest_x = (target_w - dest_w) / 2.0;
+    dest_y = (target_h - dest_h) / 2.0;
+  } else if (fit == 2) {
+    const double scale = std::max(target_w / image_width,
+                                  target_h / image_height);
+    dest_w = image_width * scale;
+    dest_h = image_height * scale;
+    dest_x = (target_w - dest_w) / 2.0;
+    dest_y = (target_h - dest_h) / 2.0;
+  }
+
+  canvas->save();
+  canvas->translate(offset_x, offset_y);
+  if (fit == 2 || repeat != 0) {
+    canvas->clipRect(0.0, 0.0, target_w, target_h,
+                     flutter::DlClipOp::kIntersect);
+  }
+  if (repeat == 0) {
+    canvas->builder()->DrawImageRect(
+        image, flutter::DlRect::MakeLTRB(0.0, 0.0, image_width, image_height),
+        flutter::DlRect::MakeLTRB(dest_x, dest_y, dest_x + dest_w,
+                                  dest_y + dest_h),
+        flutter::DlImageSampling::kLinear, nullptr);
+  } else {
+    // CSS repeat tiles at the natural image size (or the background-size
+    // result when a fit was requested).
+    const double tile_w = fit == 0 ? image_width : dest_w;
+    const double tile_h = fit == 0 ? image_height : dest_h;
+    if (tile_w <= 0.0 || tile_h <= 0.0) {
+      canvas->restore();
+      return;
+    }
+    const bool tile_x = repeat == 1 || repeat == 2;
+    const bool tile_y = repeat == 1 || repeat == 3;
+    const int columns = tile_x ? static_cast<int>(std::ceil(target_w / tile_w))
+                               : 1;
+    const int rows = tile_y ? static_cast<int>(std::ceil(target_h / tile_h)) : 1;
+    for (int row = 0; row < rows; row++) {
+      for (int column = 0; column < columns; column++) {
+        const double tx = tile_x ? column * tile_w : dest_x;
+        const double ty = tile_y ? row * tile_h : dest_y;
+        canvas->builder()->DrawImageRect(
+            image, flutter::DlRect::MakeLTRB(0.0, 0.0, image_width, image_height),
+            flutter::DlRect::MakeLTRB(tx, ty, tx + tile_w, ty + tile_h),
+            flutter::DlImageSampling::kLinear, nullptr);
+      }
+    }
+  }
+  canvas->restore();
+}
 
 void DirectRenderImagePaint(intptr_t ptr, Dart_Handle canvas_handle,
                             double width, double height, double offset_x,
@@ -3843,9 +4445,6 @@ void DirectRenderImagePaint(intptr_t ptr, Dart_Handle canvas_handle,
   if (canvas == nullptr || canvas->builder() == nullptr) {
     return;
   }
-  const double image_width = node->image_dl->width();
-  const double image_height = node->image_dl->height();
-  if (image_width <= 0.0 || image_height <= 0.0) return;
 
   // Resolve `objectFit` (`mode`/`objectFit` attributes or CSS object-fit).
   int fit = node->style.object_fit;
@@ -3867,44 +4466,28 @@ void DirectRenderImagePaint(intptr_t ptr, Dart_Handle canvas_handle,
     }
     break;
   }
-  double dest_x = 0.0;
-  double dest_y = 0.0;
-  double dest_w = width;
-  double dest_h = height;
-  const double target_w = std::max(0.0, width);
-  const double target_h = std::max(0.0, height);
-  if (fit == 1 || fit == 4 || fit == 3) {
-    double scale = fit == 3 ? 1.0 : std::min(target_w / image_width,
-                                             target_h / image_height);
-    if (fit == 4 && image_width <= target_w && image_height <= target_h) {
-      scale = 1.0;
-    }
-    dest_w = image_width * scale;
-    dest_h = image_height * scale;
-    dest_x = (target_w - dest_w) / 2.0;
-    dest_y = (target_h - dest_h) / 2.0;
-  } else if (fit == 2) {
-    const double scale = std::max(target_w / image_width,
-                                  target_h / image_height);
-    dest_w = image_width * scale;
-    dest_h = image_height * scale;
-    dest_x = (target_w - dest_w) / 2.0;
-    dest_y = (target_h - dest_h) / 2.0;
-  }
+  DrawImageInBox(canvas, node->image_dl, width, height, fit, ImageRepeatMode(node),
+                 offset_x, offset_y);
+}
 
-  canvas->save();
-  canvas->translate(offset_x, offset_y);
-  if (fit == 2) {
-    // aspect-fill spills outside the widget box; clip to the node rect.
-    canvas->clipRect(0.0, 0.0, target_w, target_h, flutter::DlClipOp::kIntersect);
-  }
-  canvas->builder()->DrawImageRect(
-      node->image_dl,
-      flutter::DlRect::MakeLTRB(0.0, 0.0, image_width, image_height),
-      flutter::DlRect::MakeLTRB(dest_x, dest_y, dest_x + dest_w,
-                                dest_y + dest_h),
-      flutter::DlImageSampling::kLinear, nullptr);
-  canvas->restore();
+// CSS background-image painting through NewDecoratedBox's onPaint callback.
+void BackgroundImageCreate(intptr_t /*ptr*/) {}
+void BackgroundImageDisposed(intptr_t /*ptr*/) {}
+
+void BackgroundImagePaint(intptr_t ptr, Dart_Handle canvas_handle, double left,
+                          double top, double right, double bottom,
+                          Dart_Handle /*path*/) {
+  auto found = g_background_image_nodes.find(ptr);
+  if (found == g_background_image_nodes.end() || found->second == nullptr) return;
+  AppNode* node = found->second;
+  if (!node->background_image_dl) return;
+  auto* canvas = tonic::DartConverter<flutter::Canvas*>::FromDart(canvas_handle);
+  if (canvas == nullptr || canvas->builder() == nullptr) return;
+  const double width = std::max(0.0, right - left);
+  const double height = std::max(0.0, bottom - top);
+  DrawImageInBox(canvas, node->background_image_dl, width, height,
+                 node->style.background_fit, node->style.background_repeat, left,
+                 top);
 }
 
 // `package:skyline` registers this Dart callback; native calls it to perform
@@ -3913,61 +4496,160 @@ void DirectRenderImagePaint(intptr_t ptr, Dart_Handle canvas_handle,
 using RequestHttpResourceFn = void (*)(uint32_t request_context_id,
                                        Dart_Handle url,
                                        void* native_callback);
+using CancelRequestHttpResourceFn = void (*)(uint32_t request_context_id);
+// `SvgToRgba` renders SVG through package:flutter_svg on the Dart side and
+// returns raw RGBA bytes to the native callback.
+using SvgToRgbaCallbackFn = void (*)(intptr_t runtime_ptr, intptr_t ptr,
+                                      int32_t id, Dart_Handle data,
+                                      int32_t width, int32_t height);
+using SvgToRgbaFn = void (*)(intptr_t ptr, double pixel_ratio, int32_t id,
+                             Dart_Handle url, Dart_Handle raw, double width,
+                             double height, void* callback);
 
-// Decodes `src`/`url` (resolved against SKYLINE_RESOURCE_ROOT) into a dart:ui
-// Image and keeps it alive on the node.
-bool DecodeImageForNode(AppNode* node, const uint8_t* data, size_t size,
-                        const std::string& label) {  if (data == nullptr || size == 0) return false;
-  sk_sp<SkData> sk_data = SkData::MakeWithCopy(data, size);
-  sk_sp<SkImage> sk_image = SkImages::DeferredFromEncodedData(std::move(sk_data));
-  if (!sk_image) {
-    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot decode %s\n",
-                 node->id, label.c_str());
-    return false;
-  }
-  // The Dart `ui.Image` requires a UI-thread-safe DlImage; the GPU wrapper is
-  // safe even for software rendering (its unref queue may be null).
+constexpr uint32_t kSvgToRgbaHash = 543998557u;
+constexpr uint32_t kCancelRequestHttpResourceHash = 653300188u;
+constexpr uint32_t kBackgroundImageMarkNeedPaintHash = 741124659u;
+
+sk_sp<flutter::DlImage> WrapSkImage(sk_sp<SkImage> sk_image) {
+  if (!sk_image) return nullptr;
   flutter::SkiaGPUObject<SkImage> gpu_image = {std::move(sk_image), nullptr};
-  node->image_dl = flutter::DlImageGPU::Make(std::move(gpu_image));
-  if (!node->image_dl) {
-    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot wrap %s\n",
-                 node->id, label.c_str());
-    return false;
-  }
-  node->image_loaded = true;
-  std::fprintf(stderr, "[skyline-runtime] image #%u: %s (%zu bytes, %dx%d)\n",
-               node->id, label.c_str(), size, node->image_dl->width(),
-               node->image_dl->height());
-  return true;
+  return flutter::DlImageGPU::Make(std::move(gpu_image));
 }
 
-struct PendingImageRequest {
-  AppNode* node = nullptr;
-  RuntimeHolder* holder = nullptr;
-};
+sk_sp<flutter::DlImage> DecodeEncodedImage(const uint8_t* data, size_t size) {
+  if (data == nullptr || size == 0) return nullptr;
+  sk_sp<SkData> sk_data = SkData::MakeWithCopy(data, size);
+  return WrapSkImage(SkImages::DeferredFromEncodedData(std::move(sk_data)));
+}
 
-std::unordered_map<uint32_t, PendingImageRequest> g_pending_image_requests;
-uint32_t g_next_image_request_id = 0x40000000u;
+sk_sp<flutter::DlImage> DecodeRgbaImage(const uint8_t* data, size_t size,
+                                        int width, int height) {
+  if (data == nullptr || width <= 0 || height <= 0) return nullptr;
+  const size_t expected = static_cast<size_t>(width) * height * 4;
+  if (size < expected) return nullptr;
+  SkImageInfo info =
+      SkImageInfo::Make(width, height, kBGRA_8888_SkColorType,
+                        kPremul_SkAlphaType);
+  SkBitmap bitmap;
+  if (!bitmap.tryAllocPixels(info)) return nullptr;
+  std::memcpy(bitmap.getPixels(), data, expected);
+  return WrapSkImage(SkImages::RasterFromBitmap(bitmap));
+}
+
+bool SourceLooksLikeSvg(const std::string& source, const uint8_t* data,
+                        size_t size) {
+  std::string path = source;
+  const size_t query = path.find('?');
+  if (query != std::string::npos) path.resize(query);
+  if (EndsWith(LowerAscii(path), ".svg")) return true;
+  if (data == nullptr || size == 0) return false;
+  size_t index = 0;
+  while (index < size && std::isspace(static_cast<unsigned char>(data[index]))) {
+    index++;
+  }
+  if (index + 5 <= size && std::memcmp(data + index, "<?xml", 5) == 0) {
+    return true;
+  }
+  return index + 4 <= size && std::memcmp(data + index, "<svg", 4) == 0;
+}
+
+void AssignNodeImage(AppNode* node, const sk_sp<flutter::DlImage>& image,
+                     bool background) {
+  sk_sp<flutter::DlImage>& target =
+      background ? node->background_image_dl : node->image_dl;
+  if (target && target != image) {
+    RetiredImages().push_back(std::move(target));
+  }
+  target = image;
+  node->image_loaded = true;
+  node->image_pending = false;
+  std::fprintf(stderr, "[skyline-runtime] image #%u: %s (%dx%d)\n", node->id,
+               background ? "background image" : "image",
+               image ? image->width() : 0, image ? image->height() : 0);
+}
 
 void RebuildAppServicePage(RuntimeHolder* holder);
 
-// Dart's `RequestHttpResource` performs the actual request (dart:io).  The
-// response arrives on the UI task runner; decode here and rebuild the page so
-// the native paint callback can draw the image.
-extern "C" void OnImageResourceResponse(intptr_t /*runtime_ptr*/,
-                                        uint32_t request_id, Dart_Handle data,
-                                        uint8_t /*from_cache*/) {
-  auto found = g_pending_image_requests.find(request_id);
-  if (found == g_pending_image_requests.end()) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] image response for unknown request %u\n",
-                 request_id);
-    return;
+void RepaintAfterImage(RuntimeHolder* holder, bool background,
+                       Dart_PersistentHandle decorated_box) {
+  auto runner = UiTaskRunner();
+  if (!runner) return;
+  runner->PostTask([holder, background, decorated_box]() {
+    DemoPageApiScope scope;
+    if (background && decorated_box != nullptr && holder != nullptr) {
+      auto* mark = reinterpret_cast<void (*)(Dart_Handle)>(
+          FindCallback(holder->ffi_table, kBackgroundImageMarkNeedPaintHash));
+      if (mark != nullptr) {
+        mark(Dart_HandleFromPersistent(decorated_box));
+        return;
+      }
+    }
+    RebuildAppServicePage(holder);
+  });
+}
+
+struct PendingImageRequest {
+  RuntimeHolder* holder = nullptr;
+  std::string source;
+  std::vector<AppNode*> nodes;
+};
+
+struct PendingSvgRequest {
+  AppNode* node = nullptr;
+  RuntimeHolder* holder = nullptr;
+  bool background = false;
+};
+
+std::unordered_map<uint32_t, PendingImageRequest> g_pending_image_requests;
+std::unordered_map<std::string, uint32_t> g_pending_image_by_source;
+std::unordered_map<int32_t, PendingSvgRequest> g_pending_svg_requests;
+uint32_t g_next_image_request_id = 0x40000000u;
+int32_t g_next_svg_request_id = 0x30000000;
+
+void RebuildAppServicePage(RuntimeHolder* holder);
+
+void CancelNetworkImage(AppNode* node) {
+  if (!node->image_pending || node->image_request_id == 0) return;
+  auto found = g_pending_image_requests.find(node->image_request_id);
+  if (found != g_pending_image_requests.end()) {
+    auto& nodes = found->second.nodes;
+    nodes.erase(std::remove(nodes.begin(), nodes.end(), node), nodes.end());
+    if (nodes.empty()) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] image request %u cancelled (%s)\n",
+                   node->image_request_id, found->second.source.c_str());
+      g_pending_image_by_source.erase(found->second.source);
+      RuntimeHolder* holder = found->second.holder;
+      if (holder != nullptr) {
+        auto* cancel = reinterpret_cast<CancelRequestHttpResourceFn>(
+            FindCallback(holder->ffi_table, kCancelRequestHttpResourceHash));
+        if (cancel != nullptr) cancel(node->image_request_id);
+      }
+      g_pending_image_requests.erase(found);
+    }
   }
-  PendingImageRequest pending = found->second;
-  g_pending_image_requests.erase(found);
-  if (pending.node == nullptr) return;
-  pending.node->image_pending = false;
+  node->image_pending = false;
+  node->image_request_id = 0;
+}
+
+void CancelPendingImage(AppNode* node) {
+  if (node == nullptr) return;
+  CancelNetworkImage(node);
+  node->image_source.clear();
+  node->image_loaded = false;
+  node->image_failed = false;
+  node->image_pending = false;
+  if (node->image_dl) RetiredImages().push_back(std::move(node->image_dl));
+}
+
+void OnSvgToRgbaResponse(intptr_t /*runtime_ptr*/, intptr_t /*ptr*/, int32_t id,
+                         Dart_Handle data, int32_t width, int32_t height) {
+  auto found = g_pending_svg_requests.find(id);
+  if (found == g_pending_svg_requests.end()) return;
+  PendingSvgRequest pending = found->second;
+  g_pending_svg_requests.erase(found);
+  AppNode* node = pending.node;
+  if (node == nullptr || node->released) return;
 
   std::vector<uint8_t> bytes;
   if (data != nullptr && !Dart_IsNull(data) && !Dart_IsError(data)) {
@@ -3981,31 +4663,280 @@ extern "C" void OnImageResourceResponse(intptr_t /*runtime_ptr*/,
     }
     Dart_TypedDataReleaseData(data);
   }
-  if (!DecodeImageForNode(pending.node, bytes.data(), bytes.size(),
-                          "network image")) {
+  sk_sp<flutter::DlImage> image =
+      DecodeRgbaImage(bytes.data(), bytes.size(), width, height);
+  if (!image) {
     std::fprintf(stderr,
-                 "[skyline-runtime] image #%u: network payload unusable (%zu "
-                 "bytes)\n",
-                 pending.node->id, bytes.size());
-    pending.node->image_failed = true;
+                 "[skyline-runtime] image #%u: SVG payload unusable (%dx%d, "
+                 "%zu bytes)\n",
+                 node->id, width, height, bytes.size());
+    node->image_failed = true;
+    node->image_pending = false;
+    return;
+  }
+  CacheImage(node->image_source, image);
+  AssignNodeImage(node, image, pending.background);
+  RepaintAfterImage(pending.holder, pending.background,
+                    pending.background ? node->decorated_box_p : nullptr);
+}
+
+// Hands an SVG payload to package:skyline's `SvgToRgba` callback.
+bool StartSvgDecode(AppNode* node, const std::string& source,
+                    const std::vector<uint8_t>& bytes, bool background,
+                    RuntimeHolder* holder) {
+  if (holder == nullptr || node == nullptr) return false;
+  auto* svg = reinterpret_cast<SvgToRgbaFn>(
+      FindCallback(holder->ffi_table, kSvgToRgbaHash));
+  if (svg == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] image #%u: SvgToRgba callback missing\n",
+                 node->id);
+    return false;
+  }
+  Dart_Handle raw =
+      Dart_NewTypedData(Dart_TypedData_kUint8,
+                        static_cast<intptr_t>(bytes.size()));
+  if (Dart_IsError(raw)) return false;
+  Dart_TypedData_Type type = Dart_TypedData_kInvalid;
+  void* data = nullptr;
+  intptr_t length = 0;
+  if (!Dart_IsError(Dart_TypedDataAcquireData(raw, &type, &data, &length)) &&
+      data != nullptr) {
+    std::memcpy(data, bytes.data(), bytes.size());
+  }
+  Dart_TypedDataReleaseData(raw);
+  Dart_Handle url = Dart_NewStringFromCString(source.c_str());
+  if (Dart_IsError(url)) return false;
+  const int32_t id = ++g_next_svg_request_id;
+  g_pending_svg_requests[id] = PendingSvgRequest{node, holder, background};
+  node->image_pending = true;
+  node->image_source = source;
+  node->image_target_background = background;
+  std::fprintf(stderr, "[skyline-runtime] image #%u: SVG %s (request=%d)\n",
+               node->id, source.c_str(), id);
+  svg(node->address, 1.0, id, url, raw, 0.0, 0.0,
+      reinterpret_cast<void*>(&OnSvgToRgbaResponse));
+  return true;
+}
+
+// Dart's `RequestHttpResource` performs the actual request (dart:io).  The
+// response arrives on the UI task runner; decode once and fan the result out to
+// every node waiting on that URL.
+extern "C" void OnImageResourceResponse(intptr_t /*runtime_ptr*/,
+                                        uint32_t request_id, Dart_Handle data,
+                                        uint8_t /*from_cache*/) {
+  auto found = g_pending_image_requests.find(request_id);
+  if (found == g_pending_image_requests.end()) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] image response for unknown request %u\n",
+                 request_id);
+    return;
+  }
+  PendingImageRequest pending = found->second;
+  g_pending_image_requests.erase(found);
+  g_pending_image_by_source.erase(pending.source);
+
+  std::vector<uint8_t> bytes;
+  if (data != nullptr && !Dart_IsNull(data) && !Dart_IsError(data)) {
+    Dart_TypedData_Type type = Dart_TypedData_kInvalid;
+    void* raw = nullptr;
+    intptr_t length = 0;
+    if (!Dart_IsError(Dart_TypedDataAcquireData(data, &type, &raw, &length)) &&
+        raw != nullptr && length > 0) {
+      bytes.assign(static_cast<uint8_t*>(raw),
+                   static_cast<uint8_t*>(raw) + length);
+    }
+    Dart_TypedDataReleaseData(data);
+  }
+  if (bytes.empty()) {
+    for (AppNode* node : pending.nodes) {
+      if (node != nullptr && !node->released && node->image_source == pending.source) {
+        node->image_failed = true;
+        node->image_pending = false;
+      }
+    }
+    return;
+  }
+  if (SourceLooksLikeSvg(pending.source, bytes.data(), bytes.size())) {
+    // SVG rasterization is per-node (it needs a Dart isolate scope), but the
+    // payload is fetched only once.
+    for (AppNode* node : pending.nodes) {
+      if (node == nullptr || node->released ||
+          node->image_source != pending.source) {
+        continue;
+      }
+      node->image_pending = false;
+      DemoPageApiScope scope;
+      StartSvgDecode(node, pending.source, bytes, node->image_target_background,
+                     pending.holder);
+    }
+    return;
+  }
+
+  sk_sp<flutter::DlImage> image = DecodeEncodedImage(bytes.data(), bytes.size());
+  if (!image) {
+    for (AppNode* node : pending.nodes) {
+      if (node != nullptr && !node->released && node->image_source == pending.source) {
+        node->image_failed = true;
+        node->image_pending = false;
+      }
+    }
+    std::fprintf(stderr,
+                 "[skyline-runtime] network payload unusable (%zu bytes)\n",
+                 bytes.size());
+    return;
+  }
+  CacheImage(pending.source, image);
+  bool any_background = false;
+  Dart_PersistentHandle decorated = nullptr;
+  bool any = false;
+  for (AppNode* node : pending.nodes) {
+    if (node == nullptr || node->released ||
+        node->image_source != pending.source) {
+      continue;
+    }
+    AssignNodeImage(node, image, node->image_target_background);
+    any = true;
+    if (node->image_target_background) {
+      any_background = true;
+      decorated = node->decorated_box_p;
+    }
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] network image (%zu bytes) for %zu node(s), "
+               "rebuilding page\n",
+               bytes.size(), pending.nodes.size());
+  if (any) RepaintAfterImage(pending.holder, any_background, decorated);
+}
+
+bool StartNetworkImage(AppNode* node, const std::string& source,
+                       bool background, RuntimeHolder* holder) {
+  if (node->image_pending) return false;
+  void* request = holder != nullptr
+                      ? FindCallback(holder->ffi_table, kRequestHttpResourceHash)
+                      : nullptr;
+  if (request == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] image #%u: RequestHttpResource missing\n",
+                 node->id);
+    node->image_failed = true;
+    return false;
+  }
+  node->image_source = source;
+  node->image_target_background = background;
+  node->image_pending = true;
+
+  auto pending = g_pending_image_by_source.find(source);
+  if (pending != g_pending_image_by_source.end()) {
+    auto& entry = g_pending_image_requests[pending->second];
+    if (std::find(entry.nodes.begin(), entry.nodes.end(), node) ==
+        entry.nodes.end()) {
+      entry.nodes.push_back(node);
+    }
+    node->image_request_id = pending->second;
+    std::fprintf(stderr,
+                 "[skyline-runtime] image #%u: join pending fetch %s "
+                 "(request=%u)\n",
+                 node->id, source.c_str(), pending->second);
+    return false;
+  }
+
+  const uint32_t request_id = ++g_next_image_request_id;
+  node->image_request_id = request_id;
+  PendingImageRequest entry;
+  entry.holder = holder;
+  entry.source = source;
+  entry.nodes.push_back(node);
+  g_pending_image_requests[request_id] = entry;
+  g_pending_image_by_source[source] = request_id;
+  std::fprintf(stderr, "[skyline-runtime] image #%u: fetch %s (request=%u)\n",
+               node->id, source.c_str(), request_id);
+  // Start the request from a follow-up UI task: the Dart-side
+  // `RequestHttpResource` is an async callback and must not be entered from
+  // the middle of page construction.
+  auto runner = UiTaskRunner();
+  if (!runner) runner = g_ui_task_runner;
+  if (runner) {
+    runner->PostTask([holder, request_id, source]() {
+      DemoPageApiScope scope;
+      void* request = FindCallback(
+          holder != nullptr ? holder->ffi_table : nullptr,
+          kRequestHttpResourceHash);
+      if (request == nullptr) {
+        std::fprintf(stderr,
+                     "[skyline-runtime] image request %u: "
+                     "RequestHttpResource missing\n",
+                     request_id);
+        return;
+      }
+      Dart_Handle url = Dart_NewStringFromCString(source.c_str());
+      std::fprintf(stderr, "[skyline-runtime] image request %u starting\n",
+                   request_id);
+      reinterpret_cast<RequestHttpResourceFn>(request)(
+          request_id, url,
+          reinterpret_cast<void*>(&OnImageResourceResponse));
+    });
+  }
+  return false;
+}
+
+bool LoadImageSource(AppNode* node, const std::string& source, bool background,
+                     RuntimeHolder* holder) {
+  if (source.empty()) {
+    std::fprintf(stderr, "[skyline-runtime] image #%u: no source\n", node->id);
+    node->image_failed = true;
+    return false;
+  }
+  auto cached = ImageCache().find(source);
+  if (cached != ImageCache().end() && cached->second) {
+    AssignNodeImage(node, cached->second, background);
+    std::fprintf(stderr, "[skyline-runtime] image #%u: cache hit %s\n",
+                 node->id, source.c_str());
+    return true;
+  }
+
+  if (StartsWith(source, "http://") || StartsWith(source, "https://")) {
+    return StartNetworkImage(node, source, background, holder);
+  }
+
+  const std::string resolved = ResolveResourcePath(source);
+  std::vector<uint8_t> bytes;
+  if (!ReadResourceBytes(resolved, &bytes) || bytes.empty()) {
+    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot read %s\n",
+                 node->id, resolved.c_str());
+    node->image_failed = true;
+    return false;
+  }
+  if (SourceLooksLikeSvg(source, bytes.data(), bytes.size())) {
+    return StartSvgDecode(node, source, bytes, background, holder);
+  }
+  sk_sp<flutter::DlImage> image = DecodeEncodedImage(bytes.data(), bytes.size());
+  if (!image) {
+    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot decode %s\n",
+                 node->id, source.c_str());
+    node->image_failed = true;
+    return false;
+  }
+  CacheImage(source, image);
+  AssignNodeImage(node, image, background);
+  if (background) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] background image #%u: %s -> %s (%zu bytes, "
+                 "%dx%d)\n",
+                 node->id, source.c_str(), resolved.c_str(), bytes.size(),
+                 image->width(), image->height());
   } else {
     std::fprintf(stderr,
-                 "[skyline-runtime] network image (%zu bytes) for #%u, "
-                 "rebuilding page\n",
-                 bytes.size(), pending.node->id);
+                 "[skyline-runtime] image #%u: %s -> %s (%zu bytes, %dx%d)\n",
+                 node->id, source.c_str(), resolved.c_str(), bytes.size(),
+                 image->width(), image->height());
   }
-  auto runner = UiTaskRunner();
-  if (!runner) return;
-  RuntimeHolder* holder = pending.holder;
-  runner->PostTask([holder]() {
-    DemoPageApiScope scope;
-    RebuildAppServicePage(holder);
-  });
+  return true;
 }
 
 bool LoadImageForNode(AppNode* node) {
   if (node->image_loaded) return true;
-  if (node->image_failed) return false;
+  if (node->image_failed || node->image_pending) return false;
   static const char* kSourceKeys[] = {"src", "url", "imageUrl", "image",
                                       "path"};
   std::string source;
@@ -4022,71 +4953,18 @@ bool LoadImageForNode(AppNode* node) {
     node->image_failed = true;
     return false;
   }
+  RuntimeHolder* holder = g_page != nullptr ? g_page->holder : nullptr;
+  return LoadImageSource(node, source, false, holder);
+}
 
-  if (StartsWith(source, "http://") || StartsWith(source, "https://")) {
-    if (node->image_pending) return false;
-    RuntimeHolder* holder = g_page != nullptr ? g_page->holder : nullptr;
-    void* request = holder != nullptr
-                        ? FindCallback(holder->ffi_table,
-                                       kRequestHttpResourceHash)
-                        : nullptr;
-    if (request == nullptr) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] image #%u: RequestHttpResource missing\n",
-                   node->id);
-      node->image_failed = true;
-      return false;
-    }
-    const uint32_t request_id = ++g_next_image_request_id;
-    node->image_pending = true;
-    g_pending_image_requests[request_id] = PendingImageRequest{node, holder};
-    std::fprintf(stderr,
-                 "[skyline-runtime] image #%u: fetch %s (request=%u)\n",
-                 node->id, source.c_str(), request_id);
-    // Start the request from a follow-up UI task: the Dart-side
-    // `RequestHttpResource` is an async callback and must not be entered from
-    // the middle of page construction.
-    auto runner = UiTaskRunner();
-    if (!runner) runner = g_ui_task_runner;
-    if (runner) {
-      runner->PostTask([holder, request_id, source]() {
-        DemoPageApiScope scope;
-        void* request = FindCallback(
-            holder != nullptr ? holder->ffi_table : nullptr,
-            kRequestHttpResourceHash);
-        if (request == nullptr) {
-          std::fprintf(stderr,
-                       "[skyline-runtime] image request %u: "
-                       "RequestHttpResource missing\n",
-                       request_id);
-          return;
-        }
-        Dart_Handle url = Dart_NewStringFromCString(source.c_str());
-        std::fprintf(stderr,
-                     "[skyline-runtime] image request %u starting\n",
-                     request_id);
-        reinterpret_cast<RequestHttpResourceFn>(request)(
-            request_id, url,
-            reinterpret_cast<void*>(&OnImageResourceResponse));
-      });
-    }
-    return false;
+bool LoadBackgroundImageForNode(AppNode* node) {
+  if (node == nullptr || node->style.background_image.empty()) return false;
+  if (node->background_image_dl != nullptr || node->image_failed ||
+      node->image_pending) {
+    return node->background_image_dl != nullptr;
   }
-
-  const std::string resolved = ResolveResourcePath(source);
-  std::vector<uint8_t> bytes;
-  if (!ReadResourceBytes(resolved, &bytes) || bytes.empty()) {
-    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot read %s\n",
-                 node->id, resolved.c_str());
-    node->image_failed = true;
-    return false;
-  }
-  if (!DecodeImageForNode(node, bytes.data(), bytes.size(),
-                          source + " -> " + resolved)) {
-    node->image_failed = true;
-    return false;
-  }
-  return true;
+  RuntimeHolder* holder = g_page != nullptr ? g_page->holder : nullptr;
+  return LoadImageSource(node, node->style.background_image, true, holder);
 }
 
 // Builder nodes are slivers.  The Dart side calls back with `(address, index)`
@@ -4115,6 +4993,69 @@ Dart_Handle BuildBoxShadowList(const AppStyle& style) {
   return list;
 }
 
+// -- native input handle -----------------------------------------------------
+//
+// The replay renders text nodes directly, but the real SkylineInput widget is
+// still created (off-tree) so the native Input* callbacks have a valid Dart
+// handle.  This is what makes InputHoldKeyboard / InputCursor /
+// InputSelectionStart/End observable instead of log-only.
+void InputNoopMarkDirty(intptr_t) {}
+void InputNoopOnInput(intptr_t, Dart_Handle, uint32_t, uint32_t) {}
+void InputNoopOnFocus(intptr_t, Dart_Handle, uint32_t) {}
+void InputNoopOnBlur(intptr_t, Dart_Handle, Dart_Handle, Dart_Handle) {}
+void InputNoopOnLineChange(intptr_t, uint32_t, uint32_t, uint32_t) {}
+void InputNoopOnConfirm(intptr_t, Dart_Handle) {}
+void InputNoopOnKeyboardHeightChange(intptr_t, uint32_t, uint32_t) {}
+void InputNoopOnSelectionChange(intptr_t, uint32_t, uint32_t) {}
+void InputNoopOnComposition(intptr_t, Dart_Handle) {}
+void InputNoopOnPageBottomPaddingChange(intptr_t, double) {}
+
+Dart_Handle CreateInputStateWidget(NewInputFn newInput, AppNode* node) {
+  if (newInput == nullptr || node == nullptr) return nullptr;
+  Dart_Handle value = Dart_NewStringFromCString(node->text.c_str());
+  Dart_Handle type = Dart_NewStringFromCString("text");
+  Dart_Handle placeholder = Dart_NewStringFromCString("");
+  Dart_Handle confirm = Dart_NewStringFromCString("done");
+  if (Dart_IsError(value) || Dart_IsError(type) || Dart_IsError(placeholder) ||
+      Dart_IsError(confirm)) {
+    return nullptr;
+  }
+  const AppStyle& style = node->style;
+  const double line_height =
+      style.line_height > 0.0 ? style.line_height / style.font_size
+                              : style.line_height_factor;
+  const double letter_spacing =
+      std::isnan(style.letter_spacing) ? std::nan("") : style.letter_spacing;
+  const uint8_t focus =
+      g_page != nullptr && g_page->focused_input_id == node->id ? 1 : 0;
+  return newInput(
+      node->address, reinterpret_cast<void*>(&InputNoopMarkDirty), 1, node->id,
+      0 /* multiLine */, value, type, 0 /* password */, placeholder,
+      style.font_size, static_cast<uint8_t>(style.font_weight), 0xFF999999u,
+      0 /* disable */, -1 /* maxLength */, 0 /* cursorSpacing */, 0xFF000000u,
+      focus, 0 /* autoHeight */, confirm, 0 /* confirmHold */,
+      node->input_cursor, node->input_selection_start,
+      node->input_selection_end, 0 /* showConfirmBar */, 1 /* adjustPosition */,
+      node->input_hold_keyboard ? 1 : 0, static_cast<uint8_t>(style.text_align),
+      style.color, 0 /* backgroundColor */, 0 /* textDecoration */,
+      0 /* textDecorationStyle */, 0u /* decorationColor */,
+      0.0 /* decorationThickness */, nullptr, 0, style.font_size, line_height,
+      static_cast<uint8_t>(style.font_weight),
+      static_cast<uint8_t>(style.font_style), Dart_Null(), letter_spacing,
+      std::nan(""), Dart_Null(), reinterpret_cast<void*>(&InputNoopOnInput),
+      reinterpret_cast<void*>(&InputNoopOnFocus),
+      reinterpret_cast<void*>(&InputNoopOnBlur),
+      reinterpret_cast<void*>(&InputNoopOnLineChange),
+      reinterpret_cast<void*>(&InputNoopOnConfirm),
+      reinterpret_cast<void*>(&InputNoopOnKeyboardHeightChange),
+      reinterpret_cast<void*>(&InputNoopOnSelectionChange),
+      reinterpret_cast<void*>(&InputNoopOnComposition),
+      reinterpret_cast<void*>(&InputNoopOnComposition),
+      reinterpret_cast<void*>(&InputNoopOnComposition),
+      reinterpret_cast<void*>(&InputNoopOnComposition),
+      reinterpret_cast<void*>(&InputNoopOnPageBottomPaddingChange));
+}
+
 Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         NewYGConnectorFn newYGConnector, NewTextFn newText,
                         NewTextSpanFn newTextSpan,
@@ -4131,6 +5072,22 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
   Dart_Handle inner = Dart_Null();
 
   if (node->tag == "text") {
+    if (node->name == "input" && g_page != nullptr &&
+        g_page->holder != nullptr) {
+      auto* newInput = reinterpret_cast<NewInputFn>(FindCallback(
+          g_page->holder->ffi_table, kNewInputHash));
+      if (newInput != nullptr) {
+        DeletePersistent(&node->input_widget_p);
+        Dart_Handle input_widget = CreateInputStateWidget(newInput, node);
+        if (input_widget != nullptr && !Dart_IsError(input_widget) &&
+            !Dart_IsNull(input_widget)) {
+          node->input_widget = input_widget;
+          node->input_widget_p = Dart_NewPersistentHandle(input_widget);
+        } else if (Dart_IsError(input_widget)) {
+          ReportDartError("appservice NewInput", input_widget);
+        }
+      }
+    }
     std::string text_storage;
     const char* text = NodeText(node, &text_storage);
     // NewTextSpan's `height` is the Flutter line-height multiplier, while CSS
@@ -4189,6 +5146,13 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     node->builder_max_cross_extent =
         static_cast<float>(AttrNumber(node, "maxCrossAxisExtent", 0.0));
     node->builder_background = style.has_background ? style.background : 0u;
+    node->builder_synced_child_count = node->builder_child_count;
+    node->builder_synced_child_height = node->builder_child_height;
+    node->builder_synced_cross_axis_count = node->builder_cross_axis_count;
+    node->builder_synced_main_spacing = node->builder_main_spacing;
+    node->builder_synced_cross_spacing = node->builder_cross_spacing;
+    node->builder_synced_max_cross_extent = node->builder_max_cross_extent;
+    node->builder_synced_background = node->builder_background;
     Dart_Handle empty = Dart_NewList(0);
     Dart_Handle builder = Dart_Null();
     if (node->builder_kind == 1) {
@@ -4428,10 +5392,16 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         }
       }
     }
+    const bool wants_background_image = !style.background_image.empty();
+    const bool wants_paint_transition =
+        (style.transition_mask &
+         (kTransitionBackground | kTransitionBorderColor)) != 0;
     const bool has_visual = style.has_background ||
                             style.border_width > 0.0f || style.radius > 0.0f ||
-                            style.has_shadow;
+                            style.has_shadow || wants_background_image ||
+                            wants_paint_transition;
     if (has_visual) {
+      if (wants_background_image) LoadBackgroundImageForNode(node);
       const uint32_t border_color =
           style.border_width > 0.0f ? style.border_color : 0u;
       const uint8_t border_style = style.border_width > 0.0f ? 1 : 0;
@@ -4443,17 +5413,28 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
           border_style, border_style, border_style, style.radius, style.radius,
           style.radius, style.radius, style.radius, style.radius, style.radius,
           style.radius, 0, 0, 0, 0, 0, 0, 0, 0, Dart_Null(), 0, 0, 0.0, 0.0,
-          0.0, 0.0, 0, 0, 0.0, 0.0, 0, 0, Dart_Null(), 0, shadows, 0, nullptr,
-          nullptr, nullptr, nullptr, inner);
+          0.0, 0.0, static_cast<uint8_t>(wants_background_image
+                                             ? style.background_repeat
+                                             : 0),
+          static_cast<uint8_t>(wants_background_image ? style.background_fit
+                                                      : 0),
+          0.0, 0.0, 0, 0, Dart_Null(), 0, shadows, 0,
+          reinterpret_cast<void*>(&BackgroundImagePaint),
+          reinterpret_cast<void*>(&BackgroundImageCreate),
+          reinterpret_cast<void*>(&BackgroundImageDisposed), nullptr, inner);
       if (Dart_IsError(decorated)) {
         ReportDartError("appservice NewDecoratedBox", decorated);
       } else {
         inner = decorated;
         node->decorated_box = decorated;
         node->decorated_box_p = Dart_NewPersistentHandle(decorated);
+        if (wants_background_image) {
+          g_background_image_nodes[node->address] = node;
+        }
       }
     }
-    if (style.opacity < 0.999) {
+    if (style.opacity < 0.999 ||
+        (style.transition_mask & kTransitionOpacity) != 0) {
       Dart_Handle opacity = newOpacity(style.opacity, inner);
       if (Dart_IsError(opacity)) {
         ReportDartError("appservice NewOpacity", opacity);
@@ -4527,7 +5508,20 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       setup(yoga_node, matrix);
       if (origin != nullptr) {
         origin(yoga_node, node->measured_w * 0.5, node->measured_h * 0.5,
-               0.0, 0.0);
+               -1.0, -1.0);
+      }
+      if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+        std::fprintf(stderr,
+                     "[skyline-runtime] transform #%u matrix=[%g,%g,%g,%g "
+                     "%g,%g,%g,%g %g,%g,%g,%g %g,%g,%g,%g]\n",
+                     node->id, style.transform[0], style.transform[1],
+                     style.transform[2], style.transform[3],
+                     style.transform[4], style.transform[5],
+                     style.transform[6], style.transform[7],
+                     style.transform[8], style.transform[9],
+                     style.transform[10], style.transform[11],
+                     style.transform[12], style.transform[13],
+                     style.transform[14], style.transform[15]);
       }
       node->transform_p = Dart_NewPersistentHandle(matrix);
     }
@@ -4559,6 +5553,49 @@ AppNode* FindBuilderItemNode(AppNode* builder, int index) {
     sequential++;
   }
   return nullptr;
+}
+
+uint64_t HashBytes(uint64_t seed, const void* data, size_t size) {
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  for (size_t i = 0; i < size; i++) {
+    seed ^= bytes[i];
+    seed *= 1099511628211ull;
+  }
+  return seed;
+}
+
+uint64_t HashString(uint64_t seed, const std::string& value) {
+  seed = HashBytes(seed, value.data(), value.size());
+  const uint8_t separator = 0xFF;
+  return HashBytes(seed, &separator, 1);
+}
+
+// Content signature used to notice builder-item changes without rebuilding the
+// whole page.  Attributes are sorted so unordered_map iteration order does not
+// leak into the result.
+uint64_t NodeContentSignature(const AppNode* node) {
+  if (node == nullptr) return 0;
+  uint64_t hash = 1469598103934665603ull;
+  hash = HashString(hash, node->tag);
+  hash = HashString(hash, node->name);
+  hash = HashString(hash, node->text);
+  hash = HashString(hash, node->inline_style);
+  for (const std::string& klass : node->classes) hash = HashString(hash, klass);
+  std::vector<std::string> keys;
+  keys.reserve(node->attrs.size());
+  for (const auto& entry : node->attrs) keys.push_back(entry.first);
+  std::sort(keys.begin(), keys.end());
+  for (const std::string& key : keys) {
+    hash = HashString(hash, key);
+    hash = HashString(hash, node->attrs.at(key));
+  }
+  for (const AppNode* child : node->children) {
+    if (child == nullptr || child->released) continue;
+    hash = HashBytes(hash, &child->id, sizeof(child->id));
+    const uint64_t child_hash = NodeContentSignature(child);
+    hash = HashBytes(hash, &child_hash, sizeof(child_hash));
+  }
+  return hash;
 }
 
 void MaterializeBuilderItem(RuntimeHolder* holder, intptr_t address,
@@ -4646,8 +5683,37 @@ void MaterializeBuilderItem(RuntimeHolder* holder, intptr_t address,
     return;
   }
   Dart_Handle builder_widget = Dart_HandleFromPersistent(builder->builder_p);
-  append(builder_widget, item_widget);
+  Dart_Handle pivot = nullptr;
+  int pivot_index = -1;
+  for (const auto& entry : builder->builder_items) {
+    if (entry.first <= index) continue;
+    if (pivot_index < 0 || entry.first < pivot_index) {
+      pivot_index = entry.first;
+      pivot = Dart_HandleFromPersistent(entry.second);
+    }
+  }
+  auto* insert_before = reinterpret_cast<BuilderInsertBeforeFn>(FindCallback(
+      holder->ffi_table, builder->builder_kind == 1
+                             ? kGridBuilderInsertBeforeHash
+                             : kListBuilderInsertBeforeHash));
+  if (pivot != nullptr && insert_before != nullptr) {
+    insert_before(builder_widget, item_widget, pivot);
+    std::fprintf(stderr,
+                 "[skyline-runtime] %s: #%u index=%d before=%d\n",
+                 builder->builder_kind == 1 ? "GridBuilderInsertBefore"
+                                            : "ListBuilderInsertBefore",
+                 builder->id, index, pivot_index);
+  } else {
+    append(builder_widget, item_widget);
+    std::fprintf(stderr,
+                 "[skyline-runtime] %s: #%u index=%d\n",
+                 builder->builder_kind == 1 ? "GridBuilderAppendChild"
+                                            : "ListBuilderAppendChild",
+                 builder->id, index);
+  }
   builder->builder_items[index] = Dart_NewPersistentHandle(item_widget);
+  builder->builder_item_nodes[index] = item;
+  builder->builder_item_signatures[index] = NodeContentSignature(item);
   std::fprintf(stderr,
                "[skyline-runtime] builder mount: #%u index=%d (%gx%g)\n",
                builder->id, index, static_cast<double>(item->measured_w),
@@ -4698,10 +5764,343 @@ void OnBuilderDisposeChild(intptr_t address, int32_t index) {
     }
     Dart_DeletePersistentHandle(item->second);
     builder->builder_items.erase(item);
+    builder->builder_item_nodes.erase(index);
+    builder->builder_item_signatures.erase(index);
     std::fprintf(stderr, "[skyline-runtime] builder dispose: #%u index=%d\n",
                  builder->id, index);
   });
 }
+
+// Rebuilds one materialized builder item's content and returns a fresh
+// SkylineListBuilderItem/GridBuilderItem widget.  The caller swaps it into the
+// builder through ListBuilderUpdateChildren; the item-level callback is also
+// invoked for API parity.
+Dart_Handle RebuildBuilderItemContent(RuntimeHolder* holder, AppNode* builder,
+                                      int index, AppNode* item,
+                                      Dart_Handle item_widget) {
+  if (holder == nullptr || builder == nullptr || item == nullptr ||
+      item_widget == nullptr) {
+    return nullptr;
+  }
+  ResetNodeHandles(item, true);
+  PrepareLayoutBuffers(item);
+  float width = builder->measured_w > 0.0f
+                    ? builder->measured_w
+                    : static_cast<float>(g_viewport_width);
+  if (width <= 0.0f) width = 320.0f;
+  if (builder->builder_kind == 1) {
+    const int columns = std::max(1, builder->builder_cross_axis_count);
+    width = (width - builder->builder_cross_spacing * (columns - 1)) /
+            static_cast<float>(columns);
+    if (width < 0.0f) width = 0.0f;
+  }
+  MeasureNode(item, width, true, kInf, false);
+  if (builder->builder_child_height > 0.0f) {
+    item->measured_h = builder->builder_child_height;
+  }
+  if (item->measured_w <= 0.0f) item->measured_w = width;
+  std::vector<NodeMetric> metrics;
+  LayoutNode(item, 0.0f, 0.0f, item->measured_w, item->measured_h, &metrics);
+  WriteLayoutMetrics(metrics);
+
+  auto* newYGNode = reinterpret_cast<NewYGNodeFn>(
+      FindCallback(holder->ffi_table, kNewYGNodeHash));
+  auto* newYGConnector = reinterpret_cast<NewYGConnectorFn>(
+      FindCallback(holder->ffi_table, kNewYGConnectorHash));
+  auto* newText =
+      reinterpret_cast<NewTextFn>(FindCallback(holder->ffi_table, kNewTextHash));
+  auto* newTextSpan = reinterpret_cast<NewTextSpanFn>(
+      FindCallback(holder->ffi_table, kNewTextSpanHash));
+  auto* newDecoratedBox = reinterpret_cast<NewDecoratedBoxFn>(
+      FindCallback(holder->ffi_table, kNewDecoratedBoxHash));
+  auto* newOpacity = reinterpret_cast<NewOpacityFn>(
+      FindCallback(holder->ffi_table, kNewOpacityHash));
+  auto* newScrollView = reinterpret_cast<NewScrollViewFn>(
+      FindCallback(holder->ffi_table, kNewScrollViewHash));
+  auto* newListView = reinterpret_cast<NewListViewFn>(
+      FindCallback(holder->ffi_table, kNewListViewHash));
+  auto* newGridView = reinterpret_cast<NewGridViewFn>(
+      FindCallback(holder->ffi_table, kNewGridViewHash));
+  auto* newDirectRenderWidget = reinterpret_cast<NewDirectRenderWidgetFn>(
+      FindCallback(holder->ffi_table, kNewDirectRenderWidgetHash));
+  auto* newListBuilder = reinterpret_cast<NewListBuilderFn>(
+      FindCallback(holder->ffi_table, kNewListBuilderHash));
+  auto* newGridBuilder = reinterpret_cast<NewGridBuilderFn>(
+      FindCallback(holder->ffi_table, kNewGridBuilderHash));
+  auto* update_children = reinterpret_cast<BuilderUpdateChildrenFn>(FindCallback(
+      holder->ffi_table, builder->builder_kind == 1
+                             ? kGridBuilderItemUpdateChildrenHash
+                             : kListBuilderItemUpdateChildrenHash));
+  auto* new_item = reinterpret_cast<NewListBuilderItemFn>(FindCallback(
+      holder->ffi_table, builder->builder_kind == 1
+                             ? kNewGridBuilderItemHash
+                             : kNewListBuilderItemHash));
+  auto* mark_needs_layout = reinterpret_cast<MarkYGNodeNeedsLayoutFn>(
+      FindCallback(holder->ffi_table, kMarkYGNodeNeedsLayoutHash));
+  if (newYGNode == nullptr || new_item == nullptr) return nullptr;
+
+  Dart_Handle widget =
+      BuildWidget(item, newYGNode, newYGConnector, newText, newTextSpan,
+                  newDecoratedBox, newOpacity, newScrollView, newListView,
+                  newGridView, newDirectRenderWidget, newListBuilder,
+                  newGridBuilder, true);
+  if (widget == nullptr || Dart_IsError(widget)) return nullptr;
+  Dart_Handle children = Dart_NewList(1);
+  Dart_ListSetAt(children, 0, widget);
+  Dart_Handle updated = new_item(children, index);
+  if (updated == nullptr || Dart_IsError(updated)) return nullptr;
+  // Keep the item-level callback in the path even though Flutter rebuilds the
+  // item through the builder's UpdateChildren below (the reconstructed widget
+  // does not wire proxySetState for item-local updates).
+  if (update_children != nullptr) update_children(updated, children);
+  if (mark_needs_layout != nullptr) mark_needs_layout(updated);
+  builder->builder_item_signatures[index] = NodeContentSignature(item);
+  std::fprintf(stderr,
+               "[skyline-runtime] %s: #%u index=%d\n",
+               builder->builder_kind == 1 ? "GridBuilderItemUpdateChildren"
+                                          : "ListBuilderItemUpdateChildren",
+               builder->id, index);
+  return updated;
+}
+
+// Applies post-attach builder metadata/item changes without rebuilding the
+// whole attached subtree.  Returns true when at least one callback was issued.
+bool SyncAppServiceBuilders(RuntimeHolder* holder) {
+  if (g_page == nullptr || holder == nullptr) return false;
+  AppNode* root = FindNode(g_page->root_id);
+  if (root != nullptr) ResolveStyles(root, nullptr);
+  bool changed = false;
+  std::vector<AppNode*> builders;
+  builders.reserve(g_builders_by_address.size());
+  for (const auto& entry : g_builders_by_address) {
+    if (entry.second != nullptr) builders.push_back(entry.second);
+  }
+  for (AppNode* builder : builders) {
+    if (builder == nullptr || builder->released || builder->builder_p == nullptr) {
+      continue;
+    }
+    Dart_Handle builder_widget =
+        Dart_HandleFromPersistent(builder->builder_p);
+    const bool grid = builder->builder_kind == 1;
+
+    const int child_count = static_cast<int>(
+        AttrNumber(builder, "childCount",
+                   AttrNumber(builder, "child-count",
+                              static_cast<double>(
+                                  builder->builder_synced_child_count))));
+    if (child_count != builder->builder_synced_child_count) {
+      auto* update = reinterpret_cast<BuilderUpdateIntFn>(FindCallback(
+          holder->ffi_table, grid ? kGridBuilderUpdateChildCountHash
+                                  : kListBuilderUpdateChildCountHash));
+      if (update != nullptr) {
+        update(builder_widget, child_count);
+        builder->builder_child_count = child_count;
+        builder->builder_synced_child_count = child_count;
+        changed = true;
+        std::fprintf(stderr,
+                     "[skyline-runtime] %s: #%u childCount=%d\n",
+                     grid ? "GridBuilderUpdateChildCount"
+                          : "ListBuilderUpdateChildCount",
+                     builder->id, child_count);
+      }
+    }
+
+    if (grid) {
+      const int cross = std::max(
+          1, static_cast<int>(AttrNumber(builder, "crossAxisCount", 2.0)));
+      if (cross != builder->builder_synced_cross_axis_count) {
+        auto* update = reinterpret_cast<BuilderUpdateIntFn>(FindCallback(
+            holder->ffi_table, kGridBuilderUpdateCrossAxisCountHash));
+        if (update != nullptr) {
+          update(builder_widget, cross);
+          builder->builder_cross_axis_count = cross;
+          builder->builder_synced_cross_axis_count = cross;
+          changed = true;
+          std::fprintf(stderr,
+                       "[skyline-runtime] GridBuilderUpdateCrossAxisCount: "
+                       "#%u count=%d\n",
+                       builder->id, cross);
+        }
+      }
+      const float main_spacing =
+          static_cast<float>(AttrNumber(builder, "mainAxisSpacing", 0.0));
+      if (std::fabs(main_spacing - builder->builder_synced_main_spacing) > 0.01f) {
+        auto* update = reinterpret_cast<BuilderUpdateFloatFn>(FindCallback(
+            holder->ffi_table, kGridBuilderUpdateMainAxisSpacingHash));
+        if (update != nullptr) {
+          update(builder_widget, main_spacing);
+          builder->builder_main_spacing = main_spacing;
+          builder->builder_synced_main_spacing = main_spacing;
+          changed = true;
+        }
+      }
+      const float cross_spacing =
+          static_cast<float>(AttrNumber(builder, "crossAxisSpacing", 0.0));
+      if (std::fabs(cross_spacing - builder->builder_synced_cross_spacing) >
+          0.01f) {
+        auto* update = reinterpret_cast<BuilderUpdateFloatFn>(FindCallback(
+            holder->ffi_table, kGridBuilderUpdateCrossAxisSpacingHash));
+        if (update != nullptr) {
+          update(builder_widget, cross_spacing);
+          builder->builder_cross_spacing = cross_spacing;
+          builder->builder_synced_cross_spacing = cross_spacing;
+          changed = true;
+        }
+      }
+      const float max_extent = static_cast<float>(
+          AttrNumber(builder, "maxCrossAxisExtent", 0.0));
+      if (std::fabs(max_extent - builder->builder_synced_max_cross_extent) >
+          0.01f) {
+        auto* update = reinterpret_cast<BuilderUpdateFloatFn>(FindCallback(
+            holder->ffi_table, kGridBuilderUpdateMaxCrossAxisExtentHash));
+        if (update != nullptr) {
+          update(builder_widget, max_extent);
+          builder->builder_max_cross_extent = max_extent;
+          builder->builder_synced_max_cross_extent = max_extent;
+          changed = true;
+        }
+      }
+    } else {
+      const float child_height =
+          static_cast<float>(AttrNumber(builder, "childHeight", 0.0));
+      if (std::fabs(child_height - builder->builder_synced_child_height) >
+          0.01f) {
+        auto* update = reinterpret_cast<BuilderUpdateFloatFn>(FindCallback(
+            holder->ffi_table, kListBuilderUpdateChildHeightHash));
+        if (update != nullptr) {
+          update(builder_widget, child_height);
+          builder->builder_child_height = child_height;
+          builder->builder_synced_child_height = child_height;
+          changed = true;
+          std::fprintf(stderr,
+                       "[skyline-runtime] ListBuilderUpdateChildHeight: "
+                       "#%u height=%g\n",
+                       builder->id, child_height);
+        }
+      }
+    }
+
+    const uint32_t background =
+        builder->style.has_background ? builder->style.background : 0u;
+    if (background != builder->builder_synced_background) {
+      auto* update = reinterpret_cast<BuilderUpdateColorFn>(FindCallback(
+          holder->ffi_table, grid ? kGridBuilderUpdateBackgroundColorHash
+                                  : kListBuilderUpdateBackgroundColorHash));
+      if (update != nullptr) {
+        update(builder_widget, background);
+        builder->builder_background = background;
+        builder->builder_synced_background = background;
+        changed = true;
+      }
+    }
+
+    // Item content/index changes.  Metadata updates above keep Flutter's
+    // sliver window in sync; content updates use the item-level callbacks.
+    std::vector<int> indexes;
+    indexes.reserve(builder->builder_items.size());
+    for (const auto& entry : builder->builder_items) {
+      indexes.push_back(entry.first);
+    }
+    std::sort(indexes.begin(), indexes.end());
+    int content_updates = 0;
+    std::vector<int> removed;
+    for (int index : indexes) {
+      auto item_handle = builder->builder_items.find(index);
+      if (item_handle == builder->builder_items.end()) continue;
+      AppNode* item = nullptr;
+      auto node_entry = builder->builder_item_nodes.find(index);
+      if (node_entry != builder->builder_item_nodes.end()) item = node_entry->second;
+      if (item == nullptr || item->released) {
+        item = FindBuilderItemNode(builder, index);
+        if (item == nullptr) {
+          removed.push_back(index);
+          continue;
+        }
+        builder->builder_item_nodes[index] = item;
+      }
+      const int declared_index = static_cast<int>(
+          AttrNumber(item, "index", static_cast<double>(index)));
+      if (declared_index != index) {
+        auto* update_index = reinterpret_cast<BuilderUpdateIntFn>(FindCallback(
+            holder->ffi_table, grid ? kGridBuilderItemUpdateIndexHash
+                                    : kListBuilderItemUpdateIndexHash));
+        if (update_index != nullptr) {
+          update_index(Dart_HandleFromPersistent(item_handle->second),
+                       declared_index);
+          std::fprintf(stderr,
+                       "[skyline-runtime] %s: #%u index %d -> %d\n",
+                       grid ? "GridBuilderItemUpdateIndex"
+                            : "ListBuilderItemUpdateIndex",
+                       builder->id, index, declared_index);
+        }
+      }
+      const uint64_t signature = NodeContentSignature(item);
+      auto signature_entry = builder->builder_item_signatures.find(index);
+      if (signature_entry == builder->builder_item_signatures.end() ||
+          signature_entry->second != signature) {
+        Dart_Handle updated = RebuildBuilderItemContent(
+            holder, builder, index, item,
+            Dart_HandleFromPersistent(item_handle->second));
+        if (updated != nullptr) {
+          Dart_DeletePersistentHandle(item_handle->second);
+          builder->builder_items[index] = Dart_NewPersistentHandle(updated);
+          content_updates++;
+          changed = true;
+        }
+      }
+    }
+    for (int index : removed) {
+      auto item = builder->builder_items.find(index);
+      if (item == builder->builder_items.end()) continue;
+      auto* remove = reinterpret_cast<BuilderMutateChildFn>(FindCallback(
+          holder->ffi_table, grid ? kGridBuilderRemoveChildHash
+                                  : kListBuilderRemoveChildHash));
+      if (remove != nullptr) {
+        remove(builder_widget, Dart_HandleFromPersistent(item->second));
+      }
+      Dart_DeletePersistentHandle(item->second);
+      builder->builder_items.erase(item);
+      builder->builder_item_nodes.erase(index);
+      builder->builder_item_signatures.erase(index);
+      changed = true;
+      std::fprintf(stderr,
+                   "[skyline-runtime] %s: #%u remove index=%d\n",
+                   grid ? "GridBuilderRemoveChild" : "ListBuilderRemoveChild",
+                   builder->id, index);
+    }
+    if (content_updates > 0) {
+      // Hand Flutter one consistent item list; this is the callback that makes
+      // the rebuilt item widgets visible to the sliver.
+      auto* update_children = reinterpret_cast<BuilderUpdateChildrenFn>(
+          FindCallback(holder->ffi_table, grid
+                                                ? kGridBuilderUpdateChildrenHash
+                                                : kListBuilderUpdateChildrenHash));
+      if (update_children != nullptr) {
+        std::vector<Dart_Handle> handles;
+        handles.reserve(builder->builder_items.size());
+        for (int index : indexes) {
+          auto item = builder->builder_items.find(index);
+          if (item == builder->builder_items.end()) continue;
+          handles.push_back(Dart_HandleFromPersistent(item->second));
+        }
+        Dart_Handle list =
+            Dart_NewList(static_cast<intptr_t>(handles.size()));
+        for (size_t i = 0; i < handles.size(); i++) {
+          Dart_ListSetAt(list, static_cast<intptr_t>(i), handles[i]);
+        }
+        update_children(builder_widget, list);
+        std::fprintf(stderr,
+                     "[skyline-runtime] %s: #%u (%d item(s), %zu updated)\n",
+                     grid ? "GridBuilderUpdateChildren"
+                          : "ListBuilderUpdateChildren",
+                     builder->id, static_cast<int>(handles.size()),
+                     static_cast<size_t>(content_updates));
+      }
+    }
+  }
+  return changed;
+}
+
 
 uint32_t MemberUint(const rapidjson::Value& object, const char* key,
                     uint32_t fallback) {
@@ -4730,6 +6129,259 @@ void ApplyNodeAttribute(AppNode* node, const char* name,
   }
 }
 
+std::string CamelToKebab(const std::string& key) {
+  std::string out;
+  out.reserve(key.size() + 4);
+  for (char c : key) {
+    if (c >= 'A' && c <= 'Z') {
+      out.push_back('-');
+      out.push_back(static_cast<char>(c - 'A' + 'a'));
+    } else {
+      out.push_back(c);
+    }
+  }
+  return out;
+}
+
+bool IsColorDeclaration(const std::string& key) {
+  return key == "background-color" || key == "color" ||
+         key == "border-color" || EndsWith(key, "-color");
+}
+
+bool IsLengthDeclaration(const std::string& key) {
+  return key == "width" || key == "height" || key == "left" || key == "top" ||
+         key == "right" || key == "bottom" || key == "font-size" ||
+         key == "border-width" || key == "border-radius";
+}
+
+// Converts a React-Native-style animated style map into CSS declarations.
+std::string AnimatedStyleDeclarations(const rapidjson::Value& style) {
+  std::string out;
+  if (!style.IsObject()) return out;
+  for (auto it = style.MemberBegin(); it != style.MemberEnd(); ++it) {
+    const std::string key = CamelToKebab(it->name.GetString());
+    const rapidjson::Value& value = it->value;
+    out += key;
+    out.push_back(':');
+    if (value.IsString()) {
+      out += value.GetString();
+    } else if (value.IsBool()) {
+      out += value.GetBool() ? "1" : "0";
+    } else if (value.IsNumber()) {
+      char buffer[64];
+      if (IsColorDeclaration(key)) {
+        std::snprintf(buffer, sizeof(buffer), "#%08X",
+                      static_cast<unsigned>(value.GetUint()));
+      } else if (IsLengthDeclaration(key) && value.GetDouble() != 0.0) {
+        std::snprintf(buffer, sizeof(buffer), "%gpx", value.GetDouble());
+      } else {
+        std::snprintf(buffer, sizeof(buffer), "%g", value.GetDouble());
+      }
+      out += buffer;
+    } else if (value.IsArray() && key == "transform") {
+      bool first = true;
+      for (const rapidjson::Value& entry : value.GetArray()) {
+        if (!entry.IsObject()) continue;
+        for (auto fn = entry.MemberBegin(); fn != entry.MemberEnd(); ++fn) {
+          const std::string name = fn->name.GetString();
+          const rapidjson::Value& arg = fn->value;
+          if (!first) out.push_back(' ');
+          first = false;
+          out += name;
+          out.push_back('(');
+          if (arg.IsString()) {
+            out += arg.GetString();
+          } else if (arg.IsNumber()) {
+            char buffer[64];
+            const bool angle = StartsWith(name, "rotate") ||
+                               StartsWith(name, "skew");
+            const bool scale = StartsWith(name, "scale");
+            if (angle) {
+              std::snprintf(buffer, sizeof(buffer), "%gdeg", arg.GetDouble());
+            } else if (scale) {
+              std::snprintf(buffer, sizeof(buffer), "%g", arg.GetDouble());
+            } else {
+              std::snprintf(buffer, sizeof(buffer), "%gpx", arg.GetDouble());
+            }
+            out += buffer;
+          }
+          out.push_back(')');
+        }
+      }
+    } else {
+      out += "0";
+    }
+    out.push_back(';');
+  }
+  return out;
+}
+
+void CollectAnimatedStyles(const rapidjson::Value& op, AppNode* node) {
+  if (g_page == nullptr || node == nullptr) return;
+  const auto timeline = op.FindMember("timeline");
+  if (timeline != op.MemberEnd() && timeline->value.IsArray()) {
+    for (const rapidjson::Value& frame : timeline->value.GetArray()) {
+      if (!frame.IsObject()) continue;
+      const auto style = frame.FindMember("style");
+      if (style == frame.MemberEnd()) continue;
+      PendingAnimatedStyle entry;
+      entry.node_id = node->id;
+      entry.at_ms = static_cast<int>(MemberNumber(frame, "atMs", 0.0));
+      entry.declarations = AnimatedStyleDeclarations(style->value);
+      if (!entry.declarations.empty()) {
+        g_page->animated_styles.push_back(entry);
+      }
+    }
+  }
+  const auto updates = op.FindMember("updates");
+  const auto style = op.FindMember("style");
+  const rapidjson::Value* value = nullptr;
+  if (updates != op.MemberEnd()) value = &updates->value;
+  else if (style != op.MemberEnd()) value = &style->value;
+  if (value != nullptr) {
+    PendingAnimatedStyle entry;
+    entry.node_id = node->id;
+    entry.at_ms = static_cast<int>(MemberNumber(op, "atMs", 0.0));
+    entry.declarations = AnimatedStyleDeclarations(*value);
+    if (!entry.declarations.empty()) {
+      g_page->animated_styles.push_back(entry);
+    }
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] addAnimatedStyle: #%u (%zu timeline frame(s))\n",
+               node->id, g_page->animated_styles.size());
+}
+
+// -- synthetic input state ---------------------------------------------------
+
+int Utf8CodepointCount(const std::string& text) {
+  int count = 0;
+  size_t index = 0;
+  while (index < text.size()) {
+    NextCodepoint(text, &index);
+    count++;
+  }
+  return count;
+}
+
+size_t Utf8ByteOffset(const std::string& text, int codepoint_index) {
+  if (codepoint_index <= 0) return 0;
+  size_t index = 0;
+  int count = 0;
+  while (index < text.size() && count < codepoint_index) {
+    NextCodepoint(text, &index);
+    count++;
+  }
+  return index;
+}
+
+void Utf8Erase(std::string* text, int start, int end) {
+  if (text == nullptr || start >= end) return;
+  const size_t begin = Utf8ByteOffset(*text, start);
+  const size_t finish = Utf8ByteOffset(*text, end);
+  if (begin < finish) text->erase(begin, finish - begin);
+}
+
+void Utf8Insert(std::string* text, int position, const std::string& value) {
+  if (text == nullptr || value.empty()) return;
+  const size_t offset = Utf8ByteOffset(*text, position);
+  text->insert(offset, value);
+}
+
+void ClampInputState(AppNode* node) {
+  if (node == nullptr) return;
+  const int length = Utf8CodepointCount(node->text);
+  auto clamp = [length](int value) {
+    if (value < 0) return 0;
+    if (value > length) return length;
+    return value;
+  };
+  node->input_cursor = clamp(node->input_cursor);
+  node->input_selection_start = clamp(node->input_selection_start);
+  node->input_selection_end = clamp(node->input_selection_end);
+}
+
+void CollapseInputSelection(AppNode* node) {
+  node->input_selection_start = node->input_cursor;
+  node->input_selection_end = node->input_cursor;
+}
+
+// Replaces the current selection (or inserts at the cursor) and collapses the
+// selection after the inserted text.
+void InsertInputText(AppNode* node, const std::string& value) {
+  if (node == nullptr) return;
+  ClampInputState(node);
+  int start = node->input_selection_start;
+  int end = node->input_selection_end;
+  if (start > end) std::swap(start, end);
+  if (start == end) {
+    start = end = node->input_cursor;
+  }
+  Utf8Erase(&node->text, start, end);
+  Utf8Insert(&node->text, start, value);
+  node->input_cursor = start + Utf8CodepointCount(value);
+  node->composing = false;
+  node->composition_base_text.clear();
+  CollapseInputSelection(node);
+}
+
+// IME composition preview: the uncommitted text replaces the marked range of
+// the original value until compositionEnd commits it.
+void ReplaceComposition(AppNode* node, const std::string& value) {
+  if (node == nullptr) return;
+  std::string text = node->composition_base_text;
+  Utf8Erase(&text, node->composition_start, node->composition_end);
+  Utf8Insert(&text, node->composition_start, value);
+  node->text = text;
+  node->composition_text = value;
+  node->input_cursor =
+      node->composition_start + Utf8CodepointCount(value);
+  node->input_selection_start = node->composition_start;
+  node->input_selection_end = node->input_cursor;
+}
+
+// Mirrors the state to a real SkylineInput when one was materialized.
+void NotifyInputState(AppNode* node) {
+  if (node == nullptr || node->input_widget_p == nullptr || g_page == nullptr ||
+      g_page->holder == nullptr) {
+    if (node != nullptr) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] InputHoldKeyboard: id=%u hold=%d "
+                   "(no native input widget)\n",
+                   node->id, node->input_hold_keyboard ? 1 : 0);
+    }
+    return;
+  }
+  RuntimeHolder* holder = g_page->holder;
+  Dart_Handle widget = Dart_HandleFromPersistent(node->input_widget_p);
+  auto* value = reinterpret_cast<InputValueFn>(
+      FindCallback(holder->ffi_table, kInputValueHash));
+  auto* cursor = reinterpret_cast<InputIntFn>(
+      FindCallback(holder->ffi_table, kInputCursorHash));
+  auto* selection_start = reinterpret_cast<InputIntFn>(
+      FindCallback(holder->ffi_table, kInputSelectionStartHash));
+  auto* selection_end = reinterpret_cast<InputIntFn>(
+      FindCallback(holder->ffi_table, kInputSelectionEndHash));
+  auto* hold = reinterpret_cast<InputBoolFn>(
+      FindCallback(holder->ffi_table, kInputHoldKeyboardHash));
+  if (value != nullptr) {
+    Dart_Handle text = Dart_NewStringFromCString(node->text.c_str());
+    if (!Dart_IsError(text)) value(widget, text);
+  }
+  if (cursor != nullptr) cursor(widget, node->input_cursor);
+  if (selection_start != nullptr) {
+    selection_start(widget, node->input_selection_start);
+  }
+  if (selection_end != nullptr) selection_end(widget, node->input_selection_end);
+  if (hold != nullptr) {
+    hold(widget, node->input_hold_keyboard ? 1 : 0);
+    std::fprintf(stderr,
+                 "[skyline-runtime] InputHoldKeyboard: id=%u hold=%d\n",
+                 node->id, node->input_hold_keyboard ? 1 : 0);
+  }
+}
+
+
 void ApplyOperation(const rapidjson::Value& op) {
   if (g_page == nullptr || !op.IsObject()) return;
   const char* kind = MemberText(op, "op");
@@ -4737,9 +6389,114 @@ void ApplyOperation(const rapidjson::Value& op) {
   g_page->applied_ops++;
 
   if (std::strcmp(kind, "focusInput") == 0) {
-    g_page->focused_input_id = MemberUint(op, "id", 0);
+    auto op_int = [&](const char* key, int fallback) -> int {
+      const auto member = op.FindMember(key);
+      if (member == op.MemberEnd()) return fallback;
+      if (member->value.IsInt()) return member->value.GetInt();
+      if (member->value.IsUint()) {
+        return static_cast<int>(member->value.GetUint());
+      }
+      if (member->value.IsDouble()) {
+        return static_cast<int>(member->value.GetDouble());
+      }
+      if (member->value.IsBool()) return member->value.GetBool() ? 1 : 0;
+      return fallback;
+    };
+    const uint32_t id = MemberUint(op, "id", 0);
+    g_page->focused_input_id = id;
+    AppNode* node = FindNode(id);
+    if (node != nullptr) {
+      node->input_hold_keyboard = op_int("holdKeyboard",
+                                         node->input_hold_keyboard ? 1 : 0) != 0;
+      const bool has_cursor = op.FindMember("cursor") != op.MemberEnd();
+      const int cursor =
+          op_int("cursor", has_cursor ? 0 : Utf8CodepointCount(node->text));
+      const int start = op_int("selectionStart", cursor);
+      const int end = op_int("selectionEnd", cursor);
+      node->input_cursor = cursor;
+      node->input_selection_start = start;
+      node->input_selection_end = end;
+      ClampInputState(node);
+      NotifyInputState(node);
+    }
     std::fprintf(stderr, "[skyline-runtime] focus input: id=%u\n",
                  g_page->focused_input_id);
+  } else if (std::strcmp(kind, "setSelection") == 0) {
+    AppNode* node = FindNode(MemberUint(op, "id", 0));
+    if (node != nullptr) {
+      const int cursor = static_cast<int>(MemberNumber(op, "cursor", -1.0));
+      const int start = static_cast<int>(
+          MemberNumber(op, "start",
+                       cursor >= 0 ? cursor : node->input_selection_start));
+      const int end = static_cast<int>(
+          MemberNumber(op, "end", cursor >= 0 ? cursor : node->input_selection_end));
+      node->input_cursor = cursor >= 0 ? cursor : start;
+      node->input_selection_start = start;
+      node->input_selection_end = end;
+      ClampInputState(node);
+      NotifyInputState(node);
+      std::fprintf(stderr,
+                   "[skyline-runtime] setSelection: id=%u selection=[%d,%d] "
+                   "cursor=%d\n",
+                   node->id, node->input_selection_start,
+                   node->input_selection_end, node->input_cursor);
+    }
+  } else if (std::strcmp(kind, "compositionStart") == 0 ||
+             std::strcmp(kind, "compositionUpdate") == 0 ||
+             std::strcmp(kind, "compositionEnd") == 0) {
+    AppNode* node = FindNode(MemberUint(op, "id", 0));
+    if (node != nullptr) {
+      const bool start = std::strcmp(kind, "compositionStart") == 0;
+      const bool end = std::strcmp(kind, "compositionEnd") == 0;
+      if (start) {
+        node->composing = true;
+        node->composition_base_text = node->text;
+        int range_start = node->input_selection_start;
+        int range_end = node->input_selection_end;
+        if (range_start > range_end) std::swap(range_start, range_end);
+        if (range_start == range_end) range_start = range_end = node->input_cursor;
+        const auto start_member = op.FindMember("start");
+        const auto end_member = op.FindMember("end");
+        if (start_member != op.MemberEnd() && start_member->value.IsInt()) {
+          range_start = start_member->value.GetInt();
+        }
+        if (end_member != op.MemberEnd() && end_member->value.IsInt()) {
+          range_end = end_member->value.GetInt();
+        }
+        node->composition_start = range_start;
+        node->composition_end = range_end;
+      }
+      if (start || node->composing) {
+        const std::string value = MemberText(op, "text");
+        ReplaceComposition(node, value);
+        if (end) {
+          node->composing = false;
+          node->composition_base_text.clear();
+          node->input_cursor = node->composition_start +
+                               Utf8CodepointCount(node->composition_text);
+          CollapseInputSelection(node);
+        }
+        NotifyInputState(node);
+        std::fprintf(stderr,
+                     "[skyline-runtime] %s: id=%u text=\"%s\" cursor=%d "
+                     "selection=[%d,%d] value=\"%s\"\n",
+                     start ? "composition start"
+                           : (end ? "composition end" : "composition update"),
+                     node->id, value.c_str(), node->input_cursor,
+                     node->input_selection_start, node->input_selection_end,
+                     node->text.c_str());
+      }
+    }
+  } else if (std::strcmp(kind, "dispatchKey") == 0) {
+    AppNode* input = FindNode(g_page->focused_input_id);
+    const char* text = MemberText(op, "text");
+    if (input != nullptr && text[0] != '\0') {
+      InsertInputText(input, text);
+      NotifyInputState(input);
+      std::fprintf(stderr,
+                   "[skyline-runtime] dispatchKey: id=%u text=%s cursor=%d\n",
+                   input->id, input->text.c_str(), input->input_cursor);
+    }
   } else if (std::strcmp(kind, "keyboardStatus") == 0) {
     g_page->keyboard_height = MemberNumber(op, "height", 0.0);
     const int32_t input_key = static_cast<int32_t>(MemberUint(op, "inputKey", 0));
@@ -4753,14 +6510,6 @@ void ApplyOperation(const rapidjson::Value& op) {
       std::fprintf(stderr,
                    "[skyline-runtime] UpdateKeyboardStatus: key=%d height=%g\n",
                    input_key, g_page->keyboard_height);
-    }
-  } else if (std::strcmp(kind, "dispatchKey") == 0) {
-    AppNode* input = FindNode(g_page->focused_input_id);
-    const char* text = MemberText(op, "text");
-    if (input != nullptr && text[0] != '\0') {
-      input->text += text;
-      std::fprintf(stderr, "[skyline-runtime] dispatchKey: id=%u text=%s\n",
-                   input->id, input->text.c_str());
     }
   } else if (std::strcmp(kind, "setScrollTop") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
@@ -4860,7 +6609,15 @@ void ApplyOperation(const rapidjson::Value& op) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
     const auto value = op.FindMember("value");
     if (node != nullptr && value != op.MemberEnd()) {
-      ApplyNodeAttribute(node, MemberText(op, "name"), value->value);
+      const char* attr = MemberText(op, "name");
+      ApplyNodeAttribute(node, attr, value->value);
+      if (IsImageName(node->name) &&
+          (std::strcmp(attr, "src") == 0 || std::strcmp(attr, "url") == 0 ||
+           std::strcmp(attr, "imageUrl") == 0 ||
+           std::strcmp(attr, "image") == 0 ||
+           std::strcmp(attr, "path") == 0)) {
+        g_page->force_rebuild = true;
+      }
     }
   } else if (std::strcmp(kind, "setAttributes") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
@@ -4869,7 +6626,13 @@ void ApplyOperation(const rapidjson::Value& op) {
         attrs->value.IsObject()) {
       for (auto it = attrs->value.MemberBegin(); it != attrs->value.MemberEnd();
            ++it) {
-        ApplyNodeAttribute(node, it->name.GetString(), it->value);
+        const std::string attr = it->name.GetString();
+        ApplyNodeAttribute(node, attr.c_str(), it->value);
+        if (IsImageName(node->name) &&
+            (attr == "src" || attr == "url" || attr == "imageUrl" ||
+             attr == "image" || attr == "path")) {
+          g_page->force_rebuild = true;
+        }
       }
     }
   } else if (std::strcmp(kind, "removeAttribute") == 0) {
@@ -4967,16 +6730,19 @@ void ApplyOperation(const rapidjson::Value& op) {
   } else if (std::strcmp(kind, "release") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
     if (node != nullptr) {
+      CancelPendingImage(node);
       DetachFromParent(node);
       node->released = true;
     }
+  } else if (std::strcmp(kind, "addAnimatedStyle") == 0) {
+    CollectAnimatedStyles(op, FindNode(MemberUint(op, "id", 0)));
   } else if (std::strcmp(kind, "attach") == 0) {
     g_page->root_id = MemberUint(op, "root", 0);
   } else if (std::strcmp(kind, "startRender") == 0) {
     g_page->started = true;
   } else {
     // setStyleScope / associateComponent / setListenerOption /
-    // setHitTestBehavior / addAnimatedStyle / forceDetached / ...
+    // setHitTestBehavior / forceDetached / ...
   }
 }
 
@@ -5024,13 +6790,29 @@ bool Nearly(float a, float b) {
   return std::fabs(a - b) < 0.01f;
 }
 
-bool StyleNeedsRebuild(const AppStyle& before, const AppStyle& after) {
+bool StyleNeedsRebuild(const AppNode* node, const AppStyle& before,
+                       const AppStyle& after) {
   if (before.display_none != after.display_none) return true;
-  if (before.has_background != after.has_background) return true;
-  if ((before.border_width > 0.0f) != (after.border_width > 0.0f)) return true;
-  if ((before.opacity < 0.999) != (after.opacity < 0.999)) return true;
-  if (before.has_shadow != after.has_shadow) return true;
-  if (!Nearly(before.radius, after.radius)) return true;
+  // Presence changes can be handled in place once the corresponding widget
+  // handles already exist (notably during an opacity/background transition).
+  if (node->decorated_box_p == nullptr &&
+      before.has_background != after.has_background) {
+    return true;
+  }
+  if (node->decorated_box_p == nullptr &&
+      (before.border_width > 0.0f) != (after.border_width > 0.0f)) {
+    return true;
+  }
+  if (node->opacity_widget_p == nullptr &&
+      (before.opacity < 0.999) != (after.opacity < 0.999)) {
+    return true;
+  }
+  if (node->decorated_box_p == nullptr && before.has_shadow != after.has_shadow) {
+    return true;
+  }
+  if (node->decorated_box_p == nullptr && !Nearly(before.radius, after.radius)) {
+    return true;
+  }
   return false;
 }
 
@@ -5124,7 +6906,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       rebuild = true;
       break;
     }
-    if (StyleNeedsRebuild(node->previous_style, node->style)) {
+    if (StyleNeedsRebuild(node, node->previous_style, node->style)) {
       rebuild = true;
       break;
     }
@@ -5230,6 +7012,46 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
             Dart_HandleFromPersistent(node->opacity_widget_p);
         update_opacity(opacity, after.opacity);
       }
+      // CSS transform updates reuse the existing YGNode.  This also lets a
+      // `transform` transition animate without rebuilding the page.
+      const bool transform_changed =
+          before.has_transform != after.has_transform ||
+          std::memcmp(before.transform, after.transform,
+                      sizeof(before.transform)) != 0;
+      if (transform_changed && node->yoga_node_p != nullptr &&
+          g_page != nullptr && g_page->holder != nullptr) {
+        auto* setup = reinterpret_cast<YGNodeSetupTransformFn>(FindCallback(
+            g_page->holder->ffi_table, kYGNodeSetupTransformHash));
+        auto* origin = reinterpret_cast<YGNodeTransformOriginFn>(FindCallback(
+            g_page->holder->ffi_table, kYGNodeTransformOriginHash));
+        if (setup != nullptr) {
+          Dart_Handle matrix = Dart_NewTypedData(Dart_TypedData_kFloat64, 16);
+          if (!Dart_IsError(matrix)) {
+            Dart_TypedData_Type data_type = Dart_TypedData_kInvalid;
+            void* data = nullptr;
+            intptr_t length = 0;
+            if (!Dart_IsError(Dart_TypedDataAcquireData(
+                    matrix, &data_type, &data, &length)) &&
+                data_type == Dart_TypedData_kFloat64 && length == 16 &&
+                data != nullptr) {
+              auto* values = static_cast<double*>(data);
+              for (int i = 0; i < 16; i++) {
+                values[i] = static_cast<double>(after.transform[i]);
+              }
+            }
+            Dart_TypedDataReleaseData(matrix);
+            Dart_Handle yoga =
+                Dart_HandleFromPersistent(node->yoga_node_p);
+            setup(yoga, matrix);
+            if (origin != nullptr) {
+              origin(yoga, node->measured_w * 0.5, node->measured_h * 0.5, -1.0,
+                     -1.0);
+            }
+            DeletePersistent(&node->transform_p);
+            node->transform_p = Dart_NewPersistentHandle(matrix);
+          }
+        }
+      }
     }
     if (node->yoga_node_p != nullptr) {
       yoga_nodes.push_back(Dart_HandleFromPersistent(node->yoga_node_p));
@@ -5262,6 +7084,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
 }
 
 void RebuildAppServicePage(RuntimeHolder* holder) {
+  ClearTransitions();
   if (g_page == nullptr || g_page->root_node == nullptr ||
       g_page->root_connector == nullptr) {
     return;
@@ -5350,6 +7173,298 @@ void FlushAppServicePage(RuntimeHolder* holder, bool structural) {
   if (!structural && ApplyTargetedUpdates(holder)) return;
   RebuildAppServicePage(holder);
 }
+
+// -- CSS transitions and animated styles ------------------------------------
+
+struct ActiveTransition {
+  AppNode* node = nullptr;
+  AppStyle from;
+  AppStyle to;
+  uint32_t mask = 0;
+  double start_ms = 0.0;
+  double duration_ms = 1.0;
+  int easing = 0;
+};
+
+std::vector<ActiveTransition> g_active_transitions;
+
+double SteadyNowMs() {
+  using clock = std::chrono::steady_clock;
+  static const clock::time_point origin = clock::now();
+  return std::chrono::duration<double, std::milli>(clock::now() - origin)
+      .count();
+}
+
+double EaseTransition(int mode, double t) {
+  if (t <= 0.0) return 0.0;
+  if (t >= 1.0) return 1.0;
+  switch (mode) {
+    case 1:  // ease
+      return t * t * (3.0 - 2.0 * t);
+    case 2:  // ease-in
+      return t * t;
+    case 3:  // ease-out
+      return 1.0 - (1.0 - t) * (1.0 - t);
+    case 4:  // ease-in-out
+      return t < 0.5 ? 2.0 * t * t : 1.0 - 2.0 * (1.0 - t) * (1.0 - t);
+    default:
+      return t;
+  }
+}
+
+double LerpDouble(double a, double b, double t) { return a + (b - a) * t; }
+
+uint32_t LerpColor(uint32_t a, uint32_t b, double t) {
+  auto channel = [t](uint32_t x, uint32_t y, int shift) -> uint32_t {
+    const double v = LerpDouble((x >> shift) & 0xFF, (y >> shift) & 0xFF, t);
+    return static_cast<uint32_t>(std::lround(v)) & 0xFF;
+  };
+  return (channel(a, b, 24) << 24) | (channel(a, b, 16) << 16) |
+         (channel(a, b, 8) << 8) | channel(a, b, 0);
+}
+
+uint32_t TransitionChangedMask(const AppStyle& before, const AppStyle& after,
+                               uint32_t mask) {
+  uint32_t changed = 0;
+  if ((mask & kTransitionOpacity) != 0 &&
+      std::fabs(before.opacity - after.opacity) > 0.001) {
+    changed |= kTransitionOpacity;
+  }
+  if ((mask & kTransitionBackground) != 0 &&
+      (before.has_background != after.has_background ||
+       before.background != after.background)) {
+    changed |= kTransitionBackground;
+  }
+  if ((mask & kTransitionColor) != 0 && before.color != after.color) {
+    changed |= kTransitionColor;
+  }
+  if ((mask & kTransitionBorderColor) != 0 &&
+      (before.border_color != after.border_color ||
+       (before.border_width > 0.0f) != (after.border_width > 0.0f))) {
+    changed |= kTransitionBorderColor;
+  }
+  if ((mask & kTransitionTransform) != 0 &&
+      (before.has_transform != after.has_transform ||
+       std::memcmp(before.transform, after.transform,
+                   sizeof(before.transform)) != 0)) {
+    changed |= kTransitionTransform;
+  }
+  return changed;
+}
+
+void ResetTransitionProperties(AppStyle* style, const AppStyle& from,
+                              uint32_t mask) {
+  if ((mask & kTransitionOpacity) != 0) style->opacity = from.opacity;
+  if ((mask & kTransitionBackground) != 0) {
+    style->has_background = from.has_background;
+    style->background = from.background;
+  }
+  if ((mask & kTransitionColor) != 0) style->color = from.color;
+  if ((mask & kTransitionBorderColor) != 0) {
+    style->border_color = from.border_color;
+    style->border_width = from.border_width;
+  }
+  if ((mask & kTransitionTransform) != 0) {
+    style->has_transform = from.has_transform;
+    std::memcpy(style->transform, from.transform, sizeof(style->transform));
+  }
+}
+
+AppStyle InterpolateTransition(const ActiveTransition& transition, double t) {
+  AppStyle style = transition.to;
+  const AppStyle& from = transition.from;
+  const AppStyle& to = transition.to;
+  const uint32_t mask = transition.mask;
+  if ((mask & kTransitionOpacity) != 0) {
+    style.opacity = LerpDouble(from.opacity, to.opacity, t);
+  }
+  if ((mask & kTransitionBackground) != 0) {
+    style.has_background = from.has_background || to.has_background;
+    style.background = LerpColor(from.background, to.background, t);
+  }
+  if ((mask & kTransitionColor) != 0) {
+    style.color = LerpColor(from.color, to.color, t);
+  }
+  if ((mask & kTransitionBorderColor) != 0) {
+    style.border_color = LerpColor(from.border_color, to.border_color, t);
+    style.border_width =
+        static_cast<float>(LerpDouble(from.border_width, to.border_width, t));
+  }
+  if ((mask & kTransitionTransform) != 0) {
+    style.has_transform = from.has_transform || to.has_transform;
+    for (int i = 0; i < 16; i++) {
+      style.transform[i] = static_cast<float>(
+          LerpDouble(from.transform[i], to.transform[i], t));
+    }
+  }
+  return style;
+}
+
+void ScheduleTransitionTick(RuntimeHolder* holder);
+void AdvanceTransitions(RuntimeHolder* holder);
+void SchedulePendingAnimatedStyles(RuntimeHolder* holder);
+
+void ClearTransitions() {
+  for (ActiveTransition& transition : g_active_transitions) {
+    if (transition.node != nullptr) {
+      transition.node->animation_override_active = false;
+    }
+  }
+  g_active_transitions.clear();
+}
+
+void StartTransitions(uint32_t root_id) {
+  if (g_page == nullptr || root_id == 0) return;
+  AppNode* root = FindNode(root_id);
+  if (root == nullptr) return;
+  ResolveStyles(root, nullptr);
+
+  std::vector<AppNode*> pending;
+  pending.push_back(root);
+  while (!pending.empty()) {
+    AppNode* node = pending.back();
+    pending.pop_back();
+    for (AppNode* child : node->children) {
+      if (!child->released) pending.push_back(child);
+    }
+    if (!node->has_previous_style || node->animation_override_active) continue;
+    const AppStyle& before = node->previous_style;
+    const AppStyle& after = node->style;
+    if (after.transition_duration <= 0.0 && after.transition_delay <= 0.0) {
+      continue;
+    }
+    const uint32_t mask =
+        TransitionChangedMask(before, after, after.transition_mask);
+    if (mask == 0) continue;
+
+    ActiveTransition transition;
+    transition.node = node;
+    transition.from = before;
+    transition.to = after;
+    transition.mask = mask;
+    transition.start_ms = SteadyNowMs() + after.transition_delay;
+    transition.duration_ms = std::max(1.0, after.transition_duration);
+    transition.easing = after.transition_easing;
+    node->animation_override = after;
+    ResetTransitionProperties(&node->animation_override, before, mask);
+    node->animation_override_active = true;
+    g_active_transitions.push_back(transition);
+    std::fprintf(stderr,
+                 "[skyline-runtime] transition #%u start: mask=0x%x "
+                 "duration=%gms delay=%gms\n",
+                 node->id, mask, after.transition_duration,
+                 after.transition_delay);
+  }
+  if (!g_active_transitions.empty() && g_page->holder != nullptr) {
+    ScheduleTransitionTick(g_page->holder);
+  }
+}
+
+void ScheduleTransitionTick(RuntimeHolder* holder) {
+  if (g_active_transitions.empty()) return;
+  auto runner = UiTaskRunner();
+  if (!runner) return;
+  runner->PostDelayedTask(
+      [holder]() {
+        if (Dart_CurrentIsolate() == nullptr && g_isolate == nullptr) return;
+        DemoPageApiScope scope;
+        AdvanceTransitions(holder);
+      },
+      fml::TimeDelta::FromMilliseconds(16));
+}
+
+void AdvanceTransitions(RuntimeHolder* holder) {
+  if (g_active_transitions.empty() || g_page == nullptr) return;
+  const double now = SteadyNowMs();
+  bool pending_animation = false;
+  bool applied = false;
+  std::vector<AppNode*> finished;
+  for (ActiveTransition& transition : g_active_transitions) {
+    if (transition.node == nullptr || transition.node->released) {
+      finished.push_back(transition.node);
+      continue;
+    }
+    if (now < transition.start_ms) {
+      pending_animation = true;
+      continue;
+    }
+    double raw = (now - transition.start_ms) / transition.duration_ms;
+    if (raw < 0.0) raw = 0.0;
+    if (raw > 1.0) raw = 1.0;
+    const double eased = EaseTransition(transition.easing, raw);
+    transition.node->animation_override =
+        InterpolateTransition(transition, eased);
+    transition.node->animation_override_active = true;
+    applied = true;
+    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] transition #%u t=%.3f opacity=%.3f "
+                   "background=%08x\n",
+                   transition.node->id, raw,
+                   transition.node->animation_override.opacity,
+                   transition.node->animation_override.has_background
+                       ? transition.node->animation_override.background
+                       : 0u);
+    }
+    if (raw >= 1.0) {
+      finished.push_back(transition.node);
+    } else {
+      pending_animation = true;
+    }
+  }
+  if (applied) FlushAppServicePage(holder, false);
+  if (!finished.empty() && !g_active_transitions.empty()) {
+    for (AppNode* node : finished) {
+      if (node != nullptr) node->animation_override_active = false;
+    }
+    g_active_transitions.erase(
+        std::remove_if(g_active_transitions.begin(), g_active_transitions.end(),
+                       [&finished](const ActiveTransition& transition) {
+                         return std::find(finished.begin(), finished.end(),
+                                          transition.node) != finished.end();
+                       }),
+        g_active_transitions.end());
+    for (AppNode* node : finished) {
+      if (node != nullptr && !node->released) {
+        std::fprintf(stderr, "[skyline-runtime] transition #%u done\n", node->id);
+      }
+    }
+    FlushAppServicePage(holder, false);
+  }
+  if (pending_animation) ScheduleTransitionTick(holder);
+}
+
+void SchedulePendingAnimatedStyles(RuntimeHolder* holder) {
+  if (g_page == nullptr || holder == nullptr) return;
+  auto runner = UiTaskRunner();
+  if (!runner) return;
+  for (size_t i = g_page->scheduled_animated_styles;
+       i < g_page->animated_styles.size(); i++) {
+    const PendingAnimatedStyle entry = g_page->animated_styles[i];
+    runner->PostDelayedTask(
+        [holder, entry]() {
+          if (g_page == nullptr) return;
+          if (Dart_CurrentIsolate() == nullptr && g_isolate == nullptr) return;
+          DemoPageApiScope scope;
+          AppNode* node = FindNode(entry.node_id);
+          if (node == nullptr || node->released) return;
+          AppStyle style = node->style;
+          ApplyDeclarations(&style, ParseDeclarations(entry.declarations));
+          node->animation_override = style;
+          node->animation_override_active = true;
+          FlushAppServicePage(holder, false);
+          std::fprintf(stderr,
+                       "[skyline-runtime] animated style #%u at %dms: %s\n",
+                       entry.node_id, entry.at_ms, entry.declarations.c_str());
+        },
+        fml::TimeDelta::FromMilliseconds(std::max(0, entry.at_ms)));
+    std::fprintf(stderr,
+                 "[skyline-runtime] animated style scheduled: #%u in %dms\n",
+                 entry.node_id, entry.at_ms);
+  }
+  g_page->scheduled_animated_styles = g_page->animated_styles.size();
+}
+
 
 // -- page routes -------------------------------------------------------------
 
@@ -5520,6 +7635,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   }
 
   g_page = new OpPage();
+  ClearTransitions();
   g_page->holder = holder;
   g_ui_task_runner = UiTaskRunner();
   g_next_rule_order = 0;
@@ -5569,6 +7685,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
                  g_page->root_id);
     return;
   }
+  SchedulePendingAnimatedStyles(holder);
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
     DebugDumpNode(FindNode(g_page->root_id), 0);
   }
@@ -5625,6 +7742,8 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
             bool structural = false;
             bool needs_flush = false;
             bool created_route = false;
+            bool builder_structural_only = true;
+            bool general_dirty = false;
             for (const rapidjson::Value& op : ops->GetArray()) {
               ApplyOperation(op);
               const auto kind = op.FindMember("op");
@@ -5662,13 +7781,48 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
                                g_page->pending_page_id);
                   g_page->pending_open_type = 0;
                 }
-              } else if (std::strcmp(name, "dispatchTouch") != 0) {
-                if (IsStructuralOpKind(name)) structural = true;
+              } else if (std::strcmp(name, "dispatchTouch") != 0 &&
+                         std::strcmp(name, "startRender") != 0) {
+                if (IsStructuralOpKind(name)) {
+                  structural = true;
+                  if (std::strcmp(name, "createElement") != 0) {
+                    AppNode* target = FindNode(MemberUint(op, "id", 0));
+                    if (target == nullptr || !IsBuilderSubtree(target)) {
+                      builder_structural_only = false;
+                    }
+                  }
+                } else {
+                  AppNode* target = FindNode(MemberUint(op, "id", 0));
+                  if (target != nullptr && IsBuilderSubtree(target)) {
+                    // Builder sync handles this; do not mark the batch as a
+                    // general style/text change.
+                  } else {
+                    general_dirty = true;
+                  }
+                }
                 needs_flush = true;
               }
             }
+            const bool synced = SyncAppServiceBuilders(holder);
+            if (g_page->force_rebuild) {
+              structural = true;
+              g_page->force_rebuild = false;
+            }
+            if (structural && builder_structural_only && synced) {
+              structural = false;
+            }
             if (needs_flush && !created_route) {
-              FlushAppServicePage(holder, structural);
+              if (!structural && !general_dirty && synced) {
+                // The builder callbacks already applied the entire batch.
+              } else {
+                if (structural) {
+                  ClearTransitions();
+                } else {
+                  StartTransitions(g_page->root_id);
+                }
+                SchedulePendingAnimatedStyles(holder);
+                FlushAppServicePage(holder, structural);
+              }
             }
           },
           fml::TimeDelta::FromMilliseconds(delay_ms));
@@ -5692,23 +7846,113 @@ void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
                  static_cast<int>(kind), logical);
     return;
   }
-  if (logical == 0x00000008u /* backspace */) {
-    if (!input->text.empty()) {
-      size_t end = input->text.size();
-      while (end > 0 &&
-             (static_cast<unsigned char>(input->text[end - 1]) & 0xC0) == 0x80) {
-        end--;
-      }
-      if (end > 0) end--;
-      input->text.erase(end);
+  ClampInputState(input);
+  int start = input->input_selection_start;
+  int end = input->input_selection_end;
+  if (start > end) std::swap(start, end);
+  if (start == end) start = end = input->input_cursor;
+  const bool has_selection = start != end;
+  const int length = Utf8CodepointCount(input->text);
+  auto erase_selection = [&]() {
+    if (has_selection) {
+      Utf8Erase(&input->text, start, end);
+      input->input_cursor = start;
     }
-  } else if (!text.empty()) {
-    input->text += text;
-  } else {
-    return;
+  };
+
+  bool changed = false;
+  bool handled = true;
+  switch (logical) {
+    case 0x00000008u:  // backspace
+      if (has_selection) {
+        erase_selection();
+        changed = true;
+      } else if (input->input_cursor > 0) {
+        Utf8Erase(&input->text, input->input_cursor - 1,
+                  input->input_cursor);
+        input->input_cursor--;
+        changed = true;
+      }
+      break;
+    case 46u:  // delete
+      if (has_selection) {
+        erase_selection();
+        changed = true;
+      } else if (input->input_cursor < length) {
+        Utf8Erase(&input->text, input->input_cursor,
+                  input->input_cursor + 1);
+        changed = true;
+      }
+      break;
+    case 37u:  // left
+      input->input_cursor = has_selection ? start : std::max(0, start - 1);
+      changed = true;
+      break;
+    case 38u:  // up: move to the start of the value
+      input->input_cursor = 0;
+      changed = true;
+      break;
+    case 39u:  // right
+      input->input_cursor = has_selection ? end : std::min(length, end + 1);
+      changed = true;
+      break;
+    case 40u:  // down: move to the end of the value
+      input->input_cursor = length;
+      changed = true;
+      break;
+    case 36u:  // home
+      input->input_cursor = 0;
+      changed = true;
+      break;
+    case 35u:  // end
+      input->input_cursor = length;
+      changed = true;
+      break;
+    case 13u:  // enter
+      if (!input->input_hold_keyboard) {
+        if (input->input_widget_p != nullptr && g_page->holder != nullptr) {
+          auto* focus = reinterpret_cast<InputFocusFn>(FindCallback(
+              g_page->holder->ffi_table, kInputFocusHash));
+          if (focus != nullptr) {
+            focus(Dart_HandleFromPersistent(input->input_widget_p), 0);
+          }
+        }
+        std::fprintf(stderr,
+                     "[skyline-runtime] key input: id=%u confirm, "
+                     "InputHoldKeyboard hold=0\n",
+                     input->id);
+        g_page->focused_input_id = 0;
+        return;
+      }
+      changed = true;
+      break;
+    case 27u:  // escape
+      g_page->focused_input_id = 0;
+      return;
+    default:
+      if (!text.empty()) {
+        erase_selection();
+        const int position = input->input_cursor;
+        Utf8Insert(&input->text, position, text);
+        input->input_cursor = position + Utf8CodepointCount(text);
+        input->composing = false;
+        input->composition_base_text.clear();
+        changed = true;
+      } else {
+        handled = false;
+      }
+      break;
   }
-  std::fprintf(stderr, "[skyline-runtime] key input: id=%u value=\"%s\"\n",
-               input->id, input->text.c_str());
+  if (!handled) return;
+  CollapseInputSelection(input);
+  ClampInputState(input);
+  if (!changed) return;
+  NotifyInputState(input);
+  std::fprintf(stderr,
+               "[skyline-runtime] key input: id=%u value=\"%s\" cursor=%d "
+               "selection=[%d,%d]\n",
+               input->id, input->text.c_str(), input->input_cursor,
+               input->input_selection_start, input->input_selection_end);
   FlushAppServicePage(holder, false);
 }
 

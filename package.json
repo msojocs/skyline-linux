@@ -23,6 +23,8 @@
     "test:appservice": "node --test native/test/skyline-appservice-smoke.test.js",
     "test:page": "node --test native/test/skyline-page-smoke.test.js",
     "test:ops": "node --test native/test/skyline-appservice-ops.test.js",
+    "test:l5": "node --test native/test/l5-pixel-compare.test.js",
+    "l5:baseline": "node tools/l5-baseline.js --write",
     "smoke:build": "SKYLINE_APP_DIR=apps/dart-ui-compat-smoke bash native/engine/build-empty-page.sh --patched-sdk",
     "spec:record": "node test/oracle/record.js",
     "spec:show": "node test/oracle/show.js",

@@ -153,8 +153,12 @@ class CaptureElement {
   setHitTestBehavior(value) {
     this.ops.push({ op: 'setHitTestBehavior', id: this.viewTag, value });
   }
-  addAnimatedStyle() {
-    this.ops.push({ op: 'addAnimatedStyle', id: this.viewTag });
+  addAnimatedStyle(style) {
+    this.ops.push({
+      op: 'addAnimatedStyle',
+      id: this.viewTag,
+      mapperId: style && typeof style === 'object' ? style.mapperId : undefined,
+    });
   }
   asShadowRoot() {
     this.ops.push({ op: 'asShadowRoot', id: this.viewTag });
@@ -356,6 +360,16 @@ async function run(bundlePath, options) {
   const sandbox = {
     _setGlobalConsole() {},
     _WORKLET: false,
+    // Reanimated `_updateStyle(shadowNode, updates)` binding.  Recording it as
+    // an addAnimatedStyle update lets the native replay apply the sampled
+    // values without a V8 isolate.
+    _updateStyle(shadowNode, updates) {
+      ops.push({
+        op: 'addAnimatedStyle',
+        id: idOf(shadowNode),
+        updates: plain(updates),
+      });
+    },
     SkylineGlobal,
     console: {
       log: forward('log'), warn: forward('warn'),

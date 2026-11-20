@@ -1,0 +1,928 @@
+{
+ "ops": [
+  {
+   "op": "appendStyleSheet",
+   "index": 1,
+   "css": ".built{width:320px;height:40px;} .r{background:#FF0000;} .g{background:#00FF00;}"
+  },
+  {
+   "op": "createElement",
+   "id": 2,
+   "tag": "empty",
+   "name": "page"
+  },
+  {
+   "op": "createElement",
+   "id": 3,
+   "tag": "empty",
+   "name": "scrollview"
+  },
+  {
+   "op": "setStyle",
+   "id": 3,
+   "value": "width:320px;height:200px;"
+  },
+  {
+   "op": "setAttributes",
+   "id": 3,
+   "attrs": {
+    "scrollY": true,
+    "scrollEnabled": true
+   }
+  },
+  {
+   "op": "createElement",
+   "id": 4,
+   "tag": "empty",
+   "name": "listbuilder"
+  },
+  {
+   "op": "setAttributes",
+   "id": 4,
+   "attrs": {
+    "childCount": 100,
+    "childHeight": 40,
+    "type": 0
+   }
+  },
+  {
+   "op": "createElement",
+   "id": 100,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 100,
+   "name": "index",
+   "value": "0"
+  },
+  {
+   "op": "createElement",
+   "id": 200,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 200,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 200,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 100,
+   "child": 200
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 100
+  },
+  {
+   "op": "createElement",
+   "id": 101,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 101,
+   "name": "index",
+   "value": "1"
+  },
+  {
+   "op": "createElement",
+   "id": 201,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 201,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 201,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 101,
+   "child": 201
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 101
+  },
+  {
+   "op": "createElement",
+   "id": 102,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 102,
+   "name": "index",
+   "value": "2"
+  },
+  {
+   "op": "createElement",
+   "id": 202,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 202,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 202,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 102,
+   "child": 202
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 102
+  },
+  {
+   "op": "createElement",
+   "id": 103,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 103,
+   "name": "index",
+   "value": "3"
+  },
+  {
+   "op": "createElement",
+   "id": 203,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 203,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 203,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 103,
+   "child": 203
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 103
+  },
+  {
+   "op": "createElement",
+   "id": 104,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 104,
+   "name": "index",
+   "value": "4"
+  },
+  {
+   "op": "createElement",
+   "id": 204,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 204,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 204,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 104,
+   "child": 204
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 104
+  },
+  {
+   "op": "createElement",
+   "id": 105,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 105,
+   "name": "index",
+   "value": "5"
+  },
+  {
+   "op": "createElement",
+   "id": 205,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 205,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 205,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 105,
+   "child": 205
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 105
+  },
+  {
+   "op": "createElement",
+   "id": 106,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 106,
+   "name": "index",
+   "value": "6"
+  },
+  {
+   "op": "createElement",
+   "id": 206,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 206,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 206,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 106,
+   "child": 206
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 106
+  },
+  {
+   "op": "createElement",
+   "id": 107,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 107,
+   "name": "index",
+   "value": "7"
+  },
+  {
+   "op": "createElement",
+   "id": 207,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 207,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 207,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 107,
+   "child": 207
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 107
+  },
+  {
+   "op": "createElement",
+   "id": 108,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 108,
+   "name": "index",
+   "value": "8"
+  },
+  {
+   "op": "createElement",
+   "id": 208,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 208,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 208,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 108,
+   "child": 208
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 108
+  },
+  {
+   "op": "createElement",
+   "id": 109,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 109,
+   "name": "index",
+   "value": "9"
+  },
+  {
+   "op": "createElement",
+   "id": 209,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 209,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 209,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 109,
+   "child": 209
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 109
+  },
+  {
+   "op": "createElement",
+   "id": 110,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 110,
+   "name": "index",
+   "value": "10"
+  },
+  {
+   "op": "createElement",
+   "id": 210,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 210,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 210,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 110,
+   "child": 210
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 110
+  },
+  {
+   "op": "createElement",
+   "id": 111,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 111,
+   "name": "index",
+   "value": "11"
+  },
+  {
+   "op": "createElement",
+   "id": 211,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 211,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 211,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 111,
+   "child": 211
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 111
+  },
+  {
+   "op": "createElement",
+   "id": 112,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 112,
+   "name": "index",
+   "value": "12"
+  },
+  {
+   "op": "createElement",
+   "id": 212,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 212,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 212,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 112,
+   "child": 212
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 112
+  },
+  {
+   "op": "createElement",
+   "id": 113,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 113,
+   "name": "index",
+   "value": "13"
+  },
+  {
+   "op": "createElement",
+   "id": 213,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 213,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 213,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 113,
+   "child": 213
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 113
+  },
+  {
+   "op": "createElement",
+   "id": 114,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 114,
+   "name": "index",
+   "value": "14"
+  },
+  {
+   "op": "createElement",
+   "id": 214,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 214,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 214,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 114,
+   "child": 214
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 114
+  },
+  {
+   "op": "createElement",
+   "id": 115,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 115,
+   "name": "index",
+   "value": "15"
+  },
+  {
+   "op": "createElement",
+   "id": 215,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 215,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 215,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 115,
+   "child": 215
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 115
+  },
+  {
+   "op": "createElement",
+   "id": 116,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 116,
+   "name": "index",
+   "value": "16"
+  },
+  {
+   "op": "createElement",
+   "id": 216,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 216,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 216,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 116,
+   "child": 216
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 116
+  },
+  {
+   "op": "createElement",
+   "id": 117,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 117,
+   "name": "index",
+   "value": "17"
+  },
+  {
+   "op": "createElement",
+   "id": 217,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 217,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 217,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 117,
+   "child": 217
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 117
+  },
+  {
+   "op": "createElement",
+   "id": 118,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 118,
+   "name": "index",
+   "value": "18"
+  },
+  {
+   "op": "createElement",
+   "id": 218,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 218,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 218,
+   "prefix": "r",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 118,
+   "child": 218
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 118
+  },
+  {
+   "op": "createElement",
+   "id": 119,
+   "tag": "empty",
+   "name": "listbuilderitem"
+  },
+  {
+   "op": "setAttribute",
+   "id": 119,
+   "name": "index",
+   "value": "19"
+  },
+  {
+   "op": "createElement",
+   "id": 219,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 219,
+   "prefix": "built",
+   "name": 1
+  },
+  {
+   "op": "addClass",
+   "id": 219,
+   "prefix": "g",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 119,
+   "child": 219
+  },
+  {
+   "op": "appendChild",
+   "id": 4,
+   "child": 119
+  },
+  {
+   "op": "appendChild",
+   "id": 3,
+   "child": 4
+  },
+  {
+   "op": "appendChild",
+   "id": 2,
+   "child": 3
+  },
+  {
+   "op": "createElement",
+   "id": 1,
+   "tag": "empty",
+   "name": "body"
+  },
+  {
+   "op": "appendChild",
+   "id": 1,
+   "child": 2
+  },
+  {
+   "op": "attach",
+   "root": 1
+  },
+  {
+   "op": "startRender"
+  }
+ ],
+ "updates": [
+  {
+   "afterMs": 300,
+   "ops": [
+    {
+     "op": "setAttributes",
+     "id": 4,
+     "attrs": {
+      "childCount": 30
+     }
+    }
+   ]
+  },
+  {
+   "afterMs": 500,
+   "ops": [
+    {
+     "op": "setStyle",
+     "id": 200,
+     "value": "background:#0000FF;"
+    }
+   ]
+  },
+  {
+   "afterMs": 700,
+   "ops": [
+    {
+     "op": "setAttributes",
+     "id": 4,
+     "attrs": {
+      "childHeight": 50
+     }
+    }
+   ]
+  },
+  {
+   "afterMs": 900,
+   "ops": [
+    {
+     "op": "setStyle",
+     "id": 200,
+     "value": "background:#FF00FF;"
+    },
+    {
+     "op": "setStyle",
+     "id": 202,
+     "value": "background:#FFFF00;"
+    }
+   ]
+  }
+ ]
+}
