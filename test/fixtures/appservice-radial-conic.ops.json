@@ -1,0 +1,101 @@
+{
+  "ops": [
+    {
+      "op": "createElement",
+      "id": 2,
+      "tag": "empty",
+      "name": "page"
+    },
+    {
+      "op": "appendStyleSheet",
+      "index": 1,
+      "css": ".page{width:320px;height:240px;background:#FFFFFF;} .radial1{position:absolute;left:10px;top:10px;width:100px;height:100px;background:radial-gradient(circle at center,#FF0000 0%,#0000FF 100%);} .radial2{position:absolute;left:130px;top:10px;width:100px;height:100px;background:radial-gradient(circle 30px at 50% 50%,#00FF00 0%,#FFFF00 100%);} .conic1{position:absolute;left:10px;top:130px;width:100px;height:100px;background:conic-gradient(from 0deg at 50% 50%,#FF0000 0deg 90deg,#00FF00 90deg 180deg,#0000FF 180deg 270deg,#FFFF00 270deg 360deg);} .conic2{position:absolute;left:130px;top:130px;width:100px;height:100px;background:conic-gradient(from 90deg at 50% 50%,#FF00FF 0% 50%,#00FFFF 50% 100%);}"
+    },
+    {
+      "op": "createElement",
+      "id": 3,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 3,
+      "prefix": "radial1",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 4,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 4,
+      "prefix": "radial2",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 5,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 5,
+      "prefix": "conic1",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 6,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 6,
+      "prefix": "conic2",
+      "name": 1
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 3
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 4
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 5
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 6
+    },
+    {
+      "op": "createElement",
+      "id": 1,
+      "tag": "empty",
+      "name": "body"
+    },
+    {
+      "op": "appendChild",
+      "id": 1,
+      "child": 2
+    },
+    {
+      "op": "attach",
+      "root": 1
+    },
+    {
+      "op": "startRender"
+    }
+  ]
+}

@@ -500,6 +500,24 @@ using NewLinearGradientFn = Dart_Handle (*)(
     double backgroundOffsetY,
     uint8_t repeat);
 
+using NewRadialGradientFn = Dart_Handle (*)(
+    double positionX,
+    double positionY,
+    uint8_t positionXPercent,
+    uint8_t positionYPercent,
+    double radius,
+    uint8_t size,
+    Dart_Handle colors,
+    void* stops);
+
+using NewConicGradientFn = Dart_Handle (*)(double startAngle,
+                                          double centerX,
+                                          double centerY,
+                                          uint8_t centerXPercent,
+                                          uint8_t centerYPercent,
+                                          Dart_Handle colors,
+                                          Dart_Handle stops);
+
 struct GradientStopNative {
   double value;
   uint8_t isPercent;
@@ -758,6 +776,8 @@ constexpr uint32_t kNewStickySectionHash = 567872153u;
 constexpr uint32_t kNewOpacityHash = 357244940u;
 constexpr uint32_t kNewClipRRectHash = 744380804u;
 constexpr uint32_t kNewLinearGradientHash = 753559496u;
+constexpr uint32_t kNewRadialGradientHash = 767633286u;
+constexpr uint32_t kNewConicGradientHash = 767183460u;
 constexpr uint32_t kNewBoxShadowHash = 459522077u;
 constexpr uint32_t kDecoratedBoxUpdateColorHash = 533446964u;
 constexpr uint32_t kYGConnectorUpdateChildrenHash = 542320778u;
@@ -2085,6 +2105,14 @@ enum TransitionProperty : uint32_t {
   kTransitionTransform = 1u << 4,
 };
 
+// CSS gradient function parsed from `background-image` / `background`.
+enum CssGradientKind {
+  kGradientNone = 0,
+  kGradientLinear = 1,
+  kGradientRadial = 2,
+  kGradientConic = 3,
+};
+
 // One axis of a CSS <position> value (`background-position`, `object-position`).
 // `value` is a percentage in 0..100 or a px offset; `from_end` implements the
 // `right 10px` / `bottom 10px` form.
@@ -2154,11 +2182,22 @@ struct AppStyle {
   // CSS background-position (default 0% 0%).
   CssPositionAxis background_position_x;
   CssPositionAxis background_position_y;
-  // First CSS linear-gradient layer.
+  // First CSS gradient layer.  `gradient_kind` decides which of the parameter
+  // groups below is meaningful; `gradient_angle` is the linear direction or the
+  // conic start angle (radians).
   bool has_gradient = false;
-  double gradient_angle = 0.0;  // radians
+  int gradient_kind = kGradientNone;
+  double gradient_angle = 0.0;
+  double gradient_center_x = 50.0;  // 0..100 percent, or px
+  double gradient_center_y = 50.0;
+  bool gradient_center_x_percent = true;
+  bool gradient_center_y_percent = true;
+  float gradient_radius = -1.0f;    // radial explicit radius (px)
+  int gradient_radial_size = 0;     // RadialGradientSize enum
   std::vector<uint32_t> gradient_colors;
   std::vector<double> gradient_stops;
+  // 1 = stop value is already a fraction (percentage); 0 = px length.
+  std::vector<uint8_t> gradient_stop_percent;
 
   float width = -1.0f;          // px, -1 = auto
   float height = -1.0f;
@@ -3089,11 +3128,36 @@ void ParseTransformOrigin(AppStyle* style, const std::string& raw) {
   style->transform_origin_y_percent = y_percent;
 }
 
-// Parses the first `linear-gradient(...)` layer into AppStyle.
-void ParseLinearGradient(AppStyle* style, const std::string& raw) {
-  const size_t start = raw.find("linear-gradient(");
-  if (start == std::string::npos) return;
-  size_t cursor = start + strlen("linear-gradient(");
+// Defined after the gradient parser but used to resolve `at <position>`.
+bool ParsePositionPair(const std::string& raw,
+                       CssPositionAxis* x,
+                       CssPositionAxis* y);
+
+// Locates the first gradient function (`linear`/`radial`/`conic`) in a CSS
+// background value and returns its comma-separated argument text.
+bool FindCssGradient(const std::string& raw,
+                     CssGradientKind* kind,
+                     std::string* args) {
+  struct GradientFunction {
+    const char* name;
+    CssGradientKind kind;
+  };
+  static const GradientFunction kFunctions[] = {
+      {"linear-gradient(", kGradientLinear},
+      {"radial-gradient(", kGradientRadial},
+      {"conic-gradient(", kGradientConic},
+  };
+  size_t best = std::string::npos;
+  const GradientFunction* match = nullptr;
+  for (const GradientFunction& fn : kFunctions) {
+    const size_t pos = raw.find(fn.name);
+    if (pos != std::string::npos && pos < best) {
+      best = pos;
+      match = &fn;
+    }
+  }
+  if (match == nullptr) return false;
+  size_t cursor = best + strlen(match->name);
   int depth = 1;
   const size_t args_start = cursor;
   while (cursor < raw.size() && depth > 0) {
@@ -3101,15 +3165,165 @@ void ParseLinearGradient(AppStyle* style, const std::string& raw) {
     if (raw[cursor] == ')') depth--;
     cursor++;
   }
-  if (depth != 0) return;
-  const std::string args =
-      raw.substr(args_start, cursor - args_start - 1);
+  if (depth != 0) return false;
+  *args = raw.substr(args_start, cursor - args_start - 1);
+  *kind = match->kind;
+  return true;
+}
+
+// Gradient arguments are color stops unless the leading token is a shape/size
+// or `from`/`at` descriptor.
+bool LooksLikeGradientColor(const std::string& raw) {
+  const std::string value = LowerAscii(TrimAscii(raw));
+  if (value.empty()) return false;
+  if (value[0] == '#') return true;
+  if (StartsWith(value, "rgb(") || StartsWith(value, "rgba(") ||
+      StartsWith(value, "hsl(") || StartsWith(value, "hsla(")) {
+    return true;
+  }
+  uint32_t color = 0u;
+  return ParseCssColor(value, &color);
+}
+
+void ParseGradientPosition(const std::vector<std::string>& tokens,
+                           size_t at,
+                           AppStyle* style) {
+  std::string position;
+  for (size_t i = at + 1; i < tokens.size(); i++) {
+    if (!position.empty()) position += ' ';
+    position += tokens[i];
+  }
+  CssPositionAxis x;
+  CssPositionAxis y;
+  if (!ParsePositionPair(position, &x, &y)) return;
+  style->gradient_center_x = x.value;
+  style->gradient_center_y = y.value;
+  style->gradient_center_x_percent = x.percent;
+  style->gradient_center_y_percent = y.percent;
+}
+
+// Parses one color-stop position (percentage, px, or conic angle).
+bool ParseGradientStopToken(const std::string& raw,
+                            bool conic,
+                            double* value,
+                            uint8_t* is_percent) {
+  const std::string token = TrimAscii(raw);
+  if (conic) {
+    const std::string lower = LowerAscii(token);
+    // Angles must be detected before lengths: ParseNumber keeps the leading
+    // numeric prefix, so "180deg" would otherwise parse as 180px.
+    if (EndsWith(lower, "deg") || EndsWith(lower, "rad") ||
+        EndsWith(lower, "turn")) {
+      double radians = 0.0;
+      if (!ParseAngleToken(token, &radians)) return false;
+      *value = radians / (2.0 * kPi);
+      *is_percent = 1;
+      return true;
+    }
+    if (token == "0") {
+      *value = 0.0;
+      *is_percent = 1;
+      return true;
+    }
+  }
+  float px = 0.0f;
+  float percent = -1.0f;
+  if (ParseLength(token, &px, &percent)) {
+    if (percent >= 0.0f) {
+      *value = percent;
+      *is_percent = 1;
+    } else {
+      *value = px;
+      *is_percent = 0;
+    }
+    return true;
+  }
+  return false;
+}
+
+// Parses one gradient's color stops.  `conic` also accepts angle positions,
+// which are normalized to 0..1 turns.  A colour may carry two positions
+// (`red 0deg 90deg`), producing two hard-stop entries.
+void ParseGradientColorStops(const std::vector<std::string>& layers,
+                             size_t first,
+                             bool conic,
+                             std::vector<uint32_t>* colors,
+                             std::vector<double>* stops,
+                             std::vector<uint8_t>* stop_percent) {
+  for (size_t i = first; i < layers.size(); i++) {
+    const std::string part = TrimAscii(layers[i]);
+    if (part.empty()) continue;
+    std::string color_text;
+    std::string stop_text;
+    const std::string lower = LowerAscii(part);
+    if (StartsWith(lower, "rgb(") || StartsWith(lower, "rgba(")) {
+      const size_t close = part.find(')');
+      if (close == std::string::npos) continue;
+      color_text = part.substr(0, close + 1);
+      stop_text = TrimAscii(part.substr(close + 1));
+    } else {
+      const std::vector<std::string> tokens = SplitWhitespace(part);
+      if (tokens.empty()) continue;
+      color_text = tokens[0];
+      // At most two position tokens (`red 0deg 90deg`).
+      for (size_t s = 1; s < tokens.size() && s <= 2; s++) {
+        if (!stop_text.empty()) stop_text += ' ';
+        stop_text += tokens[s];
+      }
+    }
+    uint32_t color = 0u;
+    if (!ParseCssColor(color_text, &color)) continue;
+
+    std::vector<double> positions;
+    std::vector<uint8_t> percents;
+    for (const std::string& token : SplitWhitespace(stop_text)) {
+      if (positions.size() >= 2) break;
+      double value = 0.0;
+      uint8_t is_percent = 1;
+      if (ParseGradientStopToken(token, conic, &value, &is_percent)) {
+        positions.push_back(value);
+        percents.push_back(is_percent);
+      }
+    }
+    if (positions.empty()) {
+      positions.push_back(colors->empty() ? 0.0 : -1.0);
+      percents.push_back(1);
+    }
+    for (size_t p = 0; p < positions.size(); p++) {
+      colors->push_back(color);
+      stops->push_back(positions[p]);
+      stop_percent->push_back(percents[p]);
+    }
+  }
+  // Distribute unspecified stops evenly.
+  double previous = 0.0;
+  for (size_t i = 0; i < stops->size(); i++) {
+    if ((*stops)[i] < 0.0) {
+      (*stops)[i] = static_cast<double>(i) /
+                    static_cast<double>(stops->size() - 1);
+      if ((*stops)[i] < previous) (*stops)[i] = previous;
+      (*stop_percent)[i] = 1;
+    }
+    previous = (*stops)[i];
+  }
+}
+
+// Parses the first CSS `linear-gradient(...)`, `radial-gradient(...)` or
+// `conic-gradient(...)` layer into AppStyle.
+void ParseCssGradient(AppStyle* style, const std::string& raw) {
+  CssGradientKind kind = kGradientNone;
+  std::string args;
+  if (!FindCssGradient(raw, &kind, &args)) return;
   const std::vector<std::string> layers = SplitTopLevelComma(args);
   if (layers.empty()) return;
 
   size_t first_color = 0;
-  double angle = 0.0;  // CSS 0deg = to top; NewLinearGradient uses radians.
-  {
+  std::vector<uint32_t> colors;
+  std::vector<double> stops;
+  std::vector<uint8_t> stop_percent;
+
+  if (kind == kGradientLinear) {
+    double angle = 0.0;  // CSS 0deg = to top; NewLinearGradient uses radians.
     const std::string head = LowerAscii(TrimAscii(layers[0]));
     if (StartsWith(head, "to ")) {
       const std::string direction = TrimAscii(head.substr(3));
@@ -3125,55 +3339,86 @@ void ParseLinearGradient(AppStyle* style, const std::string& raw) {
         first_color = 1;
       }
     }
-  }
-
-  std::vector<uint32_t> colors;
-  std::vector<double> stops;
-  for (size_t i = first_color; i < layers.size(); i++) {
-    const std::string part = TrimAscii(layers[i]);
-    if (part.empty()) continue;
-    std::string color_text;
-    std::string stop_text;
-    if (StartsWith(LowerAscii(part), "rgb(") ||
-        StartsWith(LowerAscii(part), "rgba(")) {
-      const size_t close = part.find(')');
-      if (close == std::string::npos) continue;
-      color_text = part.substr(0, close + 1);
-      stop_text = TrimAscii(part.substr(close + 1));
-    } else {
-      const std::vector<std::string> tokens = SplitWhitespace(part);
-      if (tokens.empty()) continue;
-      color_text = tokens[0];
-      if (tokens.size() > 1) stop_text = tokens[1];
-    }
-    uint32_t color = 0u;
-    if (!ParseCssColor(color_text, &color)) continue;
-    double stop = colors.empty() ? 0.0 : -1.0;
-    if (!stop_text.empty()) {
-      float px = 0.0f;
-      float percent = -1.0f;
-      if (ParseLength(stop_text, &px, &percent)) {
-        stop = percent >= 0.0f ? percent : px / 100.0f;
+    ParseGradientColorStops(layers, first_color, false, &colors, &stops,
+                            &stop_percent);
+    if (colors.size() < 2) return;
+    style->gradient_angle = angle;
+  } else if (kind == kGradientRadial) {
+    // RadialGradientSize: 0 farthest-corner (default), 1 closest-side,
+    // 2 closest-corner, 3 farthest-side, 4 explicit length.
+    int size = 0;
+    float radius = -1.0f;
+    if (!LooksLikeGradientColor(layers[0])) {
+      first_color = 1;
+      const std::vector<std::string> tokens = SplitWhitespace(layers[0]);
+      for (size_t i = 0; i < tokens.size(); i++) {
+        const std::string token = LowerAscii(tokens[i]);
+        if (token == "closest-side") {
+          size = 1;
+          continue;
+        }
+        if (token == "closest-corner") {
+          size = 2;
+          continue;
+        }
+        if (token == "farthest-side") {
+          size = 3;
+          continue;
+        }
+        if (token == "farthest-corner") {
+          size = 0;
+          continue;
+        }
+        if (token == "at") {
+          ParseGradientPosition(tokens, i, style);
+          break;
+        }
+        float px = 0.0f;
+        float percent = -1.0f;
+        if (ParseLength(tokens[i], &px, &percent) && percent < 0.0f &&
+            px >= 0.0f) {
+          radius = px;
+          size = 4;
+        }
       }
     }
-    colors.push_back(color);
-    stops.push_back(stop);
-  }
-  if (colors.size() < 2) return;
-  // Distribute unspecified stops evenly.
-  double previous = 0.0;
-  for (size_t i = 0; i < stops.size(); i++) {
-    if (stops[i] < 0.0) {
-      stops[i] = static_cast<double>(i) /
-                 static_cast<double>(stops.size() - 1);
-      if (stops[i] < previous) stops[i] = previous;
+    ParseGradientColorStops(layers, first_color, false, &colors, &stops,
+                            &stop_percent);
+    if (colors.size() < 2) return;
+    style->gradient_radius = radius;
+    style->gradient_radial_size = size;
+  } else if (kind == kGradientConic) {
+    double start_angle = 0.0;
+    if (!LooksLikeGradientColor(layers[0])) {
+      first_color = 1;
+      const std::vector<std::string> tokens = SplitWhitespace(layers[0]);
+      for (size_t i = 0; i < tokens.size(); i++) {
+        const std::string token = LowerAscii(tokens[i]);
+        if (token == "from" && i + 1 < tokens.size()) {
+          double parsed = 0.0;
+          if (ParseAngleToken(tokens[i + 1], &parsed)) start_angle = parsed;
+          i++;
+          continue;
+        }
+        if (token == "at") {
+          ParseGradientPosition(tokens, i, style);
+          break;
+        }
+      }
     }
-    previous = stops[i];
+    ParseGradientColorStops(layers, first_color, true, &colors, &stops,
+                            &stop_percent);
+    if (colors.size() < 2) return;
+    style->gradient_angle = start_angle;
+  } else {
+    return;
   }
+
   style->has_gradient = true;
-  style->gradient_angle = angle;
+  style->gradient_kind = kind;
   style->gradient_colors = std::move(colors);
   style->gradient_stops = std::move(stops);
+  style->gradient_stop_percent = std::move(stop_percent);
 }
 
 // Parses CSS `border-radius` (1-4 corner values; elliptical `/` is reduced to
@@ -3687,8 +3932,10 @@ void ApplyDeclaration(AppStyle* style,
   } else if (key == "box-shadow") {
     ParseBoxShadow(value, style);
   } else if (key == "background-image" || key == "background") {
-    if (value.find("linear-gradient") != std::string::npos) {
-      ParseLinearGradient(style, value);
+    if (value.find("linear-gradient") != std::string::npos ||
+        value.find("radial-gradient") != std::string::npos ||
+        value.find("conic-gradient") != std::string::npos) {
+      ParseCssGradient(style, value);
     }
     const std::string url = ParseCssUrl(value);
     if (!url.empty()) style->background_image = url;
@@ -6259,15 +6506,13 @@ bool LoadBackgroundImageForNode(AppNode* node) {
 void OnBuilderBuildChild(intptr_t address, int32_t index);
 void OnBuilderDisposeChild(intptr_t address, int32_t index);
 
-// Builds the `List<BoxShadow>` argument for NewDecoratedBox.
-Dart_Handle BuildLinearGradientHandle(const AppStyle& style) {
+// Builds the gradient argument for NewDecoratedBox: linear, radial or conic
+// depending on the parsed CSS.
+Dart_Handle BuildGradientHandle(const AppStyle& style) {
   if (!style.has_gradient || style.gradient_colors.size() < 2 ||
       g_page == nullptr || g_page->holder == nullptr) {
     return Dart_Null();
   }
-  auto* new_linear = reinterpret_cast<NewLinearGradientFn>(
-      FindCallback(g_page->holder->ffi_table, kNewLinearGradientHash));
-  if (new_linear == nullptr) return Dart_Null();
   Dart_Handle colors =
       Dart_NewList(static_cast<intptr_t>(style.gradient_colors.size()));
   if (Dart_IsError(colors)) return Dart_Null();
@@ -6283,8 +6528,50 @@ Dart_Handle BuildLinearGradientHandle(const AppStyle& style) {
                              ? static_cast<double>(i) /
                                    static_cast<double>(style.gradient_colors.size() - 1)
                              : 0.0);
-    stops.push_back(GradientStopNative{stop, 1});
+    uint8_t is_percent = i < style.gradient_stop_percent.size()
+                             ? style.gradient_stop_percent[i]
+                             : 1;
+    stops.push_back(GradientStopNative{stop, is_percent});
   }
+
+  // Radial/conic centers are fractions for percentages and px otherwise.
+  const double center_x = style.gradient_center_x_percent
+                              ? style.gradient_center_x / 100.0
+                              : style.gradient_center_x;
+  const double center_y = style.gradient_center_y_percent
+                              ? style.gradient_center_y / 100.0
+                              : style.gradient_center_y;
+  const uint8_t center_x_percent = style.gradient_center_x_percent ? 1 : 0;
+  const uint8_t center_y_percent = style.gradient_center_y_percent ? 1 : 0;
+
+  if (style.gradient_kind == kGradientRadial) {
+    auto* new_radial = reinterpret_cast<NewRadialGradientFn>(
+        FindCallback(g_page->holder->ffi_table, kNewRadialGradientHash));
+    if (new_radial == nullptr) return Dart_Null();
+    return new_radial(center_x, center_y, center_x_percent, center_y_percent,
+                      static_cast<double>(style.gradient_radius),
+                      static_cast<uint8_t>(style.gradient_radial_size), colors,
+                      stops.data());
+  }
+  if (style.gradient_kind == kGradientConic) {
+    auto* new_conic = reinterpret_cast<NewConicGradientFn>(
+        FindCallback(g_page->holder->ffi_table, kNewConicGradientHash));
+    if (new_conic == nullptr) return Dart_Null();
+    // NewConicGradient takes its stops as a Dart list of turns.
+    Dart_Handle stop_list =
+        Dart_NewList(static_cast<intptr_t>(stops.size()));
+    if (Dart_IsError(stop_list)) return Dart_Null();
+    for (size_t i = 0; i < stops.size(); i++) {
+      Dart_ListSetAt(stop_list, static_cast<intptr_t>(i),
+                     Dart_NewDouble(stops[i].value));
+    }
+    return new_conic(style.gradient_angle, center_x, center_y,
+                     center_x_percent, center_y_percent, colors, stop_list);
+  }
+
+  auto* new_linear = reinterpret_cast<NewLinearGradientFn>(
+      FindCallback(g_page->holder->ffi_table, kNewLinearGradientHash));
+  if (new_linear == nullptr) return Dart_Null();
   return new_linear(style.gradient_angle, colors, stops.data(), -1.0, -1.0,
                     0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0);
 }
@@ -6907,7 +7194,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         }
       }
       Dart_Handle shadows = BuildBoxShadowList(style);
-      Dart_Handle gradient = BuildLinearGradientHandle(style);
+      Dart_Handle gradient = BuildGradientHandle(style);
       const double radius_tl = EffectiveCornerRadius(style, 0);
       const double radius_tr = EffectiveCornerRadius(style, 1);
       const double radius_br = EffectiveCornerRadius(style, 2);
@@ -8343,14 +8630,26 @@ bool SameFloatOrNan(float a, float b) {
 bool SameGradient(const AppStyle& a, const AppStyle& b) {
   if (a.has_gradient != b.has_gradient) return false;
   if (!a.has_gradient) return true;
+  if (a.gradient_kind != b.gradient_kind) return false;
   if (std::fabs(a.gradient_angle - b.gradient_angle) > 0.001) return false;
   if (a.gradient_colors != b.gradient_colors) return false;
   if (a.gradient_stops.size() != b.gradient_stops.size()) return false;
+  if (a.gradient_stop_percent != b.gradient_stop_percent) return false;
   for (size_t i = 0; i < a.gradient_stops.size(); i++) {
     if (std::fabs(a.gradient_stops[i] - b.gradient_stops[i]) > 0.001) {
       return false;
     }
   }
+  if (std::fabs(a.gradient_center_x - b.gradient_center_x) > 0.001 ||
+      std::fabs(a.gradient_center_y - b.gradient_center_y) > 0.001) {
+    return false;
+  }
+  if (a.gradient_center_x_percent != b.gradient_center_x_percent ||
+      a.gradient_center_y_percent != b.gradient_center_y_percent) {
+    return false;
+  }
+  if (std::fabs(a.gradient_radius - b.gradient_radius) > 0.001) return false;
+  if (a.gradient_radial_size != b.gradient_radial_size) return false;
   return true;
 }
 
@@ -8607,7 +8906,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
               rebuild = true;
               break;
             }
-            update_gradient(decorated, BuildLinearGradientHandle(after));
+            update_gradient(decorated, BuildGradientHandle(after));
           } else {
             if (clear_gradient == nullptr) {
               rebuild = true;

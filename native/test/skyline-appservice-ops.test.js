@@ -2359,3 +2359,101 @@ test('appservice ops: position sticky pins the header while scrolling', {
   assert.deepEqual(pixelAt(pixels, 160, 100), [0, 170, 0, 255], 'scrolled body');
   assert.deepEqual(pixelAt(pixels, 160, 130), [255, 255, 255, 255], 'outside scroll view');
 });
+
+test('appservice ops: radial and conic gradients paint through NewDecoratedBox', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-radial-conic.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  const isRed = ([r, g, b]) => r > 240 && g < 20 && b < 20;
+  const isGreen = ([r, g, b]) => r < 40 && g > 240 && b < 40;
+  const isBlue = ([r, g, b]) => r < 40 && g < 40 && b > 240;
+  const isYellow = ([r, g, b]) => r > 240 && g > 240 && b < 40;
+  const isCyan = ([r, g, b]) => r < 40 && g > 240 && b > 240;
+  const isMagenta = ([r, g, b]) => r > 240 && g < 40 && b > 240;
+
+  // radial-gradient(circle at center, red 0%, blue 100%): the centre is red
+  // and the colour walks toward blue with distance.
+  const r1Center = pixelAt(pixels, 60, 60);
+  assert.ok(isRed(r1Center), `radial centre should be red, got ${r1Center}`);
+  const r1Inner = pixelAt(pixels, 50, 50);
+  assert.ok(r1Inner[0] > 180 && r1Inner[2] > 30 && r1Inner[2] < 80,
+    `radial quarter point should be red/blue blend, got ${r1Inner}`);
+
+  // radial-gradient(circle 30px at 50% 50%, green, yellow): the 30px radius
+  // reaches yellow while the centre stays green.
+  const r2Center = pixelAt(pixels, 180, 60);
+  assert.ok(isGreen(r2Center), `30px radial centre should be green, got ${r2Center}`);
+  assert.ok(isYellow(pixelAt(pixels, 210, 50)),
+    'points beyond the 30px radius should be yellow');
+
+  // conic-gradient(from 0deg, red/green/blue/yellow quadrants): CSS angles run
+  // clockwise from 12 o'clock.
+  assert.ok(isRed(pixelAt(pixels, 90, 130)), 'conic upper-right is red');
+  assert.ok(isGreen(pixelAt(pixels, 90, 210)), 'conic lower-right is green');
+  assert.ok(isBlue(pixelAt(pixels, 50, 210)), 'conic lower-left is blue');
+  assert.ok(isYellow(pixelAt(pixels, 50, 130)), 'conic upper-left is yellow');
+
+  // conic-gradient(from 90deg, magenta/cyan halves): rotating the start angle
+  // by 90 degrees moves the half-turn boundary to the top/bottom axis.
+  assert.ok(isCyan(pixelAt(pixels, 210, 170)), 'rotated conic upper-right is cyan');
+  assert.ok(isMagenta(pixelAt(pixels, 170, 210)), 'rotated conic lower-left is magenta');
+
+  assert.deepEqual(pixelAt(pixels, 120, 120), [255, 255, 255, 255],
+    'gap between gradient boxes stays white');
+});
+
+test('appservice ops: radial gradients update in place to conic', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-gradient-kind-'));
+  const ops = path.join(dir, 'gradient-kind.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:50px;top:50px;width:100px;height:100px;' +
+          'background:radial-gradient(circle at center,#FF0000 0%,#0000FF 100%);' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 300, ops: [
+        { op: 'setStyle', id: 3,
+          value: 'background:conic-gradient(from 0deg at 50% 50%,' +
+            '#00FF00 0deg 180deg,#FF00FF 180deg 360deg);' },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2600,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    // The same DecoratedBox updates in place: upper-right half green,
+    // lower-left magenta (the original radial red/blue is gone).
+    assert.deepEqual(pixelAt(pixels, 130, 80), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 70, 120), [255, 0, 255, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

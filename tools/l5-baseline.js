@@ -57,6 +57,7 @@ const FIXTURES = [
   'appservice-box-sizing.ops.json',
   'appservice-percent-box.ops.json',
   'appservice-sticky.ops.json',
+  'appservice-radial-conic.ops.json',
 ];
 
 function prerequisites() {

@@ -397,6 +397,11 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
   （`translate`/`scale`/`rotate`/`matrix`，绕元素中心）、`box-shadow`
   （首层 offset/blur/spread/color/inset）。position 支持 1/2/4 值关键字、
   百分比与 px（含 `right 10px`/`bottom 20%`）。
+- 渐变：`linear-gradient`（方向/角度）、`radial-gradient`（`circle`/`ellipse`、
+  `closest-side`/`farthest-side`/`closest-corner`/`farthest-corner`、显式长度、
+  `at <position>`；引擎径向着色器使用单半径，`ellipse` 与圆共用同一半径规则）
+  与 `conic-gradient`（`from <angle>`、`at <position>`）。
+  颜色停靠点支持百分比、px（径向）与角度（锥形），每个颜色可带 0/1/2 个位置。
 - 文本：`font-size`、`font-weight`、`font-style`、`line-height`（px 或倍数）、
   `letter-spacing`、`text-align`、`-webkit-line-clamp`
 
@@ -491,6 +496,9 @@ npm run test:ops
   `margin:10% 25%` 以 200px 包含块解析为上下 20px、左右 50px。
 - `sticky`：120px 滚动视口内 40px sticky header + 400px body，`scrollTop=200`
   后 header 仍固定在顶部，body 从 header 下方滚过。
+- `radial/conic gradient`：100×100 圆的径向渐变（中心红、外沿蓝）、
+  `circle 30px` 显式半径、四象限硬停止锥形与 `from 90deg` 旋转后的锥形分布；
+  另验证径向→锥形的原地 `DecoratedBoxUpdateGradient` 更新。
 - `network image`：本地 HTTP server -> `RequestHttpResource` -> 解码 -> 重建
   页面 -> 四象限像素。
 - `host keyboard channel`：`--key-script` 触发 `FlutterEngineSendKeyEvent` 与
@@ -512,6 +520,7 @@ npm run test:ops
   （px/%/auto/0）与按 `flex-shrink * base` 缩放的溢出收缩、
   `box-sizing: content-box`、百分比 padding/margin（按包含块宽度解析）、
   `position: sticky`（`NewStickyHeader`/`NewStickySection`），
+  `radial-gradient`/`conic-gradient`（`NewRadialGradient`/`NewConicGradient`），
   逐边 `border-width/color`，逐角
   `border-radius`（px/%），以及 `overflow:
   hidden/clip`（`NewClipRRect`，圆角增量走 `ClipRRectUpdateRadius`）。

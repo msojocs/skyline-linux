@@ -287,7 +287,9 @@
   裁剪；资源加载按路径缓存（≤4 MB）；`background-position` / `object-position`
   （1/2/4 值关键字、%、px 与边距形式）；`box-sizing: content-box`
   （min/max 与 flex base size 同步换算）；百分比 padding/margin 按包含块宽度
-  解析；`position: sticky` 经 StickySection/PinnedHeader sliver 实现。
+  解析；`position: sticky` 经 StickySection/PinnedHeader sliver 实现；
+  `radial-gradient`/`conic-gradient` 经 `NewRadialGradient`/`NewConicGradient`
+  绘制（支持尺寸关键字、`at` 位置与含角度的硬停止）。
 - **下一步**：`transform3d` 保真对齐、native view 真实内容接入（当前 Linux
   为占位 slot），以及继续补全 yoga 属性。
 

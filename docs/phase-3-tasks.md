@@ -1,12 +1,12 @@
 # 阶段 3 任务清单
 
-> 最后更新：2026-11-20
+> 最后更新：2026-11-21
 > 分支：`feature/phase3-gesture-list-image-channels`
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
 > 核心验收：**22 / 22（100%）**
-> 长尾/外部阻塞：**8 / 12**
-> 全部任务：**30 / 34（88.2%）**
+> 长尾/外部阻塞：**9 / 12**
+> 全部任务：**31 / 34（91.2%）**
 >
 > 勾选项表示已在 Linux 回放运行时上实现并通过测试；标有 `blocked` 的任务
 > 依赖外部环境或私有引擎能力。
@@ -17,8 +17,8 @@
 | --- | ---: | ---: | ---: |
 | A. 原始阶段 3 验收项 | 8 | 8 | 100% |
 | B. 后续运行时增量 | 14 | 14 | 100% |
-| C. 长尾 / 外部阻塞 | 8 | 12 | 66.7% |
-| **合计** | **30** | **34** | **88.2%** |
+| C. 长尾 / 外部阻塞 | 9 | 12 | 75.0% |
+| **合计** | **31** | **34** | **91.2%** |
 
 ## A. 原始阶段 3 验收项（8 / 8）
 
@@ -64,15 +64,15 @@
 - [x] **B13** 资源路径缓存（`LoadResourceSync`/`Async`，≤4 MB）
 - [x] **B14** L5 夹具扩展（transform-origin/fixed-scroll/align-gap/flex-wrap/order/overflow）
 
-## C. 长尾 / 外部阻塞（8 / 12）
+## C. 长尾 / 外部阻塞（9 / 12）
 
 - [x] **C1** 官方 Windows appservice guest 的真实 L5 采集与像素对比
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
     `skyline.node`，窗口就绪后经 `notifyAppLaunch` + `PageContext` 回放夹具操作，
     从共享内存读取 640x480 帧。原始 Windows 帧为 BGRA，工具统一转为 RGBA。
-  - `spec/l5-baseline.win32.json` 保存 17 个夹具的 zlib 压缩帧、样本点与容差；
+  - `spec/l5-baseline.win32.json` 保存 18 个夹具的 zlib 压缩帧、样本点与容差；
     `npm run test:l5` 在 Linux 以 dpr=2 重放同一夹具并逐像素比较。
-  - 结果：12 个夹具逐像素完全一致，`shadow` 最大差 1；`overflow`
+  - 结果：12 个夹具逐像素完全一致，`shadow`/`radial-conic` 最大差 1；`overflow`
     失配率 < 0.2%（裁剪边缘），`fixed-scroll` 已完全一致；`transform3d` 存在 3D 变换保真差异；
     `gridview`/`listview` 的合成 op 流无法触发官方 native builder 回调，标记为
     不可比。详见 `docs/feasibility.md` §3.1。
@@ -150,7 +150,21 @@
   - `test:ops` 新增 sticky header + 400px body 滚动用例（57 / 57）；
     L5 夹具 `appservice-sticky.ops.json` 与官方 Windows 帧逐像素一致
     （maxDelta=0）。
-- [ ] **C9** radial / conic gradient
+- [x] **C9** radial / conic gradient
+  - `ParseCssGradient` 统一解析 `linear-gradient` / `radial-gradient` /
+    `conic-gradient`；径向支持 `circle`/`ellipse`（引擎为单半径，按圆处理）、
+    `closest-side`/`farthest-side`/`closest-corner`/`farthest-corner` 与显式
+    长度，`at <position>` 复用 1/2/4 值位置语法（关键字/%/px）；锥形支持
+    `from <angle>`（deg/rad/turn）与 `at <position>`，颜色停靠点可为角度或百分比。
+  - 颜色停靠点支持 0/1/2 值位置（`red 0deg 90deg` 生成硬停止），未指定位置按
+    现有规则均匀分布；百分比与 px 停靠点分别以 `GradientStop.isPercent` 传入。
+  - 按类型调用 `NewRadialGradient` / `NewConicGradient`，`SameGradient` 比较
+    类型、中心/半径/尺寸关键字与停靠点；更新仍走 `DecoratedBoxUpdateGradient`。
+  - `test:ops` 新增 100×100 圆径向（中心红、外沿蓝）、30px 显式半径径向、
+    四象限硬停止锥形、`from 90deg` 旋转锥形，以及径向→锥形原地更新用例
+    （59 / 59）。
+  - L5 夹具 `appservice-radial-conic.ops.json` 与官方 Windows 帧比较
+    maxDelta=1、失配率 0。
 - [ ] **C10** 显式 `background-size` 长度值（非 cover/contain）
 - [ ] **C11** `transform-origin` 的 z 分量 / 3D origin
 - [ ] **C12** `AddPendingFont` / `RemovePendingFont` 与内存字体状态语义
@@ -159,8 +173,8 @@
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **152 / 176** | 24 skipped，0 fail |
-| `npm run test:ops` | **57 / 57** | appservice 操作流回放 |
+| `npm test` | **154 / 178** | 24 skipped，0 fail |
+| `npm run test:ops` | **59 / 59** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 
