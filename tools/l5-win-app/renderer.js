@@ -187,13 +187,8 @@ try {
           case 'setScrollTop': {
             const node = nodes.get(op.id);
             let done = false;
-            for (const attrs of [{ scrollTop: op.value }, { scroll_top: op.value }]) {
-              try { node.setAttributes(attrs); done = true; log('setScrollTop attrs', JSON.stringify(attrs)); break; } catch (error) { log('setScrollTop attrs error', String(error)); }
-            }
-            if (!done) {
-              for (const [name, value] of [['scrollTop', op.value], ['scroll-top', op.value], ['scroll_top', op.value]]) {
-                try { node.setAttribute(name, value); done = true; log('setScrollTop attr', name, value); break; } catch (error) { log('setScrollTop attr error', name, String(error)); }
-              }
+            for (const [name, value] of [['scroll-top', op.value], ['scrollTop', op.value], ['scroll_top', op.value]]) {
+              try { node.setAttribute(name, value); done = true; log('setScrollTop attr', name, value); break; } catch (error) { log('setScrollTop attr error', name, String(error)); }
             }
             log('setScrollTop', op.id, op.value, done ? 'ok' : 'failed');
             break;
@@ -250,8 +245,8 @@ try {
       const size = view.getUint32(4, true);
       if (size !== frameSize) return;
       const now = Date.now();
-      const stable = now - lastMutation > 400;
-      if (id !== lastSaved && (stable || now - lastMutation > 2500)) {
+      const stable = now - lastMutation > 1200;
+      if (id !== lastSaved && (stable || now - lastMutation > 3000)) {
         const pixels = Buffer.from(u8.subarray(8, 8 + size));
         fs.writeFileSync(framePath, pixels);
         report.frame = {
@@ -263,7 +258,7 @@ try {
         lastSaved = id;
         log('saved frame', JSON.stringify(report.frame));
       }
-      if (lastSaved >= 0 && now - lastMutation > 400) {
+      if (lastSaved >= 0 && now - lastMutation > 1200) {
         clearInterval(pollTimer);
         const ok = report.frame && report.frame.nonWhite > 0;
         setTimeout(() => { try { shell.destroyWindow(WINDOW_ID); } catch (error) {} }, 50);

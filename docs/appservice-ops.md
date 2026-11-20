@@ -387,7 +387,7 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
   `align-items`、`flex`/`flex-grow`/`flex-shrink`/`flex-basis`、`gap`、
   `flex-wrap`。`flex` 支持 `<grow> [<shrink>] [<basis>]`、`none`/`auto`/
   `initial`；`flex-basis` 支持 px/%/`auto`/`content`/`0`。
-- 定位：`position: absolute|fixed`、`top/right/bottom/left`（px/%）、`z-index`
+- 定位：`position: absolute|fixed|sticky`、`top/right/bottom/left`（px/%）、`z-index`
 - 盒模型：`width/height`（px/%/auto）、`min/max-*`、`padding`/`margin` 及四边（px/%），
   `border`/`border-width`/`border-color`、`border-radius`、
   `box-sizing: border-box|content-box`（默认保持 Skyline 的 border-box 语义）
@@ -489,6 +489,8 @@ npm run test:ops
   130×90，`border-box` 节点占 100×60；内容原点、边框与留白像素一致。
 - `percent box`：`padding:10%` 以 320px 包含块解析为 32px；
   `margin:10% 25%` 以 200px 包含块解析为上下 20px、左右 50px。
+- `sticky`：120px 滚动视口内 40px sticky header + 400px body，`scrollTop=200`
+  后 header 仍固定在顶部，body 从 header 下方滚过。
 - `network image`：本地 HTTP server -> `RequestHttpResource` -> 解码 -> 重建
   页面 -> 四象限像素。
 - `host keyboard channel`：`--key-script` 触发 `FlutterEngineSendKeyEvent` 与
@@ -508,7 +510,8 @@ npm run test:ops
   ClearGradient`）。flexbox 子集支持 `align-self`、`order`、`row-gap`/
   `column-gap`（含 `gap: r c`）、`flex-wrap` + `align-content`、`flex-basis`
   （px/%/auto/0）与按 `flex-shrink * base` 缩放的溢出收缩、
-  `box-sizing: content-box`、百分比 padding/margin（按包含块宽度解析），
+  `box-sizing: content-box`、百分比 padding/margin（按包含块宽度解析）、
+  `position: sticky`（`NewStickyHeader`/`NewStickySection`），
   逐边 `border-width/color`，逐角
   `border-radius`（px/%），以及 `overflow:
   hidden/clip`（`NewClipRRect`，圆角增量走 `ClipRRectUpdateRadius`）。
@@ -558,6 +561,6 @@ npm run test:ops
 - L5：Linux 侧确定性帧哈希与 `test/lib/l5.js` 容差比较已就绪
   （`npm run test:l5`）。官方 Windows 引擎帧由 `tools/l5-windows.js` 在
   Wine 渲染进程中以 dpr=2 采集，基线写入 `spec/l5-baseline.win32.json`；
-  Windows 原始帧为 BGRA，采集工具统一转 RGBA。10 个夹具逐像素完全一致（`shadow` 最大差 1），
-  `overflow`/`fixed-scroll` 仅有边缘级差异，`transform3d` 与
+  Windows 原始帧为 BGRA，采集工具统一转 RGBA。12 个夹具逐像素完全一致（`shadow` 最大差 1），
+  `overflow` 仅有边缘级差异，`transform3d` 与
   `gridview`/`listview` 的已知差异见 `docs/feasibility.md` §3.1。

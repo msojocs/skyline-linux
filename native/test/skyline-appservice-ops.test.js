@@ -2333,3 +2333,29 @@ test('appservice ops: percentage padding and margin use containing width', {
   assert.deepEqual(pixelAt(pixels, 100, 130), [0, 170, 0, 255], 'margin top');
   assert.deepEqual(pixelAt(pixels, 210, 130), [255, 255, 255, 255], 'outside margin box');
 });
+
+test('appservice ops: position sticky pins the header while scrolling', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-sticky.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+    env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // scrollTop=200: the 40px header stays pinned at the viewport top while the
+  // 400px body scrolls underneath.
+  assert.match(logs, /scrollview #3 .*type=3 .*sticky=1/);
+  assert.match(logs, /sticky header 0x[0-9a-f]+ onTop=1/);
+  assert.deepEqual(pixelAt(pixels, 10, 10), [255, 0, 0, 255], 'pinned header');
+  assert.deepEqual(pixelAt(pixels, 10, 35), [255, 0, 0, 255], 'header bottom');
+  assert.deepEqual(pixelAt(pixels, 10, 45), [0, 170, 0, 255], 'body below header');
+  assert.deepEqual(pixelAt(pixels, 160, 100), [0, 170, 0, 255], 'scrolled body');
+  assert.deepEqual(pixelAt(pixels, 160, 130), [255, 255, 255, 255], 'outside scroll view');
+});

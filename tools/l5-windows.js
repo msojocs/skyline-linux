@@ -58,12 +58,6 @@ const KNOWN_DIVERGENCES = {
     headroom: 0.01,
     samplesInformational: true,
   },
-  'appservice-fixed-scroll': {
-    note: 'scroll/fixed-element edges differ by at most 26/255; mismatch ratio < 0.2%',
-    compare: true,
-    headroom: 0.01,
-    samplesInformational: true,
-  },
   'appservice-gridview': {
     note: 'official engine requires a grid builder callback; synthetic ops leave the grid empty',
     compare: false,

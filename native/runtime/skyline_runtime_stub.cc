@@ -464,6 +464,24 @@ using NewTextureFn = Dart_Handle (*)(int32_t id,
                                      uint8_t useTexture);
 using TextureDisposeFn = void (*)(Dart_Handle texture);
 
+// Skyline sticky slivers: `package:skyline/widgets/sticky.dart`.
+using NewStickyHeaderFn = Dart_Handle (*)(
+    intptr_t nativeWidgetPtr,
+    Dart_Handle child,
+    double paddingTop,
+    double paddingRight,
+    double paddingBottom,
+    double paddingLeft,
+    float offsetTop,
+    uint8_t allowOverlapping,
+    void* onStickOnTopChange);
+using NewStickySectionFn = Dart_Handle (*)(Dart_Handle children,
+                                           uint8_t pushPinnedChildren,
+                                           double paddingTop,
+                                           double paddingRight,
+                                           double paddingBottom,
+                                           double paddingLeft);
+
 using NewOpacityFn = Dart_Handle (*)(double opacity, Dart_Handle child);
 
 using NewLinearGradientFn = Dart_Handle (*)(
@@ -735,6 +753,8 @@ constexpr uint32_t kNewTextHash = 738901768u;
 constexpr uint32_t kNewTextSpanHash = 553157049u;
 constexpr uint32_t kNewTextureHash = 669864072u;
 constexpr uint32_t kTextureDisposeHash = 664334829u;
+constexpr uint32_t kNewStickyHeaderHash = 528134358u;
+constexpr uint32_t kNewStickySectionHash = 567872153u;
 constexpr uint32_t kNewOpacityHash = 357244940u;
 constexpr uint32_t kNewClipRRectHash = 744380804u;
 constexpr uint32_t kNewLinearGradientHash = 753559496u;
@@ -3613,7 +3633,10 @@ void ApplyDeclaration(AppStyle* style,
     style->clip = value == "hidden" || value == "clip" || value == "scroll" ||
                   value == "auto";
   } else if (key == "position") {
-    style->position = value == "fixed" ? 2 : value == "absolute" ? 1 : 0;
+    style->position = value == "fixed"     ? 2
+                      : value == "absolute" ? 1
+                      : value == "sticky"   ? 3
+                                            : 0;
   } else if (key == "top" || key == "right" || key == "bottom" ||
              key == "left") {
     int index = key == "top" ? 0 : key == "right" ? 1 : key == "bottom" ? 2 : 3;
@@ -4510,7 +4533,7 @@ std::vector<AppNode*> OrderedFlowChildren(AppNode* node) {
   std::vector<AppNode*> flow;
   for (AppNode* child : node->children) {
     if (child == nullptr || child->released || child->style.display_none ||
-        child->style.position != 0) {
+        (child->style.position != 0 && child->style.position != 3)) {
       continue;
     }
     flow.push_back(child);
@@ -5245,7 +5268,7 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
   // or from the viewport (fixed) and excluded from flex sizing above.
   for (AppNode* child : node->children) {
     if (child->released || child->style.display_none ||
-        child->style.position == 0) {
+        child->style.position == 0 || child->style.position == 3) {
       continue;
     }
     const bool fixed = child->style.position == 2;
@@ -6347,6 +6370,25 @@ Dart_Handle CreateInputStateWidget(NewInputFn newInput, AppNode* node) {
       reinterpret_cast<void*>(&InputNoopOnPageBottomPaddingChange));
 }
 
+bool HasStickyFlowChildren(const AppNode* node) {
+  if (node == nullptr) return false;
+  for (const AppNode* child : node->children) {
+    if (child == nullptr || child->released || child->style.display_none) {
+      continue;
+    }
+    if (child->style.position == 3) return true;
+  }
+  return false;
+}
+
+void OnStickyHeaderStickOnTop(intptr_t native_widget_ptr, uint8_t value) {
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") == nullptr) return;
+  std::fprintf(stderr,
+               "[skyline-runtime] sticky header 0x%lx onTop=%u\n",
+               static_cast<long>(native_widget_ptr),
+               static_cast<unsigned>(value));
+}
+
 Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         NewYGConnectorFn newYGConnector, NewTextFn newText,
                         NewTextSpanFn newTextSpan,
@@ -6634,8 +6676,20 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       }
     } else {
       std::vector<Dart_Handle> child_widgets;
+      std::vector<AppNode*> child_nodes;
       child_widgets.reserve(node->children.size());
+      child_nodes.reserve(node->children.size());
       bool has_sliver_child = false;
+      bool has_sticky_child = false;
+      bool has_sticky_section_child = false;
+      NewStickyHeaderFn scroll_sticky_header = nullptr;
+      NewStickySectionFn scroll_sticky_section = nullptr;
+      if (is_scroll_view && g_page != nullptr && g_page->holder != nullptr) {
+        scroll_sticky_header = reinterpret_cast<NewStickyHeaderFn>(
+            FindCallback(g_page->holder->ffi_table, kNewStickyHeaderHash));
+        scroll_sticky_section = reinterpret_cast<NewStickySectionFn>(
+            FindCallback(g_page->holder->ffi_table, kNewStickySectionHash));
+      }
       for (AppNode* child : node->children) {
         if (child->released || child->style.display_none) continue;
         // position:fixed is promoted to the page root connector so scrolling
@@ -6644,6 +6698,51 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         if (IsListViewName(child->name) || IsGridViewName(child->name) ||
             IsBuilderName(child->name)) {
           has_sliver_child = true;
+        }
+        // A section container with sticky children becomes a StickySection
+        // sliver: sticky children are pinned headers, the rest are adapters.
+        if (scroll_sticky_header != nullptr && scroll_sticky_section != nullptr &&
+            HasStickyFlowChildren(child)) {
+          std::vector<Dart_Handle> grandchildren;
+          for (AppNode* grand : OrderedFlowChildren(child)) {
+            Dart_Handle item =
+                BuildWidget(grand, newYGNode, newYGConnector, newText,
+                            newTextSpan, newDecoratedBox, newOpacity,
+                            newScrollView, newListView, newGridView,
+                            newDirectRenderWidget, newListBuilder,
+                            newGridBuilder, false);
+            if (item == nullptr) continue;
+            if (grand->style.position == 3) {
+              float offset_top = 0.0f;
+              if (!std::isnan(grand->style.inset[0])) {
+                offset_top = grand->style.inset[0];
+              }
+              Dart_Handle header = scroll_sticky_header(
+                  grand->address, item, 0.0, 0.0, 0.0, 0.0, offset_top, 0,
+                  reinterpret_cast<void*>(&OnStickyHeaderStickOnTop));
+              if (!Dart_IsError(header)) item = header;
+            }
+            grandchildren.push_back(item);
+          }
+          Dart_Handle section_children =
+              Dart_NewList(static_cast<intptr_t>(grandchildren.size()));
+          for (size_t i = 0; i < grandchildren.size(); i++) {
+            Dart_ListSetAt(section_children, static_cast<intptr_t>(i),
+                           grandchildren[i]);
+          }
+          Dart_Handle section = scroll_sticky_section(
+              section_children, 1, child->style.padding[0],
+              child->style.padding[1], child->style.padding[2],
+              child->style.padding[3]);
+          if (!Dart_IsError(section)) {
+            child_widgets.push_back(section);
+            child_nodes.push_back(nullptr);
+            has_sticky_child = true;
+            has_sticky_section_child = true;
+            has_sliver_child = true;
+            continue;
+          }
+          ReportDartError("appservice NewStickySection", section);
         }
         // A scroll view's children live under Flutter's ListView, not under a
         // YGConnector, so they must be top-level YGNodes (no ParentDataWidget).
@@ -6654,6 +6753,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         newGridBuilder, is_scroll_view);
         if (widget == nullptr) continue;
         child_widgets.push_back(widget);
+        child_nodes.push_back(child);
+        if (child->style.position == 3) has_sticky_child = true;
       }
       // Fixed nodes were skipped above.  At the page root they become direct
       // children of the root connector and use viewport-relative layout.
@@ -6680,24 +6781,65 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         }
       }
       if (is_scroll_view) {
-        Dart_Handle list =
-            Dart_NewList(static_cast<intptr_t>(child_widgets.size()));
-        for (size_t i = 0; i < child_widgets.size(); i++) {
-          Dart_ListSetAt(list, static_cast<intptr_t>(i), child_widgets[i]);
+        // Sticky children become pinned-header slivers inside a StickySection,
+        // which requires a CustomScrollView (type 3).
+        Dart_Handle list = Dart_Null();
+        uint8_t scroll_type = has_sliver_child ? 3 : 0;
+        if (has_sticky_child && !has_sticky_section_child) {
+          if (scroll_sticky_header != nullptr &&
+              scroll_sticky_section != nullptr) {
+            Dart_Handle slivers = Dart_NewList(
+                static_cast<intptr_t>(child_widgets.size()));
+            for (size_t i = 0; i < child_widgets.size(); i++) {
+              Dart_Handle item = child_widgets[i];
+              AppNode* child = child_nodes[i];
+              if (child != nullptr && child->style.position == 3) {
+                float offset_top = 0.0f;
+                if (!std::isnan(child->style.inset[0])) {
+                  offset_top = child->style.inset[0];
+                }
+                Dart_Handle header = scroll_sticky_header(
+                    child->address, item, 0.0, 0.0, 0.0, 0.0, offset_top, 0,
+                    reinterpret_cast<void*>(&OnStickyHeaderStickOnTop));
+                if (Dart_IsError(header)) {
+                  ReportDartError("appservice NewStickyHeader", header);
+                } else {
+                  item = header;
+                }
+              }
+              Dart_ListSetAt(slivers, static_cast<intptr_t>(i), item);
+            }
+            Dart_Handle section =
+                scroll_sticky_section(slivers, 1, 0.0, 0.0, 0.0, 0.0);
+            if (Dart_IsError(section)) {
+              ReportDartError("appservice NewStickySection", section);
+            } else {
+              list = Dart_NewList(1);
+              Dart_ListSetAt(list, 0, section);
+              scroll_type = 3;
+            }
+          }
+        } else if (has_sticky_section_child) {
+          scroll_type = 3;
+        }
+        if (Dart_IsNull(list)) {
+          list = Dart_NewList(static_cast<intptr_t>(child_widgets.size()));
+          for (size_t i = 0; i < child_widgets.size(); i++) {
+            Dart_ListSetAt(list, static_cast<intptr_t>(i), child_widgets[i]);
+          }
         }
         const bool scroll_x_attr = AttrBool(node, "scrollX", false);
         const bool scroll_y_attr = AttrBool(node, "scrollY", false);
         // List/grid slivers require a CustomScrollView; plain box children are
         // wrapped in SliverToBoxAdapter by SkylineScrollView.
-        const uint8_t scroll_type = has_sliver_child ? 3 : 0;
         if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
           std::fprintf(stderr,
                        "[ops-debug] scrollview #%u scrollX=%d scrollY=%d "
-                       "scrollEnabled=%d type=%u (slivers=%d)\n",
+                       "scrollEnabled=%d type=%u (slivers=%d sticky=%d)\n",
                        node->id, scroll_x_attr ? 1 : 0, scroll_y_attr ? 1 : 0,
                        AttrBool(node, "scrollEnabled", true) ? 1 : 0,
                        static_cast<unsigned>(scroll_type),
-                       has_sliver_child ? 1 : 0);
+                       has_sliver_child ? 1 : 0, has_sticky_child ? 1 : 0);
         }
         Dart_Handle scroll = newScrollView(
             node->address, node->id, scroll_type, scroll_x_attr ? 1 : 0,
