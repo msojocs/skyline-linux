@@ -54,6 +54,7 @@ const FIXTURES = [
   'appservice-gridview.ops.json',
   'appservice-listview.ops.json',
   'appservice-flex-basis.ops.json',
+  'appservice-box-sizing.ops.json',
 ];
 
 function prerequisites() {

@@ -2138,6 +2138,8 @@ struct AppStyle {
   float height = -1.0f;
   float width_percent = -1.0f;  // 0..1
   float height_percent = -1.0f;
+  // 0 = border-box (Skyline's effective default), 1 = content-box.
+  int box_sizing = 0;
   float min_width = 0.0f;
   float max_width = kInf;
   float min_height = 0.0f;
@@ -3721,6 +3723,8 @@ void ApplyDeclaration(AppStyle* style,
     style->align = ParseAlign(value);
   } else if (key == "align-self") {
     style->align_self = value == "auto" ? -1 : ParseAlign(value);
+  } else if (key == "box-sizing") {
+    style->box_sizing = LowerAscii(value) == "content-box" ? 1 : 0;
   } else if (key == "width" || key == "min-width" || key == "max-width" ||
              key == "height" || key == "min-height" || key == "max-height") {
     float px = -1.0f;
@@ -4553,6 +4557,40 @@ float BorderBoxExtra(const AppStyle& style, bool horizontal) {
   return pad + border;
 }
 
+// `width`/`height`/min/max are CSS content-box values when box-sizing is
+// content-box; the layout works in border-box units.
+bool IsContentBox(const AppStyle& style) { return style.box_sizing == 1; }
+
+float ContentBoxInset(const AppStyle& style, bool horizontal) {
+  return IsContentBox(style) ? BorderBoxExtra(style, horizontal) : 0.0f;
+}
+
+float DeclaredWidth(const AppStyle& style) {
+  return style.width >= 0.0f ? style.width + ContentBoxInset(style, true)
+                             : -1.0f;
+}
+
+float DeclaredHeight(const AppStyle& style) {
+  return style.height >= 0.0f ? style.height + ContentBoxInset(style, false)
+                              : -1.0f;
+}
+
+float MinBoxWidth(const AppStyle& style) {
+  return style.min_width + ContentBoxInset(style, true);
+}
+
+float MaxBoxWidth(const AppStyle& style) {
+  return style.max_width + ContentBoxInset(style, true);
+}
+
+float MinBoxHeight(const AppStyle& style) {
+  return style.min_height + ContentBoxInset(style, false);
+}
+
+float MaxBoxHeight(const AppStyle& style) {
+  return style.max_height + ContentBoxInset(style, false);
+}
+
 SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
                   bool stretch_h) {
   const AppStyle& style = node->style;
@@ -4570,9 +4608,9 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
 
   float width = -1.0f;
   if (style.width_percent >= 0.0f) {
-    width = avail_w * style.width_percent;
+    width = avail_w * style.width_percent + ContentBoxInset(style, true);
   } else if (style.width >= 0.0f) {
-    width = style.width;
+    width = DeclaredWidth(style);
   } else if (is_text) {
     width = static_cast<float>(TextIntrinsicWidth(text, style)) +
             BorderBoxExtra(style, true);
@@ -4580,17 +4618,17 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
     width = avail_w;
   }
   if (width >= 0.0f) {
-    if (width < style.min_width) width = style.min_width;
-    if (width > style.max_width) width = style.max_width;
+    if (width < MinBoxWidth(style)) width = MinBoxWidth(style);
+    if (width > MaxBoxWidth(style)) width = MaxBoxWidth(style);
   }
 
   // List/grid builders are slivers: Flutter positions their items, so measure
   // the builder box from its declared child count instead of recursing into
   // the (possibly huge) captured item table.
   if (IsListBuilderName(node->name) || IsGridBuilderName(node->name)) {
-    float height = style.height >= 0.0f ? style.height : -1.0f;
+    float height = style.height >= 0.0f ? DeclaredHeight(style) : -1.0f;
     if (height < 0.0f && style.height_percent >= 0.0f) {
-      height = avail_h * style.height_percent;
+      height = avail_h * style.height_percent + ContentBoxInset(style, false);
     }
     if (height < 0.0f) {
       int child_count = 0;
@@ -4615,6 +4653,7 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
       } else {
         height = static_cast<float>(child_count * child_height);
       }
+      height += ContentBoxInset(style, false);
     }
     if (width < 0.0f) width = stretch_w ? avail_w : 0.0f;
     node->measured_w = width;
@@ -4630,10 +4669,12 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
         node->image_dl->width() > 0) {
       const double ratio = static_cast<double>(node->image_dl->height()) /
                            static_cast<double>(node->image_dl->width());
-      float height = static_cast<float>(width * ratio) +
+      const float content_width =
+          std::max(0.0f, width - BorderBoxExtra(style, true));
+      float height = static_cast<float>(content_width * ratio) +
                      BorderBoxExtra(style, false);
-      if (height < style.min_height) height = style.min_height;
-      if (height > style.max_height) height = style.max_height;
+      if (height < MinBoxHeight(style)) height = MinBoxHeight(style);
+      if (height > MaxBoxHeight(style)) height = MaxBoxHeight(style);
       node->measured_w = width;
       node->measured_h = height;
       return SizeF{width, height};
@@ -4645,11 +4686,11 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
                                           : static_cast<float>(TextIntrinsicWidth(text, style));
     const int lines = CountTextLines(text, content_w, style);
     float height = style.height >= 0.0f
-                       ? style.height
+                       ? DeclaredHeight(style)
                        : static_cast<float>(lines * TextLineHeight(style)) +
                              BorderBoxExtra(style, false);
-    if (height < style.min_height) height = style.min_height;
-    if (height > style.max_height) height = style.max_height;
+    if (height < MinBoxHeight(style)) height = MinBoxHeight(style);
+    if (height > MaxBoxHeight(style)) height = MaxBoxHeight(style);
     if (width < 0.0f) width = content_w + BorderBoxExtra(style, true);
     node->measured_w = width;
     node->measured_h = height;
@@ -4668,9 +4709,10 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
     const float cross_gap = style.row ? style.row_gap : style.column_gap;
     const float explicit_height =
         style.height >= 0.0f
-            ? style.height
+            ? DeclaredHeight(style)
             : (style.height_percent >= 0.0f
-                   ? avail_h * style.height_percent
+                   ? avail_h * style.height_percent +
+                         ContentBoxInset(style, false)
                    : -1.0f);
     const float wrap_limit =
         style.wrap
@@ -4759,22 +4801,22 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
   const float extra_h = BorderBoxExtra(style, false);
   if (width < 0.0f) {
     width = content.w + extra_w;
-    if (width < style.min_width) width = style.min_width;
-    if (width > style.max_width) width = style.max_width;
+    if (width < MinBoxWidth(style)) width = MinBoxWidth(style);
+    if (width > MaxBoxWidth(style)) width = MaxBoxWidth(style);
   }
   float height = -1.0f;
   if (style.height_percent >= 0.0f) {
-    height = avail_h * style.height_percent;
+    height = avail_h * style.height_percent + ContentBoxInset(style, false);
   } else if (style.height >= 0.0f) {
-    height = style.height;
+    height = DeclaredHeight(style);
   } else if (stretch_h) {
     height = avail_h;
   }
   if (height < 0.0f) {
     SizeF remeasured = measure_children();
     height = remeasured.h + extra_h;
-    if (height < style.min_height) height = style.min_height;
-    if (height > style.max_height) height = style.max_height;
+    if (height < MinBoxHeight(style)) height = MinBoxHeight(style);
+    if (height > MaxBoxHeight(style)) height = MaxBoxHeight(style);
   }
 
   node->measured_w = width;
@@ -4806,8 +4848,8 @@ float ResolveFlexBasis(const AppStyle& style,
   } else if (!std::isnan(style.flex_basis)) {
     basis = style.flex_basis;
   }
-  const float min_main = row ? style.min_width : style.min_height;
-  const float max_main = row ? style.max_width : style.max_height;
+  const float min_main = row ? MinBoxWidth(style) : MinBoxHeight(style);
+  const float max_main = row ? MaxBoxWidth(style) : MaxBoxHeight(style);
   if (basis < min_main) basis = min_main;
   if (basis > max_main) basis = max_main;
   return std::max(0.0f, basis);
@@ -4886,7 +4928,7 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     layout.w = measured.w;
     layout.h = measured.h;
     if (style.row) {
-      layout.w = std::max(layout.w, child->style.min_width);
+      layout.w = std::max(layout.w, MinBoxWidth(child->style));
       if (stretch_cross) layout.h = std::max(0.0f, content_h);
       layout.margin_main_start = child->style.margin[3];
       layout.margin_main_end = child->style.margin[1];
@@ -4980,8 +5022,8 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
           const float amount =
               overflow * (child.shrink * child.base_main) / line.shrink_weight;
           const float min_main =
-              style.row ? child.node->style.min_width
-                        : child.node->style.min_height;
+              style.row ? MinBoxWidth(child.node->style)
+                        : MinBoxHeight(child.node->style);
           child.main = std::max(min_main, child.main - amount);
           if (style.row) {
             child.w = child.main;
@@ -5104,8 +5146,8 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       if (child.shrink <= 0.0f) continue;
       const float amount =
           overflow * (child.shrink * child.base_main) / shrink_weight_sum;
-      const float min_main = style.row ? child.node->style.min_width
-                                       : child.node->style.min_height;
+      const float min_main = style.row ? MinBoxWidth(child.node->style)
+                                       : MinBoxHeight(child.node->style);
       child.main = std::max(min_main, child.main - amount);
       if (style.row) {
         child.w = child.main;
@@ -5211,8 +5253,8 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
                                  box_h >= 0.0f);
     float child_w = box_w >= 0.0f ? box_w : measured.w;
     float child_h = box_h >= 0.0f ? box_h : measured.h;
-    child_w = std::max(child_w, child->style.min_width);
-    child_h = std::max(child_h, child->style.min_height);
+    child_w = std::max(child_w, MinBoxWidth(child->style));
+    child_h = std::max(child_h, MinBoxHeight(child->style));
     child->measured_w = child_w;
     child->measured_h = child_h;
 

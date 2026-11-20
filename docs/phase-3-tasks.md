@@ -5,8 +5,8 @@
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
 > 核心验收：**22 / 22（100%）**
-> 长尾/外部阻塞：**5 / 12**
-> 全部任务：**27 / 34（79.4%）**
+> 长尾/外部阻塞：**6 / 12**
+> 全部任务：**28 / 34（82.4%）**
 >
 > 勾选项表示已在 Linux 回放运行时上实现并通过测试；标有 `blocked` 的任务
 > 依赖外部环境或私有引擎能力。
@@ -17,8 +17,8 @@
 | --- | ---: | ---: | ---: |
 | A. 原始阶段 3 验收项 | 8 | 8 | 100% |
 | B. 后续运行时增量 | 14 | 14 | 100% |
-| C. 长尾 / 外部阻塞 | 5 | 12 | 41.7% |
-| **合计** | **27** | **34** | **79.4%** |
+| C. 长尾 / 外部阻塞 | 6 | 12 | 50.0% |
+| **合计** | **28** | **34** | **82.4%** |
 
 ## A. 原始阶段 3 验收项（8 / 8）
 
@@ -64,15 +64,15 @@
 - [x] **B13** 资源路径缓存（`LoadResourceSync`/`Async`，≤4 MB）
 - [x] **B14** L5 夹具扩展（transform-origin/fixed-scroll/align-gap/flex-wrap/order/overflow）
 
-## C. 长尾 / 外部阻塞（5 / 12）
+## C. 长尾 / 外部阻塞（6 / 12）
 
 - [x] **C1** 官方 Windows appservice guest 的真实 L5 采集与像素对比
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
     `skyline.node`，窗口就绪后经 `notifyAppLaunch` + `PageContext` 回放夹具操作，
     从共享内存读取 640x480 帧。原始 Windows 帧为 BGRA，工具统一转为 RGBA。
-  - `spec/l5-baseline.win32.json` 保存 14 个夹具的 zlib 压缩帧、样本点与容差；
+  - `spec/l5-baseline.win32.json` 保存 15 个夹具的 zlib 压缩帧、样本点与容差；
     `npm run test:l5` 在 Linux 以 dpr=2 重放同一夹具并逐像素比较。
-  - 结果：8 个夹具逐像素完全一致，`shadow` 最大差 1；`overflow`/`fixed-scroll`
+  - 结果：9 个夹具逐像素完全一致，`shadow` 最大差 1；`overflow`/`fixed-scroll`
     失配率 < 0.2%（裁剪/滚动边缘）；`transform3d` 存在 3D 变换保真差异；
     `gridview`/`listview` 的合成 op 流无法触发官方 native builder 回调，标记为
     不可比。详见 `docs/feasibility.md` §3.1。
@@ -120,7 +120,16 @@
     none/scale-down 结果；`<image>` 的 `objectPosition` 属性也可覆盖。
   - `test:ops` 新增 4 个 contain 盒（object-position left/right、background-
     position center/right-bottom）像素用例（54 / 54）。
-- [ ] **C6** `box-sizing`（`content-box`）
+- [x] **C6** `box-sizing`（`content-box`）
+  - `box-sizing: border-box|content-box` 解析；默认保持 Skyline 现有的
+    border-box 行为，`content-box` 显式 opt-in。
+  - content-box 下 `width`/`height`/`min/max-*`（px/%）按内容盒解析，布局统一
+    换算为 border-box；padding/border 不再压缩内容。
+  - 子节点定位、flex base size、absolute 尺寸与文本换行宽度均使用换算后的
+    border-box。
+  - `test:ops` 新增 content-box / border-box 对照用例（55 / 55）；
+    L5 夹具 `appservice-box-sizing.ops.json` 与官方 Windows 帧逐像素一致
+    （maxDelta=0）。
 - [ ] **C7** 百分比 `padding` / `margin`
 - [ ] **C8** `position: sticky`
 - [ ] **C9** radial / conic gradient
@@ -132,8 +141,8 @@
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **149 / 173** | 24 skipped，0 fail |
-| `npm run test:ops` | **54 / 54** | appservice 操作流回放 |
+| `npm test` | **150 / 174** | 24 skipped，0 fail |
+| `npm run test:ops` | **55 / 55** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

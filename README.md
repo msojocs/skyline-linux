@@ -30,7 +30,8 @@
 > `--animate-ms` 驱动 JS worklet/derived value 采样、`align-self`/`order`/按轴
 > gap/`flex-wrap`/`align-content`、`flex-basis`/`flex-shrink`、逐边 border、
 > `overflow: hidden` 裁剪、逐角圆角、资源路径缓存与
-> `background-position`/`object-position`。L5 已接入官方 Windows
+> `background-position`/`object-position`、`box-sizing: content-box`。
+> L5 已接入官方 Windows
 > 引擎的真实帧基线
 > （`spec/l5-baseline.win32.json`，Wine 渲染进程 + dpr=2 采集）。
 > 阶段 3 任务清单与 x/y 进度见 [docs/phase-3-tasks.md](docs/phase-3-tasks.md)。
@@ -71,7 +72,7 @@ L1–L4 可在本仓库直接运行；L5 已有 Linux 基线与**官方 Windows 
 （`npm run test:l5`）。`tools/l5-windows.js` 在 Wine 渲染进程中以 dpr=2 启动官方
 `skyline.node`，经 `notifyAppLaunch` + `PageContext` 回放夹具并从共享内存读取帧
 （Windows 原始帧为 BGRA，工具转为 RGBA），结果写入
-`spec/l5-baseline.win32.json`。14 个夹具中 8 个逐像素完全一致、`shadow` 最大差 1，`overflow`/
+`spec/l5-baseline.win32.json`。15 个夹具中 9 个逐像素完全一致、`shadow` 最大差 1，`overflow`/
 `fixed-scroll` 仅有边缘级差异，剩余差异见 `docs/feasibility.md` §3.1。
 
 ## 快速开始
@@ -156,8 +157,8 @@ npm run test:contract
 ### 当前结果（2026-11-20）
 
 ```
-npm test: 169 tests, 145 pass, 0 fail, 24 skipped
-npm run test:ops: 50 tests, 50 pass
+npm test: 174 tests, 150 pass, 0 fail, 24 skipped
+npm run test:ops: 55 tests, 55 pass
 npm run test:l5: 2 tests, 2 pass (Linux 确定性基线 + Windows 逐像素容差比较)
 ```
 
@@ -283,7 +284,7 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   `align-self`/`order`/按轴 gap/`flex-wrap`/`align-content`、`flex-basis`
   （px/%/auto）与 `flex-shrink` 缩放收缩、逐边 border、
   `overflow: hidden` 裁剪、逐角圆角与资源路径缓存、`background-position` /
-  `object-position`，以及私有 `dart:ui` 文本编码
+  `object-position`、`box-sizing: content-box`，以及私有 `dart:ui` 文本编码
   标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`，按官方位布局写入
   native 并在 SkParagraph 中应用行框背景/选区）、native view 通道
   （`<texture>` → `NewTexture`/`TextureDispose`，指针经

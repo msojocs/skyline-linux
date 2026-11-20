@@ -2269,3 +2269,37 @@ test('appservice ops: flex-basis and flex-shrink size items', {
   assert.deepEqual(pixelAt(pixels, 80, 200), [255, 136, 0, 255], 'auto basis');
   assert.deepEqual(pixelAt(pixels, 319, 200), [255, 136, 0, 255], 'grow end');
 });
+
+test('appservice ops: box-sizing content-box adds padding and border', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-box-sizing.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // content-box: 100x60 content + 10px padding + 5px border -> 130x90.
+  assert.deepEqual(pixelAt(pixels, 2, 2), [0, 0, 0, 255], 'outer border');
+  assert.deepEqual(pixelAt(pixels, 20, 20), [0, 0, 255, 255], 'child at content origin');
+  assert.deepEqual(pixelAt(pixels, 40, 40), [255, 0, 0, 255], 'content box');
+  assert.deepEqual(pixelAt(pixels, 120, 80), [255, 0, 0, 255], 'padding area');
+  assert.deepEqual(pixelAt(pixels, 128, 40), [0, 0, 0, 255], 'right border');
+  assert.deepEqual(pixelAt(pixels, 60, 88), [0, 0, 0, 255], 'bottom border');
+  assert.deepEqual(pixelAt(pixels, 60, 92), [255, 255, 255, 255], 'content-box ends at 90');
+  assert.deepEqual(pixelAt(pixels, 140, 10), [255, 255, 255, 255], 'gap');
+
+  // border-box: 100x60 total; content is 70x30 starting at (15,15).
+  assert.deepEqual(pixelAt(pixels, 162, 2), [0, 0, 0, 255], 'border-box outer border');
+  assert.deepEqual(pixelAt(pixels, 180, 20), [0, 0, 255, 255], 'child at content origin');
+  assert.deepEqual(pixelAt(pixels, 200, 40), [255, 0, 0, 255], 'border-box content');
+  assert.deepEqual(pixelAt(pixels, 250, 40), [255, 0, 0, 255], 'padding area');
+  assert.deepEqual(pixelAt(pixels, 200, 58), [0, 0, 0, 255], 'bottom border');
+  assert.deepEqual(pixelAt(pixels, 200, 62), [255, 255, 255, 255], 'border-box ends at 60');
+  assert.deepEqual(pixelAt(pixels, 270, 70), [255, 255, 255, 255], 'right of border-box');
+});

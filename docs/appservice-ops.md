@@ -389,7 +389,8 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
   `initial`；`flex-basis` 支持 px/%/`auto`/`content`/`0`。
 - 定位：`position: absolute|fixed`、`top/right/bottom/left`（px/%）、`z-index`
 - 盒模型：`width/height`（px/%/auto）、`min/max-*`、`padding`/`margin` 及四边，
-  `border`/`border-width`/`border-color`、`border-radius`
+  `border`/`border-width`/`border-color`、`border-radius`、
+  `box-sizing: border-box|content-box`（默认保持 Skyline 的 border-box 语义）
 - 绘制：`background`/`background-color`、`background-image`、
   `background-size`、`background-repeat`、`background-position`、
   `object-fit`、`object-position`、`opacity`、`transform`
@@ -484,6 +485,8 @@ npm run test:ops
 - `background/object position`：8×8 四象限位图在 contain 盒内按
   `object-position:left top` / `right bottom` 与 `background-position:center` /
   `right bottom` 定位，验证图像起点与留白像素。
+- `box-sizing`：100×60 + 10px padding + 5px border 的 `content-box` 节点占
+  130×90，`border-box` 节点占 100×60；内容原点、边框与留白像素一致。
 - `network image`：本地 HTTP server -> `RequestHttpResource` -> 解码 -> 重建
   页面 -> 四象限像素。
 - `host keyboard channel`：`--key-script` 触发 `FlutterEngineSendKeyEvent` 与
@@ -502,8 +505,9 @@ npm run test:ops
   （`DecoratedBoxUpdateColor/Border/Shadow/BorderSideRadius/Gradient/
   ClearGradient`）。flexbox 子集支持 `align-self`、`order`、`row-gap`/
   `column-gap`（含 `gap: r c`）、`flex-wrap` + `align-content`、`flex-basis`
-  （px/%/auto/0）与按 `flex-shrink * base` 缩放的溢出收缩，逐边
-  `border-width/color`，逐角 `border-radius`（px/%），以及 `overflow:
+  （px/%/auto/0）与按 `flex-shrink * base` 缩放的溢出收缩、
+  `box-sizing: content-box`，逐边 `border-width/color`，逐角
+  `border-radius`（px/%），以及 `overflow:
   hidden/clip`（`NewClipRRect`，圆角增量走 `ClipRRectUpdateRadius`）。
 - `transition` 已回放：CSS `transition`/`transition-*` 解析为属性掩码、时长、
   延迟与缓动，16ms 时间线通过 target/override 逐帧走
@@ -551,6 +555,6 @@ npm run test:ops
 - L5：Linux 侧确定性帧哈希与 `test/lib/l5.js` 容差比较已就绪
   （`npm run test:l5`）。官方 Windows 引擎帧由 `tools/l5-windows.js` 在
   Wine 渲染进程中以 dpr=2 采集，基线写入 `spec/l5-baseline.win32.json`；
-  Windows 原始帧为 BGRA，采集工具统一转 RGBA。8 个夹具逐像素完全一致（`shadow` 最大差 1），
+  Windows 原始帧为 BGRA，采集工具统一转 RGBA。9 个夹具逐像素完全一致（`shadow` 最大差 1），
   `overflow`/`fixed-scroll` 仅有边缘级差异，`transform3d` 与
   `gridview`/`listview` 的已知差异见 `docs/feasibility.md` §3.1。
