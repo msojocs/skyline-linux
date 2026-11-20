@@ -1,0 +1,26 @@
+{
+  "ops": [
+    { "op": "createElement", "id": 2, "tag": "empty", "name": "page" },
+    {
+      "op": "appendStyleSheet",
+      "index": 1,
+      "css": ".page{width:320px;height:240px;background:#FFFFFF;} .pbox{position:absolute;left:0px;top:0px;width:200px;height:100px;padding:10%;background:#FF0000;} .pchild{width:20px;height:20px;background:#0000FF;} .mbox{position:absolute;left:0px;top:120px;width:200px;height:80px;background:#00AA00;} .mchild{margin:10% 25%;width:20px;height:20px;background:#FFFF00;}"
+    },
+    { "op": "createElement", "id": 3, "tag": "empty", "name": "view" },
+    { "op": "addClass", "id": 3, "prefix": "pbox", "name": 1 },
+    { "op": "createElement", "id": 4, "tag": "empty", "name": "view" },
+    { "op": "addClass", "id": 4, "prefix": "pchild", "name": 1 },
+    { "op": "appendChild", "id": 3, "child": 4 },
+    { "op": "createElement", "id": 5, "tag": "empty", "name": "view" },
+    { "op": "addClass", "id": 5, "prefix": "mbox", "name": 1 },
+    { "op": "createElement", "id": 6, "tag": "empty", "name": "view" },
+    { "op": "addClass", "id": 6, "prefix": "mchild", "name": 1 },
+    { "op": "appendChild", "id": 5, "child": 6 },
+    { "op": "appendChild", "id": 2, "child": 3 },
+    { "op": "appendChild", "id": 2, "child": 5 },
+    { "op": "createElement", "id": 1, "tag": "empty", "name": "body" },
+    { "op": "appendChild", "id": 1, "child": 2 },
+    { "op": "attach", "root": 1 },
+    { "op": "startRender" }
+  ]
+}

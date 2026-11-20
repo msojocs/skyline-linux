@@ -2084,6 +2084,12 @@ struct AppStyle {
   int order = 0;
   float padding[4] = {0, 0, 0, 0};  // top, right, bottom, left
   float margin[4] = {0, 0, 0, 0};
+  // CSS percentage padding/margin, resolved against the containing block width
+  // during measurement.  NaN = not a percentage.
+  float padding_percent[4] = {std::nanf(""), std::nanf(""), std::nanf(""),
+                              std::nanf("")};
+  float margin_percent[4] = {std::nanf(""), std::nanf(""), std::nanf(""),
+                             std::nanf("")};
   float gap = 0.0f;
   float row_gap = 0.0f;
   float column_gap = 0.0f;
@@ -3747,51 +3753,56 @@ void ApplyDeclaration(AppStyle* style,
     }
   } else if (key == "padding" || key == "margin") {
     const std::vector<std::string> parts = SplitWhitespace(value);
-    float values[4] = {0, 0, 0, 0};
+    if (parts.empty()) return;
+    float px_values[4] = {0, 0, 0, 0};
+    float pct_values[4] = {std::nanf(""), std::nanf(""), std::nanf(""),
+                           std::nanf("")};
     for (size_t i = 0; i < parts.size() && i < 4; i++) {
       float px = 0.0f;
       float percent = -1.0f;
       if (!ParseLength(parts[i], &px, &percent)) return;
-      // Percentage padding/margin is rare in the recorded pages; use px only.
-      values[i] = px > 0 ? px : 0.0f;
+      if (percent >= 0.0f) {
+        pct_values[i] = percent;
+        px_values[i] = 0.0f;
+      } else {
+        px_values[i] = px > 0.0f ? px : 0.0f;
+      }
     }
     const size_t n = parts.size();
-    float top = values[0];
-    float right = n > 1 ? values[1] : top;
-    float bottom = n > 2 ? values[2] : top;
-    float left = n > 3 ? values[3] : right;
-    if (n == 2) bottom = top;
-    if (n == 3) left = right;
-    float* target = style->padding;
-    if (key == "margin") target = style->margin;
-    target[0] = top;
-    target[1] = right;
-    target[2] = bottom;
-    target[3] = left;
-  } else if (key == "padding-top") {
-    float dummy = -1.0f;
-    ParseLength(value, &style->padding[0], &dummy);
-  } else if (key == "padding-right") {
-    float dummy = -1.0f;
-    ParseLength(value, &style->padding[1], &dummy);
-  } else if (key == "padding-bottom") {
-    float dummy = -1.0f;
-    ParseLength(value, &style->padding[2], &dummy);
-  } else if (key == "padding-left") {
-    float dummy = -1.0f;
-    ParseLength(value, &style->padding[3], &dummy);
-  } else if (key == "margin-top") {
-    float dummy = -1.0f;
-    ParseLength(value, &style->margin[0], &dummy);
-  } else if (key == "margin-right") {
-    float dummy = -1.0f;
-    ParseLength(value, &style->margin[1], &dummy);
-  } else if (key == "margin-bottom") {
-    float dummy = -1.0f;
-    ParseLength(value, &style->margin[2], &dummy);
-  } else if (key == "margin-left") {
-    float dummy = -1.0f;
-    ParseLength(value, &style->margin[3], &dummy);
+    const int top = 0;
+    const int right = n > 1 ? 1 : 0;
+    const int bottom = n > 2 ? 2 : 0;
+    const int left = n > 3 ? 3 : (n > 1 ? 1 : 0);
+    float* target_px = key == "margin" ? style->margin : style->padding;
+    float* target_pct =
+        key == "margin" ? style->margin_percent : style->padding_percent;
+    const int order[4] = {top, right, bottom, left};
+    for (int i = 0; i < 4; i++) {
+      target_px[i] = px_values[order[i]];
+      target_pct[i] = pct_values[order[i]];
+    }
+  } else if (key == "padding-top" || key == "padding-right" ||
+             key == "padding-bottom" || key == "padding-left" ||
+             key == "margin-top" || key == "margin-right" ||
+             key == "margin-bottom" || key == "margin-left") {
+    const int side = EndsWith(key, "-top")      ? 0
+                     : EndsWith(key, "-right")  ? 1
+                     : EndsWith(key, "-bottom") ? 2
+                                                 : 3;
+    float px = 0.0f;
+    float percent = -1.0f;
+    if (!ParseLength(value, &px, &percent)) return;
+    float* target_px =
+        StartsWith(key, "margin") ? style->margin : style->padding;
+    float* target_pct = StartsWith(key, "margin") ? style->margin_percent
+                                                  : style->padding_percent;
+    if (percent >= 0.0f) {
+      target_pct[side] = percent;
+      target_px[side] = 0.0f;
+    } else {
+      target_px[side] = px > 0.0f ? px : 0.0f;
+      target_pct[side] = std::nanf("");
+    }
   } else if (key == "gap" || key == "column-gap" || key == "row-gap") {
     if (key == "gap") {
       const std::vector<std::string> parts = SplitWhitespace(value);
@@ -4591,15 +4602,32 @@ float MaxBoxHeight(const AppStyle& style) {
   return style.max_height + ContentBoxInset(style, false);
 }
 
+// CSS percentage padding/margin (both axes) resolve against the containing
+// block's width.  Overwrites the px fields so all layout/paint call sites keep
+// using the same arrays.
+void ResolveBoxEdges(AppStyle* style, float containing_width) {
+  for (int i = 0; i < 4; i++) {
+    if (!std::isnan(style->padding_percent[i])) {
+      style->padding[i] =
+          std::max(0.0f, containing_width * style->padding_percent[i]);
+    }
+    if (!std::isnan(style->margin_percent[i])) {
+      style->margin[i] = containing_width * style->margin_percent[i];
+    }
+  }
+}
+
 SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
-                  bool stretch_h) {
-  const AppStyle& style = node->style;
+                  bool stretch_h, float containing_w = -1.0f) {
   SizeF size{0.0f, 0.0f};
-  if (node->released || style.display_none) {
+  if (node->released || node->style.display_none) {
     node->measured_w = 0.0f;
     node->measured_h = 0.0f;
     return size;
   }
+  if (containing_w < 0.0f) containing_w = avail_w;
+  ResolveBoxEdges(&node->style, containing_w);
+  const AppStyle& style = node->style;
 
   const bool is_text = node->tag == "text";
   std::string text_storage;
@@ -5250,7 +5278,7 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     }
     SizeF measured = MeasureNode(child, box_w >= 0.0f ? box_w : inset_w,
                                  box_w >= 0.0f, box_h >= 0.0f ? box_h : inset_h,
-                                 box_h >= 0.0f);
+                                 box_h >= 0.0f, inset_w);
     float child_w = box_w >= 0.0f ? box_w : measured.w;
     float child_h = box_h >= 0.0f ? box_h : measured.h;
     child_w = std::max(child_w, MinBoxWidth(child->style));

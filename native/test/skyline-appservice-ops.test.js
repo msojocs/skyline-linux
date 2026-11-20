@@ -2303,3 +2303,33 @@ test('appservice ops: box-sizing content-box adds padding and border', {
   assert.deepEqual(pixelAt(pixels, 200, 62), [255, 255, 255, 255], 'border-box ends at 60');
   assert.deepEqual(pixelAt(pixels, 270, 70), [255, 255, 255, 255], 'right of border-box');
 });
+
+test('appservice ops: percentage padding and margin use containing width', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-percent-box.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // padding:10% -> 32px on all sides (10% of the 320px containing block width).
+  assert.deepEqual(pixelAt(pixels, 2, 2), [255, 0, 0, 255], 'padding area');
+  assert.deepEqual(pixelAt(pixels, 33, 33), [0, 0, 255, 255], 'child at padded content origin');
+  assert.deepEqual(pixelAt(pixels, 40, 40), [0, 0, 255, 255], 'child body');
+  assert.deepEqual(pixelAt(pixels, 60, 60), [255, 0, 0, 255], 'content background');
+  assert.deepEqual(pixelAt(pixels, 199, 99), [255, 0, 0, 255], 'border-box edge');
+  assert.deepEqual(pixelAt(pixels, 210, 10), [255, 255, 255, 255], 'outside');
+
+  // margin:10% 25% -> 20px vertical / 50px horizontal (10%/25% of 200px
+  // containing width, not the 40px height).
+  assert.deepEqual(pixelAt(pixels, 55, 145), [255, 255, 0, 255], 'margin offsets child');
+  assert.deepEqual(pixelAt(pixels, 10, 130), [0, 170, 0, 255], 'margin left');
+  assert.deepEqual(pixelAt(pixels, 100, 130), [0, 170, 0, 255], 'margin top');
+  assert.deepEqual(pixelAt(pixels, 210, 130), [255, 255, 255, 255], 'outside margin box');
+});
