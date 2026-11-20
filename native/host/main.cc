@@ -73,6 +73,9 @@ struct Options {
   int timeout_ms = 15000;
   int frames = 1;
   std::string pixel_format = "bgra";
+  // AOT snapshot (`libapp.so`) for release engines.  When omitted the host
+  // looks for `<assets>/libapp.so` and `<assets>/../libapp.so`.
+  std::string aot_library;
   // Optional custom Dart entrypoint and its arguments (FlutterProjectArgs).
   std::string entrypoint;
   std::vector<std::string> entrypoint_args;
@@ -84,6 +87,15 @@ struct Options {
   std::string pointer_script;
   // Timed keyboard events used to exercise the key input path without GTK.
   std::string key_script;
+  // Timed viewport metric updates used to exercise resize handling.
+  std::string resize_script;
+  struct ResizeEvent {
+    int at_ms = 0;
+    double width = 0.0;
+    double height = 0.0;
+    double dpr = 0.0;  // 0 = keep the initial ratio
+  };
+  std::vector<ResizeEvent> resize_events;
   struct KeyScriptEvent {
     int at_ms = 0;
     FlutterKeyEventType type = kFlutterKeyEventTypeDown;
@@ -190,7 +202,7 @@ bool ParseDouble(const char* value, double* out) {
 void PrintUsage(const char* argv0) {
   std::fprintf(stderr,
                "usage: %s --assets DIR --icu FILE [options]\n"
-               "  --assets DIR        directory containing kernel_blob.bin\n"
+               "  --assets DIR        directory containing kernel_blob.bin / libapp.so\n"
                "  --icu FILE          icudtl.dat\n"
                "  --width N           logical width (default 320)\n"
                "  --height N          logical height (default 240)\n"
@@ -201,11 +213,13 @@ void PrintUsage(const char* argv0) {
                "  --frames N          Nth frame (default 1); 0 = capture until timeout, keep last\n"
                "  --entrypoint NAME   custom Dart entrypoint (default main)\n"
                "  --entrypoint-arg V  Dart entrypoint argument (repeatable)\n"
+               "  --aot-library FILE  libapp.so for release engines (default: auto)\n"
                "  --no-shutdown       exit after the first frame (skip engine shutdown)\n"
                "  --pointer-script F  timed pointer events: '<ms> <phase> <x> <y> [device]'\n"
                "                      phase: add/down/move/up/cancel/hover or scroll dx dy;\n"
                "                      prefix with m for mouse (mdown/mmove/mup)\n"
-               "  --key-script F      timed key events: '<ms> <down|up|repeat> <physical> <logical> [char]'\n",
+               "  --key-script F      timed key events: '<ms> <down|up|repeat> <physical> <logical> [char]'\n"
+               "  --resize-script F   timed viewport updates: '<ms> <width> <height> [dpr]'\n",
                argv0);
 }
 
@@ -327,6 +341,39 @@ bool ParseKeyScript(const std::string& path,
   return true;
 }
 
+bool ParseResizeScript(const std::string& path,
+                       std::vector<Options::ResizeEvent>* out) {
+  std::ifstream file(path);
+  if (!file) {
+    std::fprintf(stderr, "cannot read resize script: %s\n", path.c_str());
+    return false;
+  }
+  std::string line;
+  int line_number = 0;
+  while (std::getline(file, line)) {
+    ++line_number;
+    const size_t comment = line.find('#');
+    if (comment != std::string::npos) line.resize(comment);
+    std::istringstream stream(line);
+    Options::ResizeEvent event;
+    if (!(stream >> event.at_ms >> event.width >> event.height)) continue;
+    if (!(event.width > 0.0) || !(event.height > 0.0)) {
+      std::fprintf(stderr, "resize script line %d: invalid size\n",
+                   line_number);
+      return false;
+    }
+    if (stream >> event.dpr) {
+      if (!(event.dpr > 0.0)) {
+        std::fprintf(stderr, "resize script line %d: invalid dpr\n",
+                     line_number);
+        return false;
+      }
+    }
+    out->push_back(event);
+  }
+  return true;
+}
+
 bool ParseOptions(int argc, char** argv, Options* opts) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -387,6 +434,14 @@ bool ParseOptions(int argc, char** argv, Options* opts) {
       const char* v = next("--key-script");
       if (!v) return false;
       opts->key_script = v;
+    } else if (arg == "--resize-script") {
+      const char* v = next("--resize-script");
+      if (!v) return false;
+      opts->resize_script = v;
+    } else if (arg == "--aot-library") {
+      const char* v = next("--aot-library");
+      if (!v) return false;
+      opts->aot_library = v;
     } else if (arg == "--no-shutdown") {
       opts->no_shutdown = true;
     } else {
@@ -410,6 +465,10 @@ bool ParseOptions(int argc, char** argv, Options* opts) {
   }
   if (!opts->key_script.empty() &&
       !ParseKeyScript(opts->key_script, &opts->key_events)) {
+    return false;
+  }
+  if (!opts->resize_script.empty() &&
+      !ParseResizeScript(opts->resize_script, &opts->resize_events)) {
     return false;
   }
   if (opts->pixel_format != "bgra" && opts->pixel_format != "rgba") {
@@ -462,8 +521,31 @@ int main(int argc, char** argv) {
   if (!ParseOptions(argc, argv, &opts)) return kExitBadArguments;
 
   const std::string kernel = JoinPath(opts.assets, "kernel_blob.bin");
-  if (!FileExists(kernel)) {
-    std::fprintf(stderr, "missing kernel blob: %s\n", kernel.c_str());
+  const bool has_kernel = FileExists(kernel);
+  const bool force_aot = !opts.aot_library.empty();
+  bool use_aot = force_aot || !has_kernel;
+  std::string aot_library = opts.aot_library;
+  if (aot_library.empty()) {
+    const std::string candidates[] = {
+        JoinPath(opts.assets, "libapp.so"),
+        JoinPath(opts.assets, "../libapp.so"),
+    };
+    for (const std::string& candidate : candidates) {
+      if (FileExists(candidate)) {
+        aot_library = candidate;
+        break;
+      }
+    }
+  }
+  if (!has_kernel && (!use_aot || aot_library.empty() ||
+                      !FileExists(aot_library))) {
+    std::fprintf(stderr,
+                 "missing kernel blob and AOT snapshot: %s / libapp.so\n",
+                 kernel.c_str());
+    return kExitBadArguments;
+  }
+  if (use_aot && (aot_library.empty() || !FileExists(aot_library))) {
+    std::fprintf(stderr, "missing AOT snapshot: %s\n", aot_library.c_str());
     return kExitBadArguments;
   }
   if (!FileExists(opts.icu)) {
@@ -485,6 +567,20 @@ int main(int argc, char** argv) {
   args.struct_size = sizeof(FlutterProjectArgs);
   args.assets_path = opts.assets.c_str();
   args.icu_data_path = opts.icu.c_str();
+  FlutterEngineAOTData aot_data = nullptr;
+  if (use_aot && !aot_library.empty() && FileExists(aot_library)) {
+    FlutterEngineAOTDataSource source = {};
+    source.type = kFlutterEngineAOTDataSourceTypeElfPath;
+    source.elf_path = aot_library.c_str();
+    if (FlutterEngineCreateAOTData(&source, &aot_data) != kSuccess ||
+        aot_data == nullptr) {
+      std::fprintf(stderr, "cannot load AOT snapshot: %s\n",
+                   aot_library.c_str());
+      return kExitEngineRunFailed;
+    }
+    args.aot_data = aot_data;
+    std::fprintf(stderr, "[host] AOT snapshot: %s\n", aot_library.c_str());
+  }
   args.vsync_callback = &OnVsync;
   args.log_message_callback = &OnLogMessage;
   args.log_tag = "skyline_host";
@@ -513,6 +609,12 @@ int main(int argc, char** argv) {
                  static_cast<int>(run_result));
     return kExitEngineRunFailed;
   }
+  auto collect_aot = [&aot_data]() {
+    if (aot_data != nullptr) {
+      FlutterEngineCollectAOTData(aot_data);
+      aot_data = nullptr;
+    }
+  };
 
   FlutterWindowMetricsEvent metrics = {};
   metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
@@ -526,6 +628,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "FlutterEngineSendWindowMetricsEvent failed: %d\n",
                  static_cast<int>(metrics_result));
     FlutterEngineShutdown(engine);
+    collect_aot();
     return kExitEngineRunFailed;
   }
 
@@ -534,6 +637,7 @@ int main(int argc, char** argv) {
   const uint64_t pointer_start_ns = FlutterEngineGetCurrentTime();
   size_t next_pointer = 0;
   size_t next_key = 0;
+  size_t next_resize = 0;
   bool pointer_error_reported = false;
   bool got_frame = false;
   {
@@ -644,9 +748,43 @@ int main(int argc, char** argv) {
         ++next_key;
       }
 
+      // Apply scripted viewport updates (resize path).
+      while (next_resize < opts.resize_events.size()) {
+        const auto& scripted = opts.resize_events[next_resize];
+        const uint64_t now_ns = FlutterEngineGetCurrentTime();
+        const uint64_t due_ns =
+            pointer_start_ns + static_cast<uint64_t>(scripted.at_ms) * 1000000ull;
+        if (now_ns < due_ns) break;
+        const double dpr = scripted.dpr > 0.0 ? scripted.dpr : opts.dpr;
+        FlutterWindowMetricsEvent metrics = {};
+        metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
+        metrics.width =
+            static_cast<size_t>(std::ceil(scripted.width * dpr));
+        metrics.height =
+            static_cast<size_t>(std::ceil(scripted.height * dpr));
+        metrics.pixel_ratio = dpr;
+        metrics.view_id = 0;
+        lock.unlock();
+        const FlutterEngineResult resize_result =
+            FlutterEngineSendWindowMetricsEvent(engine, &metrics);
+        lock.lock();
+        if (resize_result != kSuccess) {
+          std::fprintf(stderr,
+                       "FlutterEngineSendWindowMetricsEvent (resize) failed: %d\n",
+                       static_cast<int>(resize_result));
+        }
+        std::fprintf(stderr,
+                     "[host] resize: at=%d %gx%g dpr=%g -> %zux%zu\n",
+                     scripted.at_ms, scripted.width, scripted.height, dpr,
+                     metrics.width, metrics.height);
+        ++next_resize;
+      }
+
       const bool pending_pointers = next_pointer < opts.pointer_events.size();
       const bool pending_keys = next_key < opts.key_events.size();
-      const bool pending_events = pending_pointers || pending_keys;
+      const bool pending_resizes = next_resize < opts.resize_events.size();
+      const bool pending_events =
+          pending_pointers || pending_keys || pending_resizes;
       const std::cv_status status =
           pending_events
               ? state.cv.wait_for(lock, std::chrono::milliseconds(5))
@@ -709,6 +847,7 @@ int main(int argc, char** argv) {
                  "timeout after %d ms: no software frame (vsync=%u present=%u)\n",
                  opts.timeout_ms, state.vsync_count, state.present_count);
     FlutterEngineShutdown(engine);
+    collect_aot();
     return kExitTimeout;
   }
 
@@ -718,6 +857,7 @@ int main(int argc, char** argv) {
   if (frame_size == 0 || state.rgba.size() != frame_size) {
     std::fprintf(stderr, "invalid captured frame\n");
     FlutterEngineShutdown(engine);
+    collect_aot();
     return kExitSharedMemory;
   }
 
@@ -726,12 +866,14 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "cannot open shared memory for key %s\n",
                  opts.shm_key.c_str());
     FlutterEngineShutdown(engine);
+    collect_aot();
     return kExitSharedMemory;
   }
   std::string error;
   if (!writer.WriteFrame(1, state.rgba.data(), frame_size, &error)) {
     std::fprintf(stderr, "cannot write shared memory: %s\n", error.c_str());
     FlutterEngineShutdown(engine);
+    collect_aot();
     return kExitSharedMemory;
   }
 
@@ -762,5 +904,6 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "FlutterEngineShutdown failed: %d\n",
                  static_cast<int>(shutdown_result));
   }
+  collect_aot();
   return kExitOk;
 }

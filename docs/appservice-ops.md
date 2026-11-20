@@ -124,7 +124,8 @@ tap 触发的 `setData` 会产生 attach 后的操作，录制器把它们写入
    `replaceChild`/`splice`/`release`）：重建 attach 根的子节点，经
    `YGConnectorUpdateChildren` 交换，再 `MarkYGNodeNeedsLayout`。
 2. **仅样式/文本变更**：逐节点 diff 计算样式，调用真实的细粒度回调：
-   - `DecoratedBoxUpdateColor` / `DecoratedBoxUpdateBorder`
+   - `DecoratedBoxUpdateColor` / `DecoratedBoxUpdateBorder` /
+     `DecoratedBoxUpdateShadow`
    - `OpacityUpdateOpacity`
    - `TextSpanUpdateText` / `TextColor` / `FontSize` / `FontWeight` /
      `FontStyle` / `LineHeight` / `LetterSpacing`
@@ -368,9 +369,12 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
 
 - flex：`display`（仅 `none`）、`flex-direction`、`justify-content`、
   `align-items`、`flex`、`gap`、`flex-wrap`（忽略）
+- 定位：`position: absolute|fixed`、`top/right/bottom/left`（px/%）、`z-index`
 - 盒模型：`width/height`（px/%/auto）、`min/max-*`、`padding`/`margin` 及四边，
   `border`/`border-width`/`border-color`、`border-radius`
-- 绘制：`background`/`background-color`、`opacity`、`object-fit`
+- 绘制：`background`/`background-color`、`opacity`、`object-fit`、`transform`
+  （`translate`/`scale`/`rotate`/`matrix`，绕元素中心）、`box-shadow`
+  （首层 offset/blur/spread/color/inset）
 - 文本：`font-size`、`font-weight`、`font-style`、`line-height`（px 或倍数）、
   `letter-spacing`、`text-align`、`-webkit-line-clamp`
 
@@ -383,6 +387,9 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
 - 容器默认 `display:flex; flex-direction:column; align-items:stretch`。
 - 两遍布局：先自底向上测量（文本按字号/字符宽度估算，支持换行），再自顶向下
   按 flex/justify/align/margin/padding 分配矩形。
+- `position: absolute/fixed` 子节点不参与 flex 流；在父 content box 上解析
+  `top/right/bottom/left`（px 或 %），同时给出 left+right（或 top+bottom）且未显式
+  设置宽高时拉伸到剩余空间。`transform` 只影响绘制，不改变布局。
 - 每个节点的 `top/left/width/height` 写入其 9-float yoga buffer；root 强制为
   视口尺寸（取自 `CreateWindow` 的 width/height）。
 - 文本测量是近似值（ASCII 0.56em、CJK 1.0em、空格 0.3em），用于在无字体度量
@@ -458,12 +465,18 @@ npm run test:ops
 - `host keyboard channel`：`--key-script` 触发 `FlutterEngineSendKeyEvent` 与
   `skyline/keyboard` 平台消息，运行时把 `A` 更新为 `Ab`；同时验证
   `UpdateKeyboardStatus`。
+- `absolute layout`：flow 子节点不受影响，right/top、left/bottom 与
+  left+right 拉伸三种绝对定位。
+- `CSS transforms`：`translate` 只移动绘制、`scale(0.5)` 绕中心缩放，布局槽位
+  保持不变。
+- `box-shadow`：`10px 10px 0 rgba(0,0,0,.5)` 在节点右/下边缘绘制 50% 黑阴影。
 
 ## 6. 当前边界
 
 - attach 后的样式/文本更新走细粒度回调；结构变更仍重建 attach 根子树。
-  渐变/阴影/圆角等属性更新与 root 自身样式尚未细粒度处理。
-- `position: absolute`、`transform`、`transition` 暂按普通流处理。
+  渐变/圆角等属性更新与 root 自身样式尚未细粒度处理（box-shadow 已支持）。
+- `transition` 动画、`transform` 的 3D/skew/perspective 变体暂未建模；静态
+  `translate`/`scale`/`rotate`/`matrix` 已接入。
 - builder 已按需 mount，但 item 仍来自录制时抓到的节点；滚动后才由 JS 产生的
   新 item 需要重新录制/追加到操作流。`ListBuilderInsertBefore`、
   `ListBuilderUpdateChildren` 等二次变更回调尚未回放。

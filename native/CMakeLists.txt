@@ -22,6 +22,18 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/bootstrap_js.h"
   "// Generated from src/bootstrap.js\n"
   "static const char kSkylineBootstrapJs[] = R\"SKYLINEJS(\n${SKYLINE_BOOTSTRAP_JS}\n)SKYLINEJS\";\n")
 
+# ---------------------------------------------------------------------------
+# Linux Flutter Engine (phase 2).  When the pinned engine has been built, the
+# N-API module links it and hosts windows in-process; otherwise it falls back
+# to StubEngine so contract tests still build on a source-only machine.
+# ---------------------------------------------------------------------------
+set(SKYLINE_ENGINE_ROOT
+  "${CMAKE_CURRENT_SOURCE_DIR}/engine/out/linux-x64-debug"
+  CACHE PATH "Staged libflutter_engine.so + flutter_embedder.h")
+set(SKYLINE_ENGINE_LIB "${SKYLINE_ENGINE_ROOT}/libflutter_engine.so")
+set(SKYLINE_ENGINE_HEADER "${SKYLINE_ENGINE_ROOT}/flutter_embedder.h")
+find_package(Threads REQUIRED)
+
 add_library(skyline_node MODULE
   src/main.cc
   src/engine_stub.cc
@@ -31,11 +43,37 @@ target_include_directories(skyline_node PRIVATE
   "${CMAKE_CURRENT_BINARY_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
+if(EXISTS "${SKYLINE_ENGINE_LIB}" AND EXISTS "${SKYLINE_ENGINE_HEADER}")
+  target_sources(skyline_node PRIVATE host/host_engine.cc)
+  target_include_directories(skyline_node PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/host"
+    "${SKYLINE_ENGINE_ROOT}"
+  )
+  target_compile_definitions(skyline_node PRIVATE
+    SKYLINE_HAVE_ENGINE=1
+    "SKYLINE_DEFAULT_ICU=\"${SKYLINE_ENGINE_ROOT}/icudtl.dat\""
+  )
+  target_link_libraries(skyline_node PRIVATE
+    "${SKYLINE_ENGINE_LIB}"
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
+  )
+  target_link_options(skyline_node PRIVATE
+    "-Wl,-rpath,${SKYLINE_ENGINE_ROOT}"
+  )
+  message(STATUS "skyline_node: Linux Flutter Engine backend at ${SKYLINE_ENGINE_ROOT}")
+else()
+  message(STATUS
+    "skyline_node: engine not built (${SKYLINE_ENGINE_ROOT}); using StubEngine. "
+    "Run native/engine/fetch-engine.sh && native/engine/build-engine.sh.")
+endif()
 set_target_properties(skyline_node PROPERTIES
   PREFIX ""
   SUFFIX ".node"
   OUTPUT_NAME "skyline"
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  BUILD_RPATH "${SKYLINE_ENGINE_ROOT}"
+  INSTALL_RPATH "$ORIGIN/../engine/out/linux-x64-debug"
 )
 # Node-API symbols are provided by the host process at load time.
 if(NOT APPLE)
@@ -85,15 +123,8 @@ endif()
 # `npm run native:build` keeps working without the multi-GiB checkout.
 # ---------------------------------------------------------------------------
 option(SKYLINE_BUILD_HOST "Build the headless Flutter host" ON)
-set(SKYLINE_ENGINE_ROOT
-  "${CMAKE_CURRENT_SOURCE_DIR}/engine/out/linux-x64-debug"
-  CACHE PATH "Staged libflutter_engine.so + flutter_embedder.h")
 
 if(SKYLINE_BUILD_HOST)
-  set(SKYLINE_ENGINE_LIB "${SKYLINE_ENGINE_ROOT}/libflutter_engine.so")
-  set(SKYLINE_ENGINE_HEADER "${SKYLINE_ENGINE_ROOT}/flutter_embedder.h")
-  find_package(Threads REQUIRED)
-
   if(EXISTS "${SKYLINE_ENGINE_LIB}" AND EXISTS "${SKYLINE_ENGINE_HEADER}")
     add_executable(skyline_host
       host/main.cc

@@ -1150,3 +1150,69 @@ test('appservice ops: recorded SPA navigation replays a route stack', {
     }
   }
 });
+
+test('appservice ops: absolute nodes use the parent content box', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-absolute.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // Red flow child is unaffected by the three absolute siblings.
+  assert.deepEqual(pixelAt(pixels, 10, 10), [255, 0, 0, 255]);
+  // right:20 top:20 width:50 height:50
+  assert.deepEqual(pixelAt(pixels, 260, 30), [0, 0, 255, 255]);
+  // left:10 bottom:10 width:100 height:60
+  assert.deepEqual(pixelAt(pixels, 20, 180), [0, 170, 0, 255]);
+  // left:20 right:20 top:130 height:20 stretches horizontally
+  assert.deepEqual(pixelAt(pixels, 160, 140), [255, 255, 0, 255]);
+  // Parent background outside the absolute boxes.
+  assert.deepEqual(pixelAt(pixels, 200, 200), [238, 238, 238, 255]);
+});
+
+test('appservice ops: CSS transforms paint without affecting flex flow', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-transform.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // translate(100px, 50px): the 100x100 green box keeps its flow slot but
+  // paints at (100,50).
+  assert.deepEqual(pixelAt(pixels, 10, 10), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 150, 100), [0, 170, 0, 255]);
+  // scale(0.5) around the centre of the second flow child (y=100..200).
+  assert.deepEqual(pixelAt(pixels, 50, 150), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 10, 150), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 10, 90), [255, 255, 255, 255]);
+});
+
+test('appservice ops: CSS box-shadow offsets paint behind the node', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-shadow.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  assert.deepEqual(pixelAt(pixels, 60, 60), [0, 170, 0, 255]);
+  // box-shadow: 10px 10px 0 rgba(0,0,0,.5) -> 50% black over white.
+  assert.deepEqual(pixelAt(pixels, 125, 60), [128, 128, 128, 255]);
+  assert.deepEqual(pixelAt(pixels, 60, 125), [128, 128, 128, 255]);
+  assert.deepEqual(pixelAt(pixels, 125, 125), [128, 128, 128, 255]);
+  assert.deepEqual(pixelAt(pixels, 200, 200), [255, 255, 255, 255]);
+});

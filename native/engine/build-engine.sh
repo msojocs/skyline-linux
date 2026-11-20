@@ -76,6 +76,13 @@ fi
 log "ninja -C $out_dir flutter_engine"
 ninja -C "$out_dir" flutter_engine
 
+if [ "$runtime_mode" = "release" ]; then
+  # AOT snapshots must match the engine's product VM configuration; the
+  # downloaded toolchain gen_snapshot is a JIT-release build.
+  log "ninja -C $out_dir gen_snapshot"
+  ninja -C "$out_dir" gen_snapshot
+fi
+
 lib="$out_dir/libflutter_engine.so"
 header="$out_dir/flutter_embedder.h"
 [ -f "$lib" ] || die "build did not produce $lib"

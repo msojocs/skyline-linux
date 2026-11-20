@@ -587,6 +587,11 @@ using NavigateBackFn = void (*)(int32_t delta, uint8_t animated,
                                 int32_t callback_id);
 using SwitchTabFn = void (*)(int32_t page_id, int32_t callback_id);
 using UpdateKeyboardStatusFn = void (*)(int32_t input_key, double height);
+using YGNodeSetupTransformFn = void (*)(Dart_Handle yoga_node,
+                                        Dart_Handle matrix);
+using YGNodeTransformOriginFn = void (*)(Dart_Handle yoga_node, double origin_x,
+                                         double origin_y, double align_x,
+                                         double align_y);
 
 using DispatchTouchEventFn = void (*)(uint8_t type, double x, double y);
 using ScrollViewUpdateScrollTopFn = void (*)(Dart_Handle scroll_view, double top);
@@ -608,6 +613,8 @@ using DecoratedBoxUpdateBorderFn = void (*)(Dart_Handle decoratedBox,
                                             uint8_t topStyle,
                                             uint8_t rightStyle,
                                             uint8_t bottomStyle);
+using DecoratedBoxUpdateShadowFn = void (*)(Dart_Handle decoratedBox,
+                                            Dart_Handle shadows);
 
 using NewClipRRectFn = Dart_Handle (*)(
     uint8_t disableClip,
@@ -676,6 +683,7 @@ constexpr uint32_t kYGConnectorUpdateChildrenHash = 542320778u;
 constexpr uint32_t kMarkYGNodeNeedsLayoutHash = 739701891u;
 constexpr uint32_t kOpacityUpdateHash = 362821014u;
 constexpr uint32_t kDecoratedBoxUpdateBorderHash = 515044687u;
+constexpr uint32_t kDecoratedBoxUpdateShadowHash = 458311868u;
 constexpr uint32_t kTextSpanUpdateTextHash = 752549844u;
 constexpr uint32_t kTextSpanUpdateTextColorHash = 504732227u;
 constexpr uint32_t kTextSpanUpdateFontSizeHash = 666327014u;
@@ -708,6 +716,8 @@ constexpr uint32_t kGridBuilderRemoveChildHash = 719309313u;
 constexpr uint32_t kNavigateBackHash = 802972930u;
 constexpr uint32_t kSwitchTabHash = 958852003u;
 constexpr uint32_t kUpdateKeyboardStatusHash = 467802059u;
+constexpr uint32_t kYGNodeSetupTransformHash = 620430677u;
+constexpr uint32_t kYGNodeTransformOriginHash = 740488219u;
 
 enum class DemoMode { kStripes, kText, kCard };
 DemoMode g_demo_mode = DemoMode::kStripes;
@@ -1939,6 +1949,27 @@ struct AppStyle {
   float margin[4] = {0, 0, 0, 0};
   float gap = 0.0f;
 
+  // CSS position/insets.  position == 1 means absolute/fixed: the node is
+  // removed from flex flow and placed from the parent's content box.
+  int position = 0;
+  float inset[4] = {std::nanf(""), std::nanf(""), std::nanf(""),
+                    std::nanf("")};  // top, right, bottom, left (px)
+  float inset_percent[4] = {std::nanf(""), std::nanf(""), std::nanf(""),
+                            std::nanf("")};
+  int z_index = 0;
+  // CSS transform (column-major 4x4, applied around the element centre).
+  bool has_transform = false;
+  float transform[16] = {1, 0, 0, 0, 0, 1, 0, 0,
+                         0, 0, 1, 0, 0, 0, 0, 1};
+  // First CSS box-shadow layer.
+  bool has_shadow = false;
+  uint32_t shadow_color = 0u;
+  float shadow_offset_x = 0.0f;
+  float shadow_offset_y = 0.0f;
+  float shadow_blur = 0.0f;
+  float shadow_spread = 0.0f;
+  bool shadow_inset = false;
+
   float width = -1.0f;          // px, -1 = auto
   float height = -1.0f;
   float width_percent = -1.0f;  // 0..1
@@ -2003,6 +2034,8 @@ struct AppNode {
   Dart_PersistentHandle text_span_p = nullptr;
   Dart_PersistentHandle yoga_node_p = nullptr;
   Dart_PersistentHandle scroll_view_p = nullptr;
+  // Float64List(16) backing YGNodeSetupTransform while the Matrix4 reads it.
+  Dart_PersistentHandle transform_p = nullptr;
   // Decoded image backing a `<image>` node's direct-render paint callback.
   sk_sp<flutter::DlImage> image_dl;
   bool image_loaded = false;
@@ -2253,6 +2286,257 @@ int ParseAlign(const std::string& value) {
   return 0;  // stretch
 }
 
+// -- CSS transform -----------------------------------------------------------
+
+constexpr double kPi = 3.14159265358979323846;
+
+void MatrixIdentity(float* m) {
+  for (int i = 0; i < 16; i++) m[i] = 0.0f;
+  m[0] = m[5] = m[10] = m[15] = 1.0f;
+}
+
+// out = a * b, both column-major 4x4.
+void MatrixMultiply(const float* a, const float* b, float* out) {
+  float result[16];
+  for (int col = 0; col < 4; col++) {
+    for (int row = 0; row < 4; row++) {
+      float sum = 0.0f;
+      for (int k = 0; k < 4; k++) {
+        sum += a[k * 4 + row] * b[col * 4 + k];
+      }
+      result[col * 4 + row] = sum;
+    }
+  }
+  std::memcpy(out, result, sizeof(result));
+}
+
+bool ParsePxToken(const std::string& raw, double* out) {
+  std::string value = TrimAscii(raw);
+  if (EndsWith(value, "px")) value.resize(value.size() - 2);
+  return ParseNumber(value, out);
+}
+
+bool ParseAngleToken(const std::string& raw, double* radians) {
+  std::string value = TrimAscii(raw);
+  double number = 0.0;
+  if (EndsWith(value, "deg")) {
+    value.resize(value.size() - 3);
+    if (!ParseNumber(value, &number)) return false;
+    *radians = number * kPi / 180.0;
+    return true;
+  }
+  if (EndsWith(value, "rad")) {
+    value.resize(value.size() - 3);
+    if (!ParseNumber(value, &number)) return false;
+    *radians = number;
+    return true;
+  }
+  if (EndsWith(value, "turn")) {
+    value.resize(value.size() - 4);
+    if (!ParseNumber(value, &number)) return false;
+    *radians = number * 2.0 * kPi;
+    return true;
+  }
+  if (!ParseNumber(value, &number)) return false;
+  *radians = number * kPi / 180.0;  // unitless follows CSS angles
+  return true;
+}
+
+std::vector<std::string> TransformArguments(const std::string& args) {
+  std::vector<std::string> out;
+  std::string current;
+  for (char c : args) {
+    if (c == ',' || c == ' ' || c == '\t') {
+      if (!current.empty()) {
+        out.push_back(current);
+        current.clear();
+      }
+    } else {
+      current.push_back(c);
+    }
+  }
+  if (!current.empty()) out.push_back(current);
+  return out;
+}
+
+// Parses `transform: translate(...) rotate(...) scale(...) ...` into a
+// column-major matrix.  Percent translations are not supported here (the
+// element size is unknown at parse time).
+void ParseTransform(const std::string& raw, AppStyle* style) {
+  float matrix[16];
+  MatrixIdentity(matrix);
+  size_t index = 0;
+  bool any = false;
+  while (index < raw.size()) {
+    while (index < raw.size() &&
+           (std::isspace(static_cast<unsigned char>(raw[index])) ||
+            raw[index] == ',')) {
+      index++;
+    }
+    const size_t name_start = index;
+    while (index < raw.size() && raw[index] != '(') index++;
+    if (index >= raw.size()) break;
+    std::string name = LowerAscii(TrimAscii(raw.substr(name_start,
+                                                       index - name_start)));
+    const size_t close = raw.find(')', index + 1);
+    if (close == std::string::npos) break;
+    const std::string args =
+        raw.substr(index + 1, close - index - 1);
+    index = close + 1;
+    const std::vector<std::string> values = TransformArguments(args);
+    float local[16];
+    MatrixIdentity(local);
+    if (name == "translate" || name == "translate3d") {
+      double tx = 0.0;
+      double ty = 0.0;
+      if (values.empty() || !ParsePxToken(values[0], &tx)) continue;
+      if (values.size() > 1) ParsePxToken(values[1], &ty);
+      local[12] = static_cast<float>(tx);
+      local[13] = static_cast<float>(ty);
+    } else if (name == "translatex") {
+      double tx = 0.0;
+      if (values.empty() || !ParsePxToken(values[0], &tx)) continue;
+      local[12] = static_cast<float>(tx);
+    } else if (name == "translatey") {
+      double ty = 0.0;
+      if (values.empty() || !ParsePxToken(values[0], &ty)) continue;
+      local[13] = static_cast<float>(ty);
+    } else if (name == "scale" || name == "scale3d") {
+      double sx = 1.0;
+      double sy = 1.0;
+      if (values.empty() || !ParseNumber(values[0], &sx)) continue;
+      sy = sx;
+      if (values.size() > 1) ParseNumber(values[1], &sy);
+      local[0] = static_cast<float>(sx);
+      local[5] = static_cast<float>(sy);
+    } else if (name == "scalex") {
+      double sx = 1.0;
+      if (values.empty() || !ParseNumber(values[0], &sx)) continue;
+      local[0] = static_cast<float>(sx);
+    } else if (name == "scaley") {
+      double sy = 1.0;
+      if (values.empty() || !ParseNumber(values[0], &sy)) continue;
+      local[5] = static_cast<float>(sy);
+    } else if (name == "rotate" || name == "rotatez") {
+      double radians = 0.0;
+      if (values.empty() || !ParseAngleToken(values[0], &radians)) continue;
+      const float c = static_cast<float>(std::cos(radians));
+      const float s = static_cast<float>(std::sin(radians));
+      local[0] = c;
+      local[1] = s;
+      local[4] = -s;
+      local[5] = c;
+    } else if (name == "matrix") {
+      if (values.size() < 6) continue;
+      double v[6] = {0, 0, 0, 0, 0, 0};
+      bool ok = true;
+      for (int i = 0; i < 6; i++) {
+        if (!ParseNumber(values[static_cast<size_t>(i)], &v[i])) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) continue;
+      local[0] = static_cast<float>(v[0]);   // a
+      local[1] = static_cast<float>(v[1]);   // b
+      local[4] = static_cast<float>(v[2]);   // c
+      local[5] = static_cast<float>(v[3]);   // d
+      local[12] = static_cast<float>(v[4]);  // e
+      local[13] = static_cast<float>(v[5]);  // f
+    } else {
+      continue;  // skew/perspective/3d rotations are not modelled
+    }
+    any = true;
+    MatrixMultiply(matrix, local, matrix);
+  }
+  if (!any) return;
+  std::memcpy(style->transform, matrix, sizeof(matrix));
+  style->has_transform = true;
+}
+
+// Splits CSS function arguments at top-level commas (rgba(0, 0, 0, .5) is one
+// layer, not four).
+std::vector<std::string> SplitTopLevelComma(const std::string& value) {
+  std::vector<std::string> out;
+  std::string current;
+  int depth = 0;
+  for (char c : value) {
+    if (c == '(') depth++;
+    if (c == ')' && depth > 0) depth--;
+    if (c == ',' && depth == 0) {
+      out.push_back(TrimAscii(current));
+      current.clear();
+    } else {
+      current.push_back(c);
+    }
+  }
+  if (!TrimAscii(current).empty()) out.push_back(TrimAscii(current));
+  return out;
+}
+
+// Whitespace tokenizer that keeps `rgba(0, 0, 0, 0.5)` together.
+std::vector<std::string> TokenizeCssValue(const std::string& value) {
+  std::vector<std::string> out;
+  std::string current;
+  int depth = 0;
+  for (char c : value) {
+    if (c == '(') depth++;
+    if (c == ')' && depth > 0) depth--;
+    if (std::isspace(static_cast<unsigned char>(c)) && depth == 0) {
+      if (!current.empty()) {
+        out.push_back(current);
+        current.clear();
+      }
+    } else {
+      current.push_back(c);
+    }
+  }
+  if (!current.empty()) out.push_back(current);
+  return out;
+}
+
+// `box-shadow: x y [blur] [spread] color [inset]` (first layer only).
+void ParseBoxShadow(const std::string& raw, AppStyle* style) {
+  const std::string value = TrimAscii(raw);
+  if (value == "none" || value.empty()) {
+    style->has_shadow = false;
+    return;
+  }
+  const std::vector<std::string> layers = SplitTopLevelComma(value);
+  if (layers.empty()) return;
+  const std::vector<std::string> tokens = TokenizeCssValue(layers[0]);
+  float numbers[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  int number_count = 0;
+  bool inset = false;
+  bool have_color = false;
+  uint32_t color = style->color;
+  for (const std::string& token : tokens) {
+    const std::string lowered = LowerAscii(token);
+    if (lowered == "inset") {
+      inset = true;
+      continue;
+    }
+    uint32_t parsed_color = 0u;
+    if (ParseCssColor(token, &parsed_color)) {
+      color = parsed_color;
+      have_color = true;
+      continue;
+    }
+    double number = 0.0;
+    if (number_count < 4 && ParsePxToken(token, &number)) {
+      numbers[number_count++] = static_cast<float>(number);
+    }
+  }
+  if (number_count < 2) return;
+  style->has_shadow = true;
+  style->shadow_offset_x = numbers[0];
+  style->shadow_offset_y = numbers[1];
+  style->shadow_blur = numbers[2];
+  style->shadow_spread = numbers[3];
+  style->shadow_color = have_color ? color : style->color;
+  style->shadow_inset = inset;
+}
+
 void ApplyDeclaration(AppStyle* style,
                       const std::string& raw_key,
                       const std::string& raw_value) {
@@ -2262,6 +2546,34 @@ void ApplyDeclaration(AppStyle* style,
 
   if (key == "display") {
     style->display_none = value == "none";
+  } else if (key == "position") {
+    style->position =
+        (value == "absolute" || value == "fixed") ? 1 : 0;
+  } else if (key == "top" || key == "right" || key == "bottom" ||
+             key == "left") {
+    int index = key == "top" ? 0 : key == "right" ? 1 : key == "bottom" ? 2 : 3;
+    float px = -1.0f;
+    float percent = -1.0f;
+    if (!ParseLength(value, &px, &percent)) return;
+    if (percent >= 0.0f) {
+      style->inset[index] = std::nan("");
+      style->inset_percent[index] = percent;
+    } else if (value == "auto") {
+      style->inset[index] = std::nan("");
+      style->inset_percent[index] = std::nan("");
+    } else {
+      style->inset[index] = px;
+      style->inset_percent[index] = std::nan("");
+    }
+  } else if (key == "z-index") {
+    double number = 0.0;
+    if (ParseNumber(value, &number)) {
+      style->z_index = static_cast<int>(number);
+    }
+  } else if (key == "transform") {
+    if (value != "none") ParseTransform(value, style);
+  } else if (key == "box-shadow") {
+    ParseBoxShadow(value, style);
   } else if (key == "flex-direction") {
     style->row = StartsWith(value, "row");
   } else if (key == "justify-content") {
@@ -2879,6 +3191,23 @@ bool HasExplicitHeight(const AppStyle& style) {
   return style.height >= 0.0f || style.height_percent >= 0.0f;
 }
 
+// Resolves a CSS inset (top/right/bottom/left) against the parent content box.
+// Returns false when the inset is `auto`.
+bool ResolveInset(const AppStyle& style, int index, float content_extent,
+                  float* out) {
+  const float percent = style.inset_percent[index];
+  if (!std::isnan(percent) && percent >= 0.0f) {
+    *out = content_extent * percent;
+    return true;
+  }
+  const float px = style.inset[index];
+  if (!std::isnan(px)) {
+    *out = px;
+    return true;
+  }
+  return false;
+}
+
 // Forward declarations: image/builder helpers live with the widget
 // materialization code, but measurement needs them.
 bool IsImageName(const std::string& name);
@@ -3011,12 +3340,17 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
   auto measure_children = [&]() {
     float main_extent = 0.0f;
     float cross_extent = 0.0f;
+    int flow_children = 0;
     for (AppNode* child : node->children) {
       if (child->released || child->style.display_none) {
         child->measured_w = 0.0f;
         child->measured_h = 0.0f;
         continue;
       }
+      // Absolutely positioned nodes do not contribute to the parent's flow
+      // size; LayoutNode measures them against the content box.
+      if (child->style.position == 1) continue;
+      ++flow_children;
       const bool child_stretch_w =
           !style.row && style.align == 0 && !HasExplicitWidth(child->style);
       const bool child_stretch_h =
@@ -3036,8 +3370,8 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
       }
     }
     const float gaps =
-        node->children.size() > 1
-            ? style.gap * static_cast<float>(node->children.size() - 1)
+        flow_children > 1
+            ? style.gap * static_cast<float>(flow_children - 1)
             : 0.0f;
     main_extent += gaps;
     return style.row ? SizeF{main_extent, cross_extent}
@@ -3119,6 +3453,8 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
   float flex_sum = 0.0f;
   for (AppNode* child : node->children) {
     if (child->released || child->style.display_none) continue;
+    // Absolutely positioned children are laid out after flex flow.
+    if (child->style.position == 1) continue;
     ChildLayout layout;
     layout.node = child;
     // Re-measure with the final parent content box so percentages resolve.
@@ -3157,7 +3493,6 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     }
     children.push_back(layout);
   }
-  if (children.empty()) return;
 
   const float gaps =
       children.size() > 1
@@ -3236,6 +3571,55 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     LayoutNode(child.node, child_x, child_y, child.w, child.h, metrics);
     cursor += child.main + child.margin_main_end + style.gap + extra_gap;
   }
+
+  // Absolute/fixed children: positioned from the parent's content box and
+  // excluded from flex sizing above.
+  for (AppNode* child : node->children) {
+    if (child->released || child->style.display_none ||
+        child->style.position != 1) {
+      continue;
+    }
+    float left = 0.0f;
+    float right = 0.0f;
+    float top = 0.0f;
+    float bottom = 0.0f;
+    const bool has_left = ResolveInset(child->style, 3, content_w, &left);
+    const bool has_right = ResolveInset(child->style, 1, content_w, &right);
+    const bool has_top = ResolveInset(child->style, 0, content_h, &top);
+    const bool has_bottom = ResolveInset(child->style, 2, content_h, &bottom);
+
+    float box_w = -1.0f;
+    float box_h = -1.0f;
+    if (has_left && has_right && !HasExplicitWidth(child->style)) {
+      box_w = std::max(0.0f, content_w - left - right);
+    }
+    if (has_top && has_bottom && !HasExplicitHeight(child->style)) {
+      box_h = std::max(0.0f, content_h - top - bottom);
+    }
+    SizeF measured = MeasureNode(child, box_w >= 0.0f ? box_w : content_w,
+                                 box_w >= 0.0f, box_h >= 0.0f ? box_h : content_h,
+                                 box_h >= 0.0f);
+    float child_w = box_w >= 0.0f ? box_w : measured.w;
+    float child_h = box_h >= 0.0f ? box_h : measured.h;
+    child_w = std::max(child_w, child->style.min_width);
+    child_h = std::max(child_h, child->style.min_height);
+    child->measured_w = child_w;
+    child->measured_h = child_h;
+
+    float child_x = content_x;
+    float child_y = content_y;
+    if (has_left) {
+      child_x += left;
+    } else if (has_right) {
+      child_x += content_w - right - child_w;
+    }
+    if (has_top) {
+      child_y += top;
+    } else if (has_bottom) {
+      child_y += content_h - bottom - child_h;
+    }
+    LayoutNode(child, child_x, child_y, child_w, child_h, metrics);
+  }
 }
 
 void WriteLayoutMetrics(const std::vector<NodeMetric>& metrics) {
@@ -3257,7 +3641,8 @@ void WriteLayoutMetrics(const std::vector<NodeMetric>& metrics) {
       values[1] = metric.x;
       values[2] = metric.w;
       values[3] = metric.h;
-      for (int i = 4; i < 9; i++) values[i] = 0.0f;
+      values[4] = static_cast<float>(metric.node->style.z_index);
+      for (int i = 5; i < 9; i++) values[i] = 0.0f;
       Dart_TypedDataReleaseData(buffer);
     }
   }
@@ -3344,6 +3729,7 @@ void ResetNodeHandles(AppNode* node, bool include_layout) {
   DeletePersistent(&node->text_span_p);
   DeletePersistent(&node->yoga_node_p);
   DeletePersistent(&node->scroll_view_p);
+  DeletePersistent(&node->transform_p);
   if (node->builder_p != nullptr || !node->builder_items.empty()) {
     g_builders_by_address.erase(node->address);
     for (auto& entry : node->builder_items) {
@@ -3709,6 +4095,26 @@ bool LoadImageForNode(AppNode* node) {
 void OnBuilderBuildChild(intptr_t address, int32_t index);
 void OnBuilderDisposeChild(intptr_t address, int32_t index);
 
+// Builds the `List<BoxShadow>` argument for NewDecoratedBox.
+Dart_Handle BuildBoxShadowList(const AppStyle& style) {
+  if (!style.has_shadow || g_page == nullptr || g_page->holder == nullptr) {
+    return Dart_Null();
+  }
+  auto* new_box_shadow = reinterpret_cast<NewBoxShadowFn>(
+      FindCallback(g_page->holder->ffi_table, kNewBoxShadowHash));
+  if (new_box_shadow == nullptr) return Dart_Null();
+  Dart_Handle shadow = new_box_shadow(
+      style.shadow_color, static_cast<double>(style.shadow_offset_x),
+      static_cast<double>(style.shadow_offset_y),
+      static_cast<double>(style.shadow_blur),
+      static_cast<double>(style.shadow_spread), style.shadow_inset ? 1 : 0);
+  if (Dart_IsError(shadow) || Dart_IsNull(shadow)) return Dart_Null();
+  Dart_Handle list = Dart_NewList(1);
+  if (Dart_IsError(list)) return Dart_Null();
+  Dart_ListSetAt(list, 0, shadow);
+  return list;
+}
+
 Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         NewYGConnectorFn newYGConnector, NewTextFn newText,
                         NewTextSpanFn newTextSpan,
@@ -4023,11 +4429,13 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       }
     }
     const bool has_visual = style.has_background ||
-                            style.border_width > 0.0f || style.radius > 0.0f;
+                            style.border_width > 0.0f || style.radius > 0.0f ||
+                            style.has_shadow;
     if (has_visual) {
       const uint32_t border_color =
           style.border_width > 0.0f ? style.border_color : 0u;
       const uint8_t border_style = style.border_width > 0.0f ? 1 : 0;
+      Dart_Handle shadows = BuildBoxShadowList(style);
       Dart_Handle decorated = newDecoratedBox(
           node->address, style.background, style.border_width,
           style.border_width, style.border_width, style.border_width,
@@ -4035,7 +4443,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
           border_style, border_style, border_style, style.radius, style.radius,
           style.radius, style.radius, style.radius, style.radius, style.radius,
           style.radius, 0, 0, 0, 0, 0, 0, 0, 0, Dart_Null(), 0, 0, 0.0, 0.0,
-          0.0, 0.0, 0, 0, 0.0, 0.0, 0, 0, Dart_Null(), 0, Dart_Null(), 0, nullptr,
+          0.0, 0.0, 0, 0, 0.0, 0.0, 0, 0, Dart_Null(), 0, shadows, 0, nullptr,
           nullptr, nullptr, nullptr, inner);
       if (Dart_IsError(decorated)) {
         ReportDartError("appservice NewDecoratedBox", decorated);
@@ -4093,6 +4501,36 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
   if (Dart_IsError(yoga_node)) {
     ReportDartError("appservice NewYGNode", yoga_node);
     return Dart_Null();
+  }
+  // CSS transform: hand the column-major matrix to the YGNode and rotate/scale
+  // around the element centre (CSS transform-origin default).
+  if (style.has_transform && g_page != nullptr && g_page->holder != nullptr) {
+    auto* setup = reinterpret_cast<YGNodeSetupTransformFn>(
+        FindCallback(g_page->holder->ffi_table, kYGNodeSetupTransformHash));
+    auto* origin = reinterpret_cast<YGNodeTransformOriginFn>(
+        FindCallback(g_page->holder->ffi_table, kYGNodeTransformOriginHash));
+    Dart_Handle matrix = Dart_NewTypedData(Dart_TypedData_kFloat64, 16);
+    if (setup != nullptr && !Dart_IsError(matrix)) {
+      Dart_TypedData_Type data_type = Dart_TypedData_kInvalid;
+      void* data = nullptr;
+      intptr_t length = 0;
+      if (!Dart_IsError(Dart_TypedDataAcquireData(matrix, &data_type, &data,
+                                                 &length)) &&
+          data_type == Dart_TypedData_kFloat64 && length == 16 &&
+          data != nullptr) {
+        auto* values = static_cast<double*>(data);
+        for (int i = 0; i < 16; i++) {
+          values[i] = static_cast<double>(style.transform[i]);
+        }
+      }
+      Dart_TypedDataReleaseData(matrix);
+      setup(yoga_node, matrix);
+      if (origin != nullptr) {
+        origin(yoga_node, node->measured_w * 0.5, node->measured_h * 0.5,
+               0.0, 0.0);
+      }
+      node->transform_p = Dart_NewPersistentHandle(matrix);
+    }
   }
   node->widget = yoga_node;
   node->yoga_node_p = Dart_NewPersistentHandle(yoga_node);
@@ -4591,6 +5029,7 @@ bool StyleNeedsRebuild(const AppStyle& before, const AppStyle& after) {
   if (before.has_background != after.has_background) return true;
   if ((before.border_width > 0.0f) != (after.border_width > 0.0f)) return true;
   if ((before.opacity < 0.999) != (after.opacity < 0.999)) return true;
+  if (before.has_shadow != after.has_shadow) return true;
   if (!Nearly(before.radius, after.radius)) return true;
   return false;
 }
@@ -4639,6 +5078,8 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       FindCallback(holder->ffi_table, kDecoratedBoxUpdateColorHash));
   auto* update_border = reinterpret_cast<DecoratedBoxUpdateBorderFn>(
       FindCallback(holder->ffi_table, kDecoratedBoxUpdateBorderHash));
+  auto* update_shadow = reinterpret_cast<DecoratedBoxUpdateShadowFn>(
+      FindCallback(holder->ffi_table, kDecoratedBoxUpdateShadowHash));
   auto* update_opacity = reinterpret_cast<OpacityUpdateFn>(
       FindCallback(holder->ffi_table, kOpacityUpdateHash));
   auto* mark_needs_layout = reinterpret_cast<MarkYGNodeNeedsLayoutFn>(
@@ -4770,6 +5211,17 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
                         after.border_color, after.border_color,
                         after.border_color, after.border_color, border_style,
                         border_style, border_style, border_style);
+        }
+        const bool shadow_changed =
+            before.has_shadow != after.has_shadow ||
+            before.shadow_color != after.shadow_color ||
+            !Nearly(before.shadow_offset_x, after.shadow_offset_x) ||
+            !Nearly(before.shadow_offset_y, after.shadow_offset_y) ||
+            !Nearly(before.shadow_blur, after.shadow_blur) ||
+            !Nearly(before.shadow_spread, after.shadow_spread) ||
+            before.shadow_inset != after.shadow_inset;
+        if (shadow_changed && update_shadow != nullptr) {
+          update_shadow(decorated, BuildBoxShadowList(after));
         }
       }
       if (node->opacity_widget_p != nullptr && update_opacity != nullptr &&

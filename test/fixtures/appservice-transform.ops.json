@@ -1,0 +1,73 @@
+{
+ "ops": [
+  {
+   "op": "appendStyleSheet",
+   "index": 1,
+   "css": ".page{width:320px;height:240px;background:#FFFFFF;} .tr{width:100px;height:100px;background:#00AA00;transform:translate(100px,50px);} .sc{width:100px;height:100px;background:#0000FF;transform:scale(0.5);}"
+  },
+  {
+   "op": "createElement",
+   "id": 2,
+   "tag": "empty",
+   "name": "page"
+  },
+  {
+   "op": "addClass",
+   "id": 2,
+   "prefix": "page",
+   "name": 1
+  },
+  {
+   "op": "createElement",
+   "id": 3,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 3,
+   "prefix": "tr",
+   "name": 1
+  },
+  {
+   "op": "createElement",
+   "id": 4,
+   "tag": "empty",
+   "name": "view"
+  },
+  {
+   "op": "addClass",
+   "id": 4,
+   "prefix": "sc",
+   "name": 1
+  },
+  {
+   "op": "appendChild",
+   "id": 2,
+   "child": 3
+  },
+  {
+   "op": "appendChild",
+   "id": 2,
+   "child": 4
+  },
+  {
+   "op": "createElement",
+   "id": 1,
+   "tag": "empty",
+   "name": "body"
+  },
+  {
+   "op": "appendChild",
+   "id": 1,
+   "child": 2
+  },
+  {
+   "op": "attach",
+   "root": 1
+  },
+  {
+   "op": "startRender"
+  }
+ ]
+}

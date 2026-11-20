@@ -4,6 +4,7 @@ tmp/
 test/results/
 *.log
 native/build/
+native/build-release/
 native/engine/checkout/
 native/engine/depot_tools/
 native/engine/out/

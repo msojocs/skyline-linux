@@ -76,6 +76,23 @@ SKYLINE_PROXY=http://127.0.0.1:54321 npm run engine:fetch
 npm run engine:build
 npm run native:build
 npm run test:engine
+npm run test:host-engine               # skyline.node -> 引擎 -> 共享内存帧 -> 回调
+npm run test:host-engine:aot           # release skyline.node 自动 AOT
+npm run test:shm-frame                 # setMemory/getMemory 数据区帧桥接
+npm run test:engine:resize             # --resize-script 视口尺寸更新
+# 1d-2. 可选：release/AOT
+npm run engine:build -- --runtime-mode release
+npm run app:aot                        # apps/empty-page/build/libapp.so
+cmake -S native -B native/build-release \
+  -DSKYLINE_ENGINE_ROOT="$PWD/native/engine/out/linux-x64-release"
+cmake --build native/build-release --target skyline_host skyline_node
+npm run test:engine:aot
+npm run test:host-engine:aot
+# Skyline appservice AOT（需先 npm run kernel:skyline）
+npm run runtime:embed -- --runtime-mode release
+bash native/engine/build-aot.sh --app-dir native/engine/work/skyline-app \
+  --entry native/engine/work/skyline-app/packages/sample/lib/devtools.dart --patched-sdk
+npm run test:skyline:aot
 
 # 1e. 阶段 3：dart:ui 兼容层 + package:skyline 重编译
 npm run ui:patch                    # 给固定引擎打 dart:ui 兼容补丁并重建 patched SDK
@@ -177,9 +194,17 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   `dart:ui` 的 `Application` / `createNativeParagraph` / `warmUpFont`。
 - `native/host/`：不依赖 GTK/EGL 的软件渲染 host，启动 engine → 发送 implicit view
   metrics → 处理 vsync → 取一帧 RGBA → 写入 `/dev/shm/skyline_<key>.dat`。
+- `native/host/host_engine.cc`：把同一引擎接入 `skyline.node`。`createWindow`
+  为每个 window 启动独立 platform thread（`FlutterEngineRun` + vsync baton），
+  出帧后 BGRA→RGBA 写入调用方传入的共享内存数据区（6 号参数 ArrayBuffer，或
+  9 号参数 16 字节 ptr+size 描述符），再经 N-API threadsafe function 调用
+  `onWindowRasterized`。支持多窗口、destroy/重建；未构建引擎时 CMake 仍回退到
+  `StubEngine`。
 - 本机已于 2026-11-19 完成固定 revision 的 debug engine 构建（357 MB
   `libflutter_engine.so`），`npm run test:engine` 校验一帧 128×96 RGBA、首像素
-  `[255,0,0,255]`、`vsyncCount=1`、`presentCount=1`。
+  `[255,0,0,255]`、`vsyncCount=1`、`presentCount=1`；
+  `npm run test:host-engine` 用 `skyline.node` + `apps/empty-page` 校验
+  createWindow → 共享内存帧 → 回调、多窗口与窗口重建。
 - 引擎未构建时 CMake 生成 exit-77 stub，因此 `npm run native:build` 与 `npm test`
   在只有源码的机器上仍可运行。
 
@@ -246,12 +271,15 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
 2. L5 引擎渲染对比：需先解决最小宿主中的
    `node::NodePlatform::ForIsolate` 断言（见 `docs/feasibility.md` 3）。
 3. 引擎后端按“原生引擎复刻”路线推进：阶段 1 的 Native N-API API 层已完成；阶段 2
-   已固定公开 Flutter 3.35.3 引擎、产出符号清单并落地 headless host 骨架；阶段 3
-   已完成私有 `dart:ui` 兼容层、`package:skyline` 重编译、stub/嵌入式运行时，并
-   通过官方 `CreatePageRoute`/`YGNode`/`DecoratedBox` 渲染第一张 Skyline 页面。
-   阶段 3 的节点输入现已切换为 appservice/V8 渲染层 bundle 的真实操作流，并已
-   覆盖增量更新、滚动/手势、list/grid、图片原生绘制与 HTTP/输入平台通道；
-   下一步是路由栈回放、键盘输入、图片 `objectFit`/网络图片与 builder 增量 mount。
+   已固定公开 Flutter 3.35.3 引擎、产出符号清单，并把 headless engine 接入
+   `skyline.node`（每窗口独立 platform thread、多窗口、共享内存出帧与
+   `onWindowRasterized` 回调）；阶段 3 已完成私有 `dart:ui` 兼容层、
+   `package:skyline` 重编译、stub/嵌入式运行时，并覆盖 appservice/V8 真实操作流、
+   增量更新、滚动/手势、list/grid 与 builder、图片（含 `objectFit`/网络图片）、
+   路由栈、键盘、HTTP/输入平台通道。阶段 2 已同时支持 JIT 与 release/AOT
+   （`libapp.so` + `FlutterEngineCreateAOTData`）；剩余项见
+   [docs/native-roadmap.md](docs/native-roadmap.md)（viewport resize、
+   Skyline appservice 的 AOT 帧级验证）。
 4. 共享内存缺失 key / 返回值语义已于 2026-11-19 对齐 Windows
    （`skyline-shared-memory`）。
 

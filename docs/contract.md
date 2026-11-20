@@ -91,7 +91,20 @@ shell.onWindowRasterized(windowId, cb);         // 必须在 createWindow 之后
 
 `bundlePath` 指向 `bundle/`（含 `libapp.so`、`flutter_assets/`）；`addonPath` 指向
 `build/skyline.node`。`dpr` 在官方实现中只接受 `2`（`flutter_window.cc(97)` 的
-`Check failed: device_pixel_ratio == 2`）。
+`Check failed: device_pixel_ratio == 2`）。debug/JIT 引擎使用
+`flutter_assets/kernel_blob.bin`；release 引擎使用 `bundle/libapp.so`，通过
+`FlutterEngineCreateAOTData` + `FlutterProjectArgs.aot_data` 加载。
+
+阶段 2 的 Linux 引擎后端（`native/host/host_engine.cc`）接受两种帧目标：
+
+- 6 号参数为 `ArrayBuffer` / typed array：其内存直接作为数据区
+  （`frameId/frameSize/RGBA8`），适合 Linux `setMemory` 返回的数据视图；
+- 9 号参数为官方 16 字节描述符（LE64 ptr + LE64 size）：指针位于本进程
+  共享内存时同样可用。
+
+每帧写完后通过 `onWindowRasterized(windowId, cb)` 回调通知；bootstrap 要求
+`createWindow` 至少 9 个参数，因此只走 6 号参数时也要传入一个 16 字节占位
+descriptor（全零即可）。
 
 ## 4. 共享内存
 

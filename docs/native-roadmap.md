@@ -37,12 +37,60 @@
   `icudtl.dat`；`npm run test:engine` 启动引擎、渲染一帧并校验通过：
   `width=128, height=96, frameSize=49152, firstPixel=[255,0,0,255]`，
   `vsyncCount=1, presentCount=1`，共享内存外层头 `dataSize=196616`。
-- **宿主形态**：阶段 2 先采用独立可执行文件 `skyline_host` 验证引擎生命周期与帧
-  输出，不把 `libflutter_engine.so` 链接进 Node 进程；因此不会触碰
-  `node::NodePlatform::ForIsolate`。后续再决定是进程内嵌入还是由 N-API 模块拉起
-  host 子进程。
+- **宿主形态（2026-11-20 更新）**：阶段 2 早期采用独立可执行文件
+  `skyline_host` 验证引擎生命周期与帧输出；现已选择**进程内接入**：
+  `native/host/host_engine.cc` 编译进 `skyline.node`（引擎存在时），为每个窗口
+  启动独立 platform thread，直接写调用方共享内存并回调
+  `onWindowRasterized`。不链接 Node 的 V8/NodePlatform，因此不触碰
+  `node::NodePlatform::ForIsolate`；`skyline_host` 仍保留为离线/回放工具。
+- **N-API 引擎后端（2026-11-20）**：`skyline.node` 在
+  `native/engine/out/linux-x64-debug` 存在时链接 `libflutter_engine.so`
+  （否则回退 `StubEngine`）。`createWindow` 解析 bundle/icu、校验
+  width/height/dpr、启动引擎并发送 implicit view metrics；present 回调把
+  BGRA 转 RGBA 写入 6 号参数（ArrayBuffer/typed array）或 9 号参数
+  （16 字节 ptr+size 描述符）指向的数据区，再经 N-API threadsafe function
+  调用 `onWindowRasterized`。支持多窗口、destroy/重建、首帧早于回调注册时补发。
+  `npm run test:host-engine` 覆盖单窗口、多窗口、窗口重建、dpr=2 物理像素与
+  缺失 kernel。
+
+- **AOT / release（2026-11-20）**：`native/engine/build-aot.sh` 用
+  `frontend_server --aot --tfa` 重编译 kernel，再由与 release 引擎同构建的
+  `gen_snapshot` 生成 `libapp.so`。宿主与 N-API 后端通过
+  `FlutterEngineCreateAOTData` + `FlutterProjectArgs.aot_data` 加载；
+  `kernel_blob.bin` 缺失时自动切 AOT，两者都在时可用 `--aot-library` /
+  `SKYLINE_AOT_LIBRARY` 强制。已构建 `linux-x64-release` 引擎并跑通
+  `npm run test:engine:aot`（128×96 红帧）与 `npm run test:host-engine:aot`
+  （release `skyline.node` 在无 `kernel_blob.bin` 的 bundle 上自动 AOT）。
+  注意：工具链下载的 gen_snapshot 是
+  JIT-release 构建，与 product 引擎的 snapshot 配置不匹配，脚本优先使用
+  `out/host_release/gen_snapshot`。
+- **Skyline appservice AOT（2026-11-20）**：
+  `patch-skyline-runtime.sh --runtime-mode release` 把嵌入式运行时装入 release
+  引擎（73 个导出 + `libskyline.so`）；`build-aot.sh --patched-sdk` 生成
+  `package:skyline` 的 `libapp.so`（9.4 MB）。`npm run test:skyline:aot` 在
+  release 引擎上以 AOT 启动 appservice，回放 stripes 操作流并校验三条色带
+  （[255,51,102] / [51,204,102] / [51,102,255]）。
+
+- **共享内存帧桥接（2026-11-20）**：`createWindow` 的 6 号参数直接接受 Linux
+  `skyline-shared-memory` 的 external ArrayBuffer（数据区）。新增
+  `npm run test:shm-frame`：`setMemory(key, bytes)` → `createWindow(...)` →
+  `onWindowRasterized` → `getMemory(key)` 观察同一份 `frameId/frameSize/RGBA`
+  （empty-page 红帧）。16 字节外层头仍由 `skyline-shared-memory` 管理；
+  Windows 风格的 9 号 `ptr+size` descriptor 也继续支持。
+
+- **viewport resize（2026-11-20）**：独立 host 新增 `--resize-script`
+  （`<ms> <width> <height> [dpr]`），按时间发送
+  `FlutterEngineSendWindowMetricsEvent`；`npm run test:engine:resize` 验证
+  128×96 → 64×64 后最终帧为 16384 字节红帧。N-API 契约没有 resize 方法，暂不
+  对外暴露。
 
 待执行：
+
+- **N-API 多 view / 运行时 resize**：契约没有对应 JS 方法；目前每个窗口仍固定
+  一个 implicit view，standalone host 的 resize 路径已验证。
+- **引擎指标导出**：已记录 window ready/first frame/destroy/stopped，启动 15 s
+  超时与同步参数错误；尚未提供崩溃转储或性能指标接口（契约没有对应 JS 方法）。
+  N-API 帧回调队列为 1，Node 繁忙时合并突发通知。
 
 - ~~官方 kernel 的 SDK hash 为 `294a28fe17`，公开 3.35.3 patched SDK 为
   `a29e08c72e`，证实官方 Dart SDK 是私有分支；阶段 3 需按符号清单为
@@ -202,9 +250,17 @@
   dart:ui 兼容层用 `Path.combine(difference)` + `clipPath` 实现（不再按
   intersect 处理）；`TextStyle/ParagraphStyle.lineHeight` 仍受公开引擎文本
   编码限制，保留记录。
+- **absolute / transform（2026-11-20）**：CSS `position: absolute|fixed` 从 flex
+  流中移除绝对定位节点，支持 `top/right/bottom/left`（px/%）与 left+right /
+  top+bottom 拉伸；`transform` 支持 `translate`/`scale`/`rotate`/`matrix`，
+  经 `YGNodeSetupTransform` + `YGNodeUpdateTransformOriginAndAlignment` 绕元素
+  中心绘制，不改变布局。测试夹具 `appservice-absolute.ops.json`、
+  `appservice-transform.ops.json`。CSS `box-shadow` 首层经 `NewBoxShadow`
+  接入 `NewDecoratedBox`，增量更新走 `DecoratedBoxUpdateShadow`；
+  夹具 `appservice-shadow.ops.json`。
 - **下一步**：item 的动态二次变更回调（`ListBuilderInsertBefore`/
-  `UpdateChildren`）、滚动后新 item 的持续录制、`position: absolute`/
-  `transform`、输入法选区/光标与 `InputHoldKeyboard`；继续补全 yoga 属性。
+  `UpdateChildren`）、滚动后新 item 的持续录制、`transition` 动画、输入法
+  选区/光标与 `InputHoldKeyboard`；继续补全 yoga 属性。
   L5 的 Windows 基准仍受官方 appservice guest 阻塞。
 
 按依赖顺序推进，每一块都以 Windows 官方输出为基准：
@@ -261,6 +317,5 @@
 9. ~~路由栈回放、键盘输入、图片 `objectFit`/网络图片、list/grid builder
    增量 mount~~（已完成，见阶段 3 进度；`clipOp` 也已对齐，
    `lineHeight` 仍受引擎文本编码限制）；
-10. **下一步**：`position: absolute`/`transform`/`transition`、builder item
-   二次变更回调、输入法选区/光标，以及 L5 的 Windows 基准（仍受官方
-   appservice guest 阻塞）。
+10. **下一步**：`transition` 动画、builder item 二次变更回调、输入法选区/光标，
+    以及 L5 的 Windows 基准（仍受官方 appservice guest 阻塞）。

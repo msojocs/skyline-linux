@@ -4,6 +4,7 @@
 # Skyline page path.
 #
 #   bash native/engine/patch-skyline-runtime.sh [--check] [--no-build]
+#                                                 [--runtime-mode debug|release]
 #
 # The embedded build has the full Dart API (statically linked), so it can call
 # the real `package:skyline` widget constructors (NewYGNode/NewDecoratedBox/
@@ -28,17 +29,32 @@ link_path="$ENGINE_STAGE/libskyline.so"
 
 check_only=0
 do_build=1
-for arg in "$@"; do
-  case "$arg" in
+runtime_mode=debug
+while [ $# -gt 0 ]; do
+  case "$1" in
     --check) check_only=1 ;;
     --no-build) do_build=0 ;;
+    --runtime-mode)
+      [ $# -ge 2 ] || die "--runtime-mode needs a value"
+      runtime_mode=$2
+      shift
+      ;;
+    --runtime-mode=*) runtime_mode=${1#*=} ;;
     -h|--help)
       sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
-    *) die "unknown argument: $arg" ;;
+    *) die "unknown argument: $1" ;;
   esac
+  shift
 done
+case "$runtime_mode" in
+  debug) ENGINE_STAGE="$ENGINE_DIR/out/linux-x64-debug" ;;
+  release) ENGINE_STAGE="$ENGINE_DIR/out/linux-x64-release" ;;
+  *) die "unsupported runtime mode: $runtime_mode" ;;
+esac
+export SKYLINE_ENGINE_STAGE="$ENGINE_STAGE"
+link_path="$ENGINE_STAGE/libskyline.so"
 
 [ -d "$embedder_dir" ] || die "missing engine checkout: $embedder_dir (run npm run engine:fetch)"
 [ -f "$source_file" ] || die "missing runtime source: $source_file"
@@ -109,8 +125,8 @@ if missing:
 PY
 
 if [ "$do_build" -eq 1 ]; then
-  log "building flutter_engine with the embedded Skyline runtime"
-  bash "$SCRIPT_DIR/build-engine.sh"
+  log "building flutter_engine with the embedded Skyline runtime ($runtime_mode)"
+  bash "$SCRIPT_DIR/build-engine.sh" --runtime-mode "$runtime_mode"
 fi
 
 [ -f "$ENGINE_STAGE/libflutter_engine.so" ] || die "engine not staged; run npm run engine:build"

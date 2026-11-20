@@ -29,6 +29,9 @@ npm run native:build
 # 5. Assert one software-rendered frame reached /dev/shm.
 npm run test:engine
 
+# 5b. Assert the N-API module hosts a window and delivers a frame.
+npm run test:host-engine
+
 # 6. Phase 3: patched dart:ui + recompiled package:skyline kernel.
 npm run ui:patch          # install compat layer, rebuild/stage patched SDK
 npm run kernel:skyline    # reconstruct sources + compile the official app
@@ -51,10 +54,75 @@ The pinned debug engine has been fetched and built on this host:
 - `npm run test:engine` passes: one 128×96 physical frame, `frameSize=49152`,
   first pixel `[255,0,0,255]`, `vsyncCount=1`, `presentCount=1`,
   shared-memory `dataSize=196616` (8 + 4 × frame).
+- `npm run test:host-engine` passes with the same engine linked into
+  `native/build/skyline.node`: `createWindow` starts a per-window platform
+  thread, writes a 128×96 RGBA frame into the caller's data area, and invokes
+  `onWindowRasterized`; multi-window, window recreation and missing-kernel
+  errors are covered too (2026-11-20).
 
 The two transient `git fetch` retry warnings during `gclient sync`
 (`third_party/pkg/flutter_packages`, `third_party/ocmock`) did not affect the
 headless engine build.
+
+## Phase 2: AOT / release engine
+
+The debug engine only executes JIT `kernel_blob.bin`.  For release, compile an
+AOT ELF snapshot and build the release engine:
+
+```bash
+npm run engine:build -- --runtime-mode release   # out/linux-x64-release
+npm run app:aot                                  # apps/empty-page/build/libapp.so
+
+# Build a host against the release stage (separate build dir).
+cmake -S native -B native/build-release \
+  -DSKYLINE_ENGINE_ROOT="$PWD/native/engine/out/linux-x64-release"
+cmake --build native/build-release --target skyline_host skyline_node
+
+npm run test:engine:aot
+npm run test:host-engine:aot
+```
+
+`build-aot.sh` recompiles the entrypoint with `frontend_server --aot --tfa`
+(gen_snapshot rejects kernels compiled without TFA) and then runs
+`gen_snapshot --snapshot_kind=app-aot-elf`.  The resulting bundle layout matches
+Flutter:
+
+```
+<app>/build/libapp.so
+<app>/build/flutter_assets/...
+```
+
+The snapshot must be produced by a gen_snapshot built with the same product
+configuration as the engine.  The generic toolchain download is a JIT-release
+build, so `engine:build --runtime-mode release` also builds
+`out/host_release/gen_snapshot`, and `build-aot.sh` prefers it (override with
+`SKYLINE_GEN_SNAPSHOT`).
+
+The host and the N-API backend load the snapshot through
+`FlutterEngineCreateAOTData` and `FlutterProjectArgs.aot_data`.  AOT is selected
+automatically when `kernel_blob.bin` is absent; pass `--aot-library` (host) or
+set `SKYLINE_AOT_LIBRARY` (N-API backend) to force it when both files exist.
+`npm run test:host-engine:aot` builds `native/build-release/skyline.node` and
+verifies `createWindow` on an AOT-only bundle (no `kernel_blob.bin`).
+
+### Skyline appservice AOT
+
+```bash
+# Release engine with the embedded runtime exports (73 symbols + libskyline.so).
+npm run runtime:embed -- --runtime-mode release
+
+# AOT for the recompiled appservice (patched SDK).
+bash native/engine/build-aot.sh \
+  --app-dir native/engine/work/skyline-app \
+  --entry native/engine/work/skyline-app/packages/sample/lib/devtools.dart \
+  --patched-sdk
+
+npm run test:skyline:aot   # stripes page on the release engine
+```
+
+`test:skyline:aot` starts the AOT appservice with `SKYLINE_APP_SERVICE_OPS`
+pointing at `test/fixtures/appservice-stripes.ops.json` and verifies the three
+stripe colors in the final frame (9.4 MB `libapp.so` on 2026-11-20).
 
 ## Phase 3: Skyline `dart:ui` compatibility layer
 

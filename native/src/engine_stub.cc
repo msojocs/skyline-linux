@@ -16,7 +16,14 @@ void StubEngine::DestroyWindow(double window_id) {
   (void)window_id;
 }
 
-void StubEngine::SetWindowRasterized(double window_id) {
+bool StubEngine::HasWindow(double window_id) const {
+  (void)window_id;
+  return false;
+}
+
+void StubEngine::SetRasterizedCallback(double window_id,
+                                       RasterizedCallback callback) {
+  (void)callback;
   throw std::runtime_error("window_id: " + std::to_string(
       static_cast<long long>(window_id)) + " not found");
 }

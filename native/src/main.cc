@@ -1,11 +1,15 @@
 #include <node_api.h>
 
+#include <cstring>
 #include <map>
 #include <memory>
 #include <string>
 
 #include "bootstrap_js.h"
 #include "engine.hh"
+#ifdef SKYLINE_HAVE_ENGINE
+#include "host_engine.hh"
+#endif
 
 namespace {
 
@@ -54,6 +58,7 @@ bool IsType(napi_env env, napi_value value, napi_valuetype expected) {
 struct AddonState {
   napi_env env = nullptr;
   std::map<std::string, napi_ref> callbacks;
+  std::map<double, napi_threadsafe_function> frame_tsfns;
   std::unique_ptr<skyline::Engine> engine;
 };
 
@@ -66,6 +71,14 @@ AddonState* State(napi_env env) {
 void CleanupCallbacks(void* argument) {
   auto* state = static_cast<AddonState*>(argument);
   if (!state) return;
+  // Stop engine threads before the environment and shared-memory views go
+  // away; DestroyWindow joins each window's platform thread.
+  state->engine.reset();
+  for (auto& [window_id, tsfn] : state->frame_tsfns) {
+    (void)window_id;
+    if (tsfn) napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
+  }
+  state->frame_tsfns.clear();
   for (auto& [name, reference] : state->callbacks) {
     (void)name;
     if (reference) napi_delete_reference(state->env, reference);
@@ -76,7 +89,11 @@ void CleanupCallbacks(void* argument) {
 void FinalizeState(napi_env env, void* data, void* hint) {
   (void)env;
   (void)hint;
-  delete static_cast<AddonState*>(data);
+  auto* state = static_cast<AddonState*>(data);
+  if (!state) return;
+  // Window threads must be joined before the module state disappears.
+  state->engine.reset();
+  delete state;
 }
 
 napi_value SetCallback(napi_env env, napi_callback_info info) {
@@ -103,6 +120,99 @@ napi_value SetCallback(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
+size_t TypedArrayElementSize(napi_typedarray_type type) {
+  switch (type) {
+    case napi_int8_array:
+    case napi_uint8_array:
+    case napi_uint8_clamped_array:
+      return 1;
+    case napi_int16_array:
+    case napi_uint16_array:
+      return 2;
+    case napi_int32_array:
+    case napi_uint32_array:
+    case napi_float32_array:
+      return 4;
+    case napi_float64_array:
+    case napi_bigint64_array:
+    case napi_biguint64_array:
+      return 8;
+    default:
+      return 1;
+  }
+}
+
+// Returns the backing memory of an ArrayBuffer or typed-array view.  The
+// pointer stays valid while the caller keeps the JS object alive.
+bool ReadBufferView(napi_env env, napi_value value, void** data,
+                    size_t* byte_length) {
+  bool is_typed_array = false;
+  if (napi_is_typedarray(env, value, &is_typed_array) == napi_ok &&
+      is_typed_array) {
+    napi_typedarray_type type = napi_uint8_array;
+    size_t length = 0;
+    void* elements = nullptr;
+    napi_value array_buffer = nullptr;
+    size_t byte_offset = 0;
+    if (napi_get_typedarray_info(env, value, &type, &length, &elements,
+                                 &array_buffer, &byte_offset) != napi_ok ||
+        elements == nullptr) {
+      return false;
+    }
+    *data = elements;
+    *byte_length = length * TypedArrayElementSize(type);
+    return true;
+  }
+  bool is_array_buffer = false;
+  if (napi_is_arraybuffer(env, value, &is_array_buffer) == napi_ok &&
+      is_array_buffer) {
+    void* buffer_data = nullptr;
+    size_t length = 0;
+    if (napi_get_arraybuffer_info(env, value, &buffer_data, &length) !=
+            napi_ok ||
+        buffer_data == nullptr) {
+      return false;
+    }
+    *data = buffer_data;
+    *byte_length = length;
+    return true;
+  }
+  return false;
+}
+
+// The official Windows ABI passes a 16-byte handle (LE64 pointer, LE64 size)
+// for Boost shared memory.  On Linux the same field is accepted when it points
+// at process-local shared memory.
+bool ReadSharedMemoryHandle(napi_env env, napi_value value, void** data,
+                            size_t* byte_length) {
+  bool is_typed_array = false;
+  if (napi_is_typedarray(env, value, &is_typed_array) != napi_ok ||
+      !is_typed_array) {
+    return false;
+  }
+  napi_typedarray_type type = napi_uint8_array;
+  size_t length = 0;
+  void* elements = nullptr;
+  napi_value array_buffer = nullptr;
+  size_t byte_offset = 0;
+  if (napi_get_typedarray_info(env, value, &type, &length, &elements,
+                               &array_buffer, &byte_offset) != napi_ok ||
+      elements == nullptr || length * TypedArrayElementSize(type) != 16) {
+    return false;
+  }
+  const auto* bytes = static_cast<const uint8_t*>(elements);
+  uint64_t pointer = 0;
+  uint64_t size = 0;
+  for (int i = 0; i < 8; ++i) {
+    pointer |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+    size |= static_cast<uint64_t>(bytes[8 + i]) << (i * 8);
+  }
+  if (pointer == 0 || size < 8) return false;
+  *data = reinterpret_cast<void*>(static_cast<uintptr_t>(pointer));
+  *byte_length = static_cast<size_t>(size);
+  return true;
+}
+
 skyline::CreateWindowArgs ParseCreateWindow(napi_env env, napi_value array) {
   skyline::CreateWindowArgs args;
   napi_value value = nullptr;
@@ -126,6 +236,24 @@ skyline::CreateWindowArgs ParseCreateWindow(napi_env env, napi_value array) {
   }
   if (napi_get_element(env, array, 7, &value) == napi_ok && IsType(env, value, napi_string)) {
     args.skyline_addon_path = ReadString(env, value);
+  }
+  // 6th argument: Linux shared-memory data area (ArrayBuffer / typed array).
+  if (napi_get_element(env, array, 6, &value) == napi_ok && value != nullptr) {
+    void* data = nullptr;
+    size_t length = 0;
+    if (ReadBufferView(env, value, &data, &length)) {
+      args.frame_buffer = data;
+      args.frame_buffer_size = length;
+    }
+  }
+  // 9th argument: official Windows 16-byte shared-memory descriptor.
+  if (napi_get_element(env, array, 8, &value) == napi_ok && value != nullptr) {
+    void* data = nullptr;
+    size_t length = 0;
+    if (ReadSharedMemoryHandle(env, value, &data, &length)) {
+      args.frame_buffer = data;
+      args.frame_buffer_size = length;
+    }
   }
   return args;
 }
@@ -157,8 +285,24 @@ napi_value DestroyWindow(napi_env env, napi_callback_info info) {
   if (state && state->engine) {
     const double window_id = argc > 0 ? ReadNumber(env, argv[0]) : 0.0;
     state->engine->DestroyWindow(window_id);
+    auto tsfn = state->frame_tsfns.find(window_id);
+    if (tsfn != state->frame_tsfns.end()) {
+      if (tsfn->second) {
+        napi_release_threadsafe_function(tsfn->second, napi_tsfn_release);
+      }
+      state->frame_tsfns.erase(tsfn);
+    }
   }
   return Undefined(env);
+}
+
+void CallFrameCallback(napi_env env, napi_value js_callback, void* /*context*/,
+                       void* /*data*/) {
+  if (env == nullptr || js_callback == nullptr) return;
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  napi_value result = nullptr;
+  napi_call_function(env, undefined, js_callback, 0, nullptr, &result);
 }
 
 napi_value OnWindowRasterized(napi_env env, napi_callback_info info) {
@@ -169,8 +313,41 @@ napi_value OnWindowRasterized(napi_env env, napi_callback_info info) {
   if (!state || !state->engine) {
     return Throw(env, napi_generic_failure, "Skyline engine is unavailable");
   }
+  const double window_id = ReadNumber(env, argv[0]);
+  if (!state->engine->HasWindow(window_id)) {
+    return Throw(env, napi_generic_failure,
+                 ("window_id: " + std::to_string(
+                      static_cast<long long>(window_id)) + " not found")
+                     .c_str());
+  }
+  if (argc < 2 || !IsType(env, argv[1], napi_function)) {
+    return Throw(env, napi_invalid_arg, "Callback must be a function");
+  }
   try {
-    state->engine->SetWindowRasterized(ReadNumber(env, argv[0]));
+    napi_threadsafe_function tsfn = nullptr;
+    napi_value resource_name = nullptr;
+    napi_create_string_utf8(env, "skyline_frame", NAPI_AUTO_LENGTH,
+                            &resource_name);
+    // max_queue_size=1: frame callbacks are wake-ups, not data; coalesce
+    // bursts while the Node event loop is busy.
+    if (napi_create_threadsafe_function(
+            env, argv[1], nullptr, resource_name, 1, 1, nullptr, nullptr,
+            nullptr, &CallFrameCallback, &tsfn) != napi_ok) {
+      return Throw(env, napi_generic_failure,
+                   "Unable to create frame callback");
+    }
+    auto existing = state->frame_tsfns.find(window_id);
+    if (existing != state->frame_tsfns.end()) {
+      if (existing->second) {
+        napi_release_threadsafe_function(existing->second, napi_tsfn_release);
+      }
+      state->frame_tsfns.erase(existing);
+    }
+    state->frame_tsfns[window_id] = tsfn;
+    state->engine->SetRasterizedCallback(
+        window_id, [tsfn]() {
+          napi_call_threadsafe_function(tsfn, nullptr, napi_tsfn_nonblocking);
+        });
   } catch (const std::exception& error) {
     return Throw(env, napi_generic_failure, error.what());
   }
@@ -211,7 +388,11 @@ void Define(napi_env env, napi_value target, const char* name, napi_callback cal
 NAPI_MODULE_INIT() {
   auto* state = new AddonState();
   state->env = env;
+#ifdef SKYLINE_HAVE_ENGINE
+  state->engine = skyline::CreateHostEngine();
+#else
   state->engine = std::make_unique<skyline::StubEngine>();
+#endif
   napi_set_instance_data(env, state, FinalizeState, nullptr);
   napi_add_env_cleanup_hook(env, CleanupCallbacks, state);
 
