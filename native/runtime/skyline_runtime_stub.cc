@@ -659,6 +659,14 @@ using DecoratedBoxUpdateRadiusFn = void (*)(Dart_Handle decoratedBox,
 using DecoratedBoxUpdateGradientFn = void (*)(Dart_Handle decoratedBox,
                                               Dart_Handle gradient);
 using DecoratedBoxClearGradientFn = void (*)(Dart_Handle decoratedBox);
+using ClipRRectUpdateRadiusFn = void (*)(
+    Dart_Handle clip_rrect, double top_left_x, double top_left_y,
+    double top_right_x, double top_right_y, double bottom_left_x,
+    double bottom_left_y, double bottom_right_x, double bottom_right_y,
+    uint8_t top_left_x_pct, uint8_t top_left_y_pct, uint8_t top_right_x_pct,
+    uint8_t top_right_y_pct, uint8_t bottom_left_x_pct,
+    uint8_t bottom_left_y_pct, uint8_t bottom_right_x_pct,
+    uint8_t bottom_right_y_pct);
 
 using NewClipRRectFn = Dart_Handle (*)(
     uint8_t disableClip,
@@ -731,6 +739,7 @@ constexpr uint32_t kDecoratedBoxUpdateShadowHash = 458311868u;
 constexpr uint32_t kDecoratedBoxUpdateBorderSideRadiusHash = 464860390u;
 constexpr uint32_t kDecoratedBoxUpdateGradientHash = 756142529u;
 constexpr uint32_t kDecoratedBoxClearGradientHash = 754568836u;
+constexpr uint32_t kClipRRectUpdateRadiusHash = 450816005u;
 constexpr uint32_t kTextSpanUpdateTextHash = 752549844u;
 constexpr uint32_t kTextSpanUpdateTextColorHash = 504732227u;
 constexpr uint32_t kTextSpanUpdateFontSizeHash = 666327014u;
@@ -2054,6 +2063,7 @@ struct AppStyle {
   int align_self = -1;  // -1 auto, otherwise same values as `align`
   bool wrap = false;
   int align_content = 1;  // 0 stretch, 1 start, 2 center, 3 end
+  int order = 0;
   float padding[4] = {0, 0, 0, 0};  // top, right, bottom, left
   float margin[4] = {0, 0, 0, 0};
   float gap = 0.0f;
@@ -2118,6 +2128,10 @@ struct AppStyle {
   bool has_background = false;
   uint32_t border_color = 0u;
   float border_width = 0.0f;
+  // Per-side overrides (top, right, bottom, left); -1 = use the uniform value.
+  float side_border_width[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+  uint32_t side_border_color[4] = {0u, 0u, 0u, 0u};
+  bool side_border_color_set[4] = {false, false, false, false};
   float radius = 0.0f;
   // Per-corner radii (TL, TR, BR, BL); -1 = use the uniform `radius`.
   float corner_radius[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
@@ -2135,6 +2149,7 @@ struct AppStyle {
   int text_align = 0;
   uint32_t max_lines = 0;
   bool display_none = false;
+  bool clip = false;  // overflow: hidden/clip
   // Image fit: 0 fill, 1 contain, 2 cover, 3 none, 4 scale-down.
   int object_fit = 0;
 };
@@ -2165,11 +2180,13 @@ struct AppNode {
   Dart_Handle decorated_box = nullptr;
   Dart_Handle text_widget = nullptr;
   Dart_Handle opacity_widget = nullptr;
+  Dart_Handle clip_widget = nullptr;
 
   // Persistent handles keep the attached tree addressable across update tasks.
   Dart_PersistentHandle layout_buffer_p = nullptr;
   Dart_PersistentHandle decorated_box_p = nullptr;
   Dart_PersistentHandle opacity_widget_p = nullptr;
+  Dart_PersistentHandle clip_widget_p = nullptr;
   Dart_PersistentHandle text_widget_p = nullptr;
   Dart_PersistentHandle text_span_p = nullptr;
   Dart_PersistentHandle yoga_node_p = nullptr;
@@ -3158,6 +3175,37 @@ bool HasAnyRadius(const AppStyle& style) {
   return false;
 }
 
+// Border side order is top, right, bottom, left.
+float EffectiveBorderWidth(const AppStyle& style, int side) {
+  return style.side_border_width[side] >= 0.0f ? style.side_border_width[side]
+                                               : style.border_width;
+}
+
+uint32_t EffectiveBorderColor(const AppStyle& style, int side) {
+  return style.side_border_color_set[side] ? style.side_border_color[side]
+                                           : style.border_color;
+}
+
+bool HasBorder(const AppStyle& style) {
+  for (int i = 0; i < 4; i++) {
+    if (EffectiveBorderWidth(style, i) > 0.0f) return true;
+  }
+  return false;
+}
+
+bool BorderSidesChanged(const AppStyle& before, const AppStyle& after) {
+  for (int i = 0; i < 4; i++) {
+    if (std::fabs(EffectiveBorderWidth(before, i) -
+                  EffectiveBorderWidth(after, i)) > 0.01f) {
+      return true;
+    }
+    if (EffectiveBorderColor(before, i) != EffectiveBorderColor(after, i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool RadiiChanged(const AppStyle& a, const AppStyle& b) {
   auto same = [](float x, float y) {
     if (std::isnan(x) || std::isnan(y)) return std::isnan(x) && std::isnan(y);
@@ -3264,6 +3312,10 @@ void ApplyDeclaration(AppStyle* style,
 
   if (key == "display") {
     style->display_none = value == "none";
+  } else if (key == "overflow" || key == "overflow-x" ||
+             key == "overflow-y") {
+    style->clip = value == "hidden" || value == "clip" || value == "scroll" ||
+                  value == "auto";
   } else if (key == "position") {
     style->position = value == "fixed" ? 2 : value == "absolute" ? 1 : 0;
   } else if (key == "top" || key == "right" || key == "bottom" ||
@@ -3361,6 +3413,11 @@ void ApplyDeclaration(AppStyle* style,
     } else if (value == "space-between" || value == "space-around" ||
                value == "stretch") {
       style->align_content = 0;
+    }
+  } else if (key == "order") {
+    double number = 0.0;
+    if (ParseNumber(value, &number)) {
+      style->order = static_cast<int>(number);
     }
   } else if (key == "justify-content") {
     style->justify = ParseJustify(value);
@@ -3523,28 +3580,108 @@ void ApplyDeclaration(AppStyle* style,
     else if (value == "right" || value == "end") style->text_align = 1;
     else if (value == "justify") style->text_align = 3;
     else style->text_align = 0;
-  } else if (key == "border" || key == "border-top" || key == "border-right" ||
-             key == "border-bottom" || key == "border-left") {
-    const std::vector<std::string> parts = SplitWhitespace(value);
-    for (const std::string& part : parts) {
+  } else if (key == "border" || key == "border-top" ||
+             key == "border-right" || key == "border-bottom" ||
+             key == "border-left" || key == "border-top-width" ||
+             key == "border-right-width" || key == "border-bottom-width" ||
+             key == "border-left-width" || key == "border-top-color" ||
+             key == "border-right-color" || key == "border-bottom-color" ||
+             key == "border-left-color") {
+    const bool uniform = key == "border";
+    int side = -1;
+    if (!uniform) {
+      if (key.find("top") != std::string::npos) side = 0;
+      else if (key.find("right") != std::string::npos) side = 1;
+      else if (key.find("bottom") != std::string::npos) side = 2;
+      else side = 3;
+    }
+    const bool width_only = EndsWith(key, "-width");
+    const bool color_only = EndsWith(key, "-color");
+    if (color_only) {
       uint32_t color = 0u;
-      if (ParseCssColor(part, &color)) {
-        style->border_color = color;
-        continue;
+      if (ParseCssColor(value, &color)) {
+        if (uniform) {
+          style->border_color = color;
+        } else {
+          style->side_border_color[side] = color;
+          style->side_border_color_set[side] = true;
+        }
       }
+    } else if (width_only) {
       float px = 0.0f;
       float percent = -1.0f;
-      if (ParseLength(part, &px, &percent) && px >= 0.0f) {
-        style->border_width = px;
+      if (ParseLength(value, &px, &percent) && px >= 0.0f) {
+        if (uniform) {
+          style->border_width = px;
+        } else {
+          style->side_border_width[side] = px;
+        }
+      }
+    } else {
+      const std::vector<std::string> parts = SplitWhitespace(value);
+      for (const std::string& part : parts) {
+        uint32_t color = 0u;
+        if (ParseCssColor(part, &color)) {
+          if (uniform) {
+            style->border_color = color;
+          } else {
+            style->side_border_color[side] = color;
+            style->side_border_color_set[side] = true;
+          }
+          continue;
+        }
+        float px = 0.0f;
+        float percent = -1.0f;
+        if (ParseLength(part, &px, &percent) && px >= 0.0f) {
+          if (uniform) {
+            style->border_width = px;
+          } else {
+            style->side_border_width[side] = px;
+          }
+        }
       }
     }
   } else if (key == "border-width") {
-    float px = 0.0f;
-    float percent = -1.0f;
-    if (ParseLength(value, &px, &percent) && px >= 0.0f) style->border_width = px;
+    const std::vector<std::string> parts = SplitWhitespace(value);
+    if (!parts.empty()) {
+      float values[4] = {0, 0, 0, 0};
+      for (size_t i = 0; i < parts.size() && i < 4; i++) {
+        float px = 0.0f;
+        float percent = -1.0f;
+        if (ParseLength(parts[i], &px, &percent) && px >= 0.0f) {
+          values[i] = px;
+        }
+      }
+      const size_t n = parts.size();
+      float top = values[0];
+      float right = n > 1 ? values[1] : top;
+      float bottom = n > 2 ? values[2] : top;
+      float left = n > 3 ? values[3] : right;
+      style->border_width = top;
+      style->side_border_width[0] = top;
+      style->side_border_width[1] = right;
+      style->side_border_width[2] = bottom;
+      style->side_border_width[3] = left;
+    }
   } else if (key == "border-color") {
-    uint32_t color = 0u;
-    if (ParseCssColor(value, &color)) style->border_color = color;
+    const std::vector<std::string> parts = SplitWhitespace(value);
+    if (!parts.empty()) {
+      uint32_t values[4] = {0, 0, 0, 0};
+      for (size_t i = 0; i < parts.size() && i < 4; i++) {
+        uint32_t color = 0u;
+        if (ParseCssColor(parts[i], &color)) values[i] = color;
+      }
+      const size_t n = parts.size();
+      uint32_t top = values[0];
+      uint32_t right = n > 1 ? values[1] : top;
+      uint32_t bottom = n > 2 ? values[2] : top;
+      uint32_t left = n > 3 ? values[3] : right;
+      style->border_color = top;
+      for (int i = 0; i < 4; i++) {
+        style->side_border_color[i] = i == 0 ? top : i == 1 ? right : i == 2 ? bottom : left;
+        style->side_border_color_set[i] = true;
+      }
+    }
   } else if (key == "border-radius") {
     ParseBorderRadius(style, value);
   } else if (key == "border-top-left-radius") {
@@ -4034,6 +4171,23 @@ int EffectiveAlign(const AppStyle& parent, const AppStyle& child) {
   return child.align_self >= 0 ? child.align_self : parent.align;
 }
 
+// Flow children in CSS `order` order (stable for equal order values).
+std::vector<AppNode*> OrderedFlowChildren(AppNode* node) {
+  std::vector<AppNode*> flow;
+  for (AppNode* child : node->children) {
+    if (child == nullptr || child->released || child->style.display_none ||
+        child->style.position != 0) {
+      continue;
+    }
+    flow.push_back(child);
+  }
+  std::stable_sort(flow.begin(), flow.end(),
+                   [](const AppNode* a, const AppNode* b) {
+                     return a->style.order < b->style.order;
+                   });
+  return flow;
+}
+
 // Resolves a CSS inset (top/right/bottom/left) against the parent content box.
 // Returns false when the inset is `auto`.
 bool ResolveInset(const AppStyle& style, int index, float content_extent,
@@ -4073,7 +4227,10 @@ bool ImageUsesWidthFix(const AppNode* node) {
 float BorderBoxExtra(const AppStyle& style, bool horizontal) {
   const float pad = horizontal ? style.padding[1] + style.padding[3]
                                : style.padding[0] + style.padding[2];
-  return pad + 2.0f * style.border_width;
+  const float border =
+      horizontal ? EffectiveBorderWidth(style, 1) + EffectiveBorderWidth(style, 3)
+                 : EffectiveBorderWidth(style, 0) + EffectiveBorderWidth(style, 2);
+  return pad + border;
 }
 
 SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
@@ -4217,14 +4374,13 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
       line_cross = 0.0f;
     };
     for (AppNode* child : node->children) {
-      if (child->released || child->style.display_none) {
+      if (child != nullptr &&
+          (child->released || child->style.display_none)) {
         child->measured_w = 0.0f;
         child->measured_h = 0.0f;
-        continue;
       }
-      // Absolutely positioned nodes do not contribute to the parent's flow
-      // size; LayoutNode measures them against the content box.
-      if (child->style.position != 0) continue;
+    }
+    for (AppNode* child : OrderedFlowChildren(node)) {
       ++flow_children;
       const int child_align = EffectiveAlign(style, child->style);
       const bool child_stretch_w =
@@ -4331,8 +4487,10 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
   // Builders materialize items on demand; the Flutter sliver owns placement.
   if (IsListBuilderName(node->name) || IsGridBuilderName(node->name)) return;
 
-  const float content_x = style.border_width + style.padding[3];
-  const float content_y = style.border_width + style.padding[0];
+  const float content_x =
+      EffectiveBorderWidth(style, 3) + style.padding[3];
+  const float content_y =
+      EffectiveBorderWidth(style, 0) + style.padding[0];
   const float content_w =
       std::max(0.0f, w - BorderBoxExtra(style, true));
   const float content_h =
@@ -4354,10 +4512,7 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
 
   float fixed_sum = 0.0f;
   float flex_sum = 0.0f;
-  for (AppNode* child : node->children) {
-    if (child->released || child->style.display_none) continue;
-    // Absolutely/fixed positioned children are laid out after flex flow.
-    if (child->style.position != 0) continue;
+  for (AppNode* child : OrderedFlowChildren(node)) {
     ChildLayout layout;
     layout.node = child;
     // Re-measure with the final parent content box so percentages resolve.
@@ -4811,6 +4966,7 @@ void ResetNodeHandles(AppNode* node, bool include_layout) {
   if (node == nullptr) return;
   DeletePersistent(&node->decorated_box_p);
   DeletePersistent(&node->opacity_widget_p);
+  DeletePersistent(&node->clip_widget_p);
   DeletePersistent(&node->text_widget_p);
   DeletePersistent(&node->text_span_p);
   DeletePersistent(&node->yoga_node_p);
@@ -6038,15 +6194,22 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     const bool wants_paint_transition =
         (style.transition_mask &
          (kTransitionBackground | kTransitionBorderColor)) != 0;
-    const bool has_visual = style.has_background ||
-                            style.border_width > 0.0f || HasAnyRadius(style) ||
+    const bool has_visual = style.has_background || HasBorder(style) ||
+                            HasAnyRadius(style) ||
                             style.has_shadow || wants_background_image ||
                             style.has_gradient || wants_paint_transition;
     if (has_visual) {
       if (wants_background_image) LoadBackgroundImageForNode(node);
-      const uint32_t border_color =
-          style.border_width > 0.0f ? style.border_color : 0u;
-      const uint8_t border_style = style.border_width > 0.0f ? 1 : 0;
+      double widths[4] = {0, 0, 0, 0};
+      uint32_t colors[4] = {0u, 0u, 0u, 0u};
+      uint8_t styles[4] = {0, 0, 0, 0};
+      for (int side = 0; side < 4; side++) {
+        widths[side] = EffectiveBorderWidth(style, side);
+        if (widths[side] > 0.0) {
+          colors[side] = EffectiveBorderColor(style, side);
+          styles[side] = 1;
+        }
+      }
       Dart_Handle shadows = BuildBoxShadowList(style);
       Dart_Handle gradient = BuildLinearGradientHandle(style);
       const double radius_tl = EffectiveCornerRadius(style, 0);
@@ -6058,10 +6221,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       const uint8_t radius_br_pct = CornerRadiusPercent(style, 2) ? 1 : 0;
       const uint8_t radius_bl_pct = CornerRadiusPercent(style, 3) ? 1 : 0;
       Dart_Handle decorated = newDecoratedBox(
-          node->address, style.background, style.border_width,
-          style.border_width, style.border_width, style.border_width,
-          border_color, border_color, border_color, border_color, border_style,
-          border_style, border_style, border_style, radius_tl, radius_tl,
+          node->address, style.background, widths[3], widths[0], widths[1],
+          widths[2], colors[3], colors[0], colors[1], colors[2], styles[3],
+          styles[0], styles[1], styles[2], radius_tl, radius_tl,
           radius_tr, radius_tr, radius_bl, radius_bl, radius_br, radius_br,
           radius_tl_pct, radius_tl_pct, radius_tr_pct, radius_tr_pct,
           radius_bl_pct, radius_bl_pct, radius_br_pct, radius_br_pct,
@@ -6095,6 +6257,32 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         inner = opacity;
         node->opacity_widget = opacity;
         node->opacity_widget_p = Dart_NewPersistentHandle(opacity);
+      }
+    }
+    if (style.clip && g_page != nullptr && g_page->holder != nullptr) {
+      auto* new_clip = reinterpret_cast<NewClipRRectFn>(FindCallback(
+          g_page->holder->ffi_table, kNewClipRRectHash));
+      if (new_clip != nullptr) {
+        const double tl = EffectiveCornerRadius(style, 0);
+        const double tr = EffectiveCornerRadius(style, 1);
+        const double br = EffectiveCornerRadius(style, 2);
+        const double bl = EffectiveCornerRadius(style, 3);
+        const uint8_t tl_pct = CornerRadiusPercent(style, 0) ? 1 : 0;
+        const uint8_t tr_pct = CornerRadiusPercent(style, 1) ? 1 : 0;
+        const uint8_t br_pct = CornerRadiusPercent(style, 2) ? 1 : 0;
+        const uint8_t bl_pct = CornerRadiusPercent(style, 3) ? 1 : 0;
+        Dart_Handle clip = new_clip(
+            0, tl, tl, tr, tr, bl, bl, br, br, tl_pct, tl_pct, tr_pct, tr_pct,
+            bl_pct, bl_pct, br_pct, br_pct, EffectiveBorderWidth(style, 3),
+            EffectiveBorderWidth(style, 0), EffectiveBorderWidth(style, 1),
+            EffectiveBorderWidth(style, 2), inner);
+        if (Dart_IsError(clip)) {
+          ReportDartError("appservice NewClipRRect", clip);
+        } else {
+          inner = clip;
+          node->clip_widget = clip;
+          node->clip_widget_p = Dart_NewPersistentHandle(clip);
+        }
       }
     }
   }
@@ -7470,6 +7658,7 @@ bool SameGradient(const AppStyle& a, const AppStyle& b) {
 bool StyleNeedsRebuild(const AppNode* node, const AppStyle& before,
                        const AppStyle& after) {
   if (before.display_none != after.display_none) return true;
+  if (before.clip != after.clip) return true;
   // Presence changes can be handled in place once the corresponding widget
   // handles already exist (notably during an opacity/background transition).
   if (node->decorated_box_p == nullptr &&
@@ -7477,7 +7666,7 @@ bool StyleNeedsRebuild(const AppNode* node, const AppStyle& before,
     return true;
   }
   if (node->decorated_box_p == nullptr &&
-      (before.border_width > 0.0f) != (after.border_width > 0.0f)) {
+      HasBorder(before) != HasBorder(after)) {
     return true;
   }
   if (node->opacity_widget_p == nullptr &&
@@ -7549,6 +7738,8 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       FindCallback(holder->ffi_table, kDecoratedBoxUpdateGradientHash));
   auto* clear_gradient = reinterpret_cast<DecoratedBoxClearGradientFn>(
       FindCallback(holder->ffi_table, kDecoratedBoxClearGradientHash));
+  auto* update_clip_radius = reinterpret_cast<ClipRRectUpdateRadiusFn>(
+      FindCallback(holder->ffi_table, kClipRRectUpdateRadiusHash));
   auto* update_opacity = reinterpret_cast<OpacityUpdateFn>(
       FindCallback(holder->ffi_table, kOpacityUpdateHash));
   auto* mark_needs_layout = reinterpret_cast<MarkYGNodeNeedsLayoutFn>(
@@ -7671,15 +7862,20 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
             update_color != nullptr) {
           update_color(decorated, after.background);
         }
-        if ((!Nearly(before.border_width, after.border_width) ||
-             before.border_color != after.border_color) &&
-            update_border != nullptr) {
-          const uint8_t border_style = after.border_width > 0.0f ? 1 : 0;
-          update_border(decorated, after.border_width, after.border_width,
-                        after.border_width, after.border_width,
-                        after.border_color, after.border_color,
-                        after.border_color, after.border_color, border_style,
-                        border_style, border_style, border_style);
+        if (BorderSidesChanged(before, after) && update_border != nullptr) {
+          double widths[4] = {0, 0, 0, 0};
+          uint32_t colors[4] = {0u, 0u, 0u, 0u};
+          uint8_t styles[4] = {0, 0, 0, 0};
+          for (int side = 0; side < 4; side++) {
+            widths[side] = EffectiveBorderWidth(after, side);
+            if (widths[side] > 0.0) {
+              colors[side] = EffectiveBorderColor(after, side);
+              styles[side] = 1;
+            }
+          }
+          update_border(decorated, widths[3], widths[0], widths[1], widths[2],
+                        colors[3], colors[0], colors[1], colors[2], styles[3],
+                        styles[0], styles[1], styles[2]);
         }
         const bool shadow_changed =
             before.has_shadow != after.has_shadow ||
@@ -7721,6 +7917,23 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
             clear_gradient(decorated);
           }
         }
+      }
+      if (node->clip_widget_p != nullptr && RadiiChanged(before, after)) {
+        if (update_clip_radius == nullptr) {
+          rebuild = true;
+          break;
+        }
+        const double tl = EffectiveCornerRadius(after, 0);
+        const double tr = EffectiveCornerRadius(after, 1);
+        const double br = EffectiveCornerRadius(after, 2);
+        const double bl = EffectiveCornerRadius(after, 3);
+        const uint8_t tl_pct = CornerRadiusPercent(after, 0) ? 1 : 0;
+        const uint8_t tr_pct = CornerRadiusPercent(after, 1) ? 1 : 0;
+        const uint8_t br_pct = CornerRadiusPercent(after, 2) ? 1 : 0;
+        const uint8_t bl_pct = CornerRadiusPercent(after, 3) ? 1 : 0;
+        update_clip_radius(Dart_HandleFromPersistent(node->clip_widget_p), tl,
+                           tl, tr, tr, bl, bl, br, br, tl_pct, tl_pct, tr_pct,
+                           tr_pct, bl_pct, bl_pct, br_pct, br_pct);
       }
       if (node->opacity_widget_p != nullptr && update_opacity != nullptr &&
           std::fabs(before.opacity - after.opacity) > 0.001) {
@@ -7986,8 +8199,7 @@ uint32_t TransitionChangedMask(const AppStyle& before, const AppStyle& after,
     changed |= kTransitionColor;
   }
   if ((mask & kTransitionBorderColor) != 0 &&
-      (before.border_color != after.border_color ||
-       (before.border_width > 0.0f) != (after.border_width > 0.0f))) {
+      BorderSidesChanged(before, after)) {
     changed |= kTransitionBorderColor;
   }
   if ((mask & kTransitionTransform) != 0 &&
@@ -8010,6 +8222,11 @@ void ResetTransitionProperties(AppStyle* style, const AppStyle& from,
   if ((mask & kTransitionBorderColor) != 0) {
     style->border_color = from.border_color;
     style->border_width = from.border_width;
+    for (int side = 0; side < 4; side++) {
+      style->side_border_width[side] = EffectiveBorderWidth(from, side);
+      style->side_border_color[side] = EffectiveBorderColor(from, side);
+      style->side_border_color_set[side] = true;
+    }
   }
   if ((mask & kTransitionTransform) != 0) {
     style->has_transform = from.has_transform;
@@ -8036,6 +8253,14 @@ AppStyle InterpolateTransition(const ActiveTransition& transition, double t) {
     style.border_color = LerpColor(from.border_color, to.border_color, t);
     style.border_width =
         static_cast<float>(LerpDouble(from.border_width, to.border_width, t));
+    for (int side = 0; side < 4; side++) {
+      style.side_border_width[side] = static_cast<float>(LerpDouble(
+          EffectiveBorderWidth(from, side), EffectiveBorderWidth(to, side), t));
+      style.side_border_color[side] =
+          LerpColor(EffectiveBorderColor(from, side),
+                    EffectiveBorderColor(to, side), t);
+      style.side_border_color_set[side] = true;
+    }
   }
   if ((mask & kTransitionTransform) != 0) {
     style.has_transform = from.has_transform || to.has_transform;

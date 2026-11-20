@@ -267,7 +267,7 @@
   细粒度回调，builder-only 批次不再整页重建；图片 `repeat`、CSS
   `background-image`、Dart `SvgToRgba` SVG 解码、URL 缓存与
   `CancelRequestHttpResource`；输入光标/选区/组合输入与 `InputHoldKeyboard`
-  触发；CJK `fontFamilyFallback`。`npm run test:ops` 覆盖到 47 个用例。
+  触发；CJK `fontFamilyFallback`。`npm run test:ops` 覆盖到 50 个用例。
 - **L5 harness（2026-11-20）**：`test/lib/l5.js` 提供 SHA-256 与逐通道容差比较，
   `tools/l5-baseline.js --write` 生成 `spec/l5-baseline.json`；
   `npm run test:l5` 校验 Linux 基线，并在提供 `spec/l5-baseline.win32.json`
@@ -278,8 +278,9 @@
   linear-gradient 与 `DecoratedBoxUpdateGradient`、root 自身样式 targeted
   update、fixed 节点提升到页面根连接器（滚动祖先内保持固定）、录制器
   `--animate-ms` 驱动 JS worklet mapper/derived value 并采样为
-  `addAnimatedStyle` 时间线；flexbox 增加 `align-self`、按轴 gap、
-  `flex-wrap`/`align-content`；资源加载按路径缓存（≤4 MB）。
+  `addAnimatedStyle` 时间线；flexbox 增加 `align-self`、`order`、按轴 gap、
+  `flex-wrap`/`align-content`、逐边 border 与 `overflow: hidden` 裁剪；资源加载
+  按路径缓存（≤4 MB）。
 - **下一步**：私有 `dart:ui` 文本编码标志（`backgroundUseLineMetrics`/
   `useCoreTextWordBreak`）、L5 的 Windows 官方 guest 基准、
   `HandleNativeViewPointerEvent`/native view、以及继续补全 yoga 属性。

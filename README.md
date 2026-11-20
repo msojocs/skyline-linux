@@ -27,8 +27,9 @@
 > CJK 字体回退，以及 L5 Linux 基线/容差比较 harness。后续增量补齐：
 > `transform-origin`、圆角/gradient 增量更新、root 样式 targeted update、
 > fixed 节点提升到页面根连接器（滚动祖先内保持固定）、录制器
-> `--animate-ms` 驱动 JS worklet/derived value 采样、`align-self`/按轴
-> gap/`flex-wrap`/`align-content`、逐角圆角与资源路径缓存。
+> `--animate-ms` 驱动 JS worklet/derived value 采样、`align-self`/`order`/按轴
+> gap/`flex-wrap`/`align-content`、逐边 border、`overflow: hidden` 裁剪、
+> 逐角圆角与资源路径缓存。
 > 渲染引擎的原生 Linux 实现受闭源限制，详见
 > [docs/feasibility.md](docs/feasibility.md) 与
 > [docs/appservice-ops.md](docs/appservice-ops.md)。
@@ -145,8 +146,8 @@ npm run test:contract
 ### 当前结果（2026-11-20）
 
 ```
-npm test: 166 tests, 141 pass, 0 fail, 25 skipped
-npm run test:ops: 47 tests, 47 pass
+npm test: 169 tests, 144 pass, 0 fail, 25 skipped
+npm run test:ops: 50 tests, 50 pass
 npm run test:l5: 2 tests, 1 pass, 1 skipped (Windows guest 基线与 L2 engine-context 用例)
 ```
 
@@ -268,7 +269,8 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   取消、输入法选区/光标/组合输入、CJK 字体回退与 L5 Linux 基线/harness。
   后续增量：`transform-origin`、逐角圆角/gradient 增量更新、root 样式 targeted
   update、fixed 节点提升到页面根连接器、录制器 JS worklet/derived value 采样、
-  `align-self`/按轴 gap/`flex-wrap`/`align-content` 与资源路径缓存。
+  `align-self`/`order`/按轴 gap/`flex-wrap`/`align-content`、逐边 border、
+  `overflow: hidden` 裁剪、逐角圆角与资源路径缓存。
 - 未完成：完整 yoga 属性；官方 Windows appservice guest 的 L5 像素采集；私有
   `dart:ui` 文本编码标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`）；
   `HandleNativeViewPointerEvent` 等 native view 通道。

@@ -487,9 +487,10 @@ npm run test:ops
 - attach 后的样式/文本更新走细粒度回调；结构变更仍会重建 attach 根子树。
   背景/边框/box-shadow/圆角/gradient 与 root 自身样式均支持增量更新
   （`DecoratedBoxUpdateColor/Border/Shadow/BorderSideRadius/Gradient/
-  ClearGradient`）。flexbox 子集支持 `align-self`、`row-gap`/`column-gap`
-  （含 `gap: r c`）、`flex-wrap` + `align-content`，以及逐角
-  `border-radius`（px/%）。
+  ClearGradient`）。flexbox 子集支持 `align-self`、`order`、`row-gap`/
+  `column-gap`（含 `gap: r c`）、`flex-wrap` + `align-content`，逐边
+  `border-width/color`，逐角 `border-radius`（px/%），以及 `overflow:
+  hidden/clip`（`NewClipRRect`，圆角增量走 `ClipRRectUpdateRadius`）。
 - `transition` 已回放：CSS `transition`/`transition-*` 解析为属性掩码、时长、
   延迟与缓动，16ms 时间线通过 target/override 逐帧走
   `DecoratedBoxUpdateColor`/`OpacityUpdate`/`TextSpanUpdate*` 与

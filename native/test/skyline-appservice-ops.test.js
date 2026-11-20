@@ -1423,6 +1423,94 @@ test('appservice ops: align-self and per-axis gaps', {
   assert.deepEqual(pixelAt(pixels, 10, 190), [0, 255, 255, 255]);
 });
 
+test('appservice ops: per-side borders render and update', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-borders-'));
+  const ops = path.join(dir, 'borders.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:100px;top:100px;width:100px;height:100px;' +
+          'background:#FFFFFF;border-top:10px solid #FF0000;' +
+          'border-left:20px solid #0000FF;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 300, ops: [
+        { op: 'setStyle', id: 3,
+          value: 'border-top-color:#00AA00;border-left-width:0px;' },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2600,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    // Top border is green after the update; the left border was removed.
+    assert.deepEqual(pixelAt(pixels, 150, 105), [0, 170, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 105, 150), [255, 255, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 150, 150), [255, 255, 255, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: CSS order reorders flow children', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-order.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // Source order a,b,c with order 2,0,1 -> visual order b,c,a.
+  assert.deepEqual(pixelAt(pixels, 25, 25), [0, 170, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 75, 25), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 125, 25), [255, 0, 0, 255]);
+});
+
+test('appservice ops: overflow hidden clips children to the border box', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-overflow.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  // child starts at (150,150) and is clipped at the 100x100 box.
+  assert.deepEqual(pixelAt(pixels, 120, 120), [0, 170, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 160, 160), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 220, 120), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 120, 220), [255, 255, 255, 255]);
+  // rounded clip: the overflowing child is cut by the 50px radius.
+  assert.deepEqual(pixelAt(pixels, 225, 105), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 270, 150), [255, 0, 0, 255]);
+});
+
 test('appservice ops: per-corner border-radius updates', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
