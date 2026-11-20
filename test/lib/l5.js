@@ -15,7 +15,9 @@ function sha256(buffer) {
 
 // Compares two RGBA frames.  `tolerance` is the maximum allowed absolute
 // difference per channel (0 = exact).  `maxMismatchRatio` bounds the fraction
-// of channels that may exceed the tolerance.
+// of channels that may exceed the tolerance.  `ignoreRects` is an optional
+// list of `[x0, y0, x1, y1]` device-pixel rectangles that are excluded from
+// the comparison (used for the Linux debug-build banner).
 function compareFrames(expected, actual, options = {}) {
   const tolerance = Number.isInteger(options.tolerance) ? options.tolerance : 0;
   const maxMismatchRatio =
@@ -36,15 +38,28 @@ function compareFrames(expected, actual, options = {}) {
       passed: false,
     };
   }
+  const ignoreRects = Array.isArray(options.ignoreRects) ? options.ignoreRects : [];
+  const width = Number.isInteger(options.width) ? options.width : 0;
+  const ignored = (x, y) => ignoreRects.some(
+    ([x0, y0, x1, y1]) => x >= x0 && x < x1 && y >= y0 && y < y1,
+  );
   let mismatched = 0;
   let maxDelta = 0;
-  for (let i = 0; i < expectedBytes.length; i++) {
-    const delta = Math.abs(expectedBytes[i] - actualBytes[i]);
-    if (delta > maxDelta) maxDelta = delta;
-    if (delta > tolerance) mismatched++;
+  let comparedChannels = 0;
+  for (let i = 0; i < expectedBytes.length; i += 4) {
+    if (width > 0 && ignoreRects.length > 0) {
+      const pixel = i / 4;
+      if (ignored(pixel % width, Math.floor(pixel / width))) continue;
+    }
+    for (let channel = 0; channel < 4; channel++) {
+      comparedChannels++;
+      const delta = Math.abs(expectedBytes[i + channel] - actualBytes[i + channel]);
+      if (delta > maxDelta) maxDelta = delta;
+      if (delta > tolerance) mismatched++;
+    }
   }
   const mismatchRatio =
-    expectedBytes.length === 0 ? 0 : mismatched / expectedBytes.length;
+    comparedChannels === 0 ? 0 : mismatched / comparedChannels;
   return {
     equal: mismatched === 0,
     expectedHash,
@@ -52,6 +67,7 @@ function compareFrames(expected, actual, options = {}) {
     lengthMismatch: false,
     maxDelta,
     mismatchedChannels: mismatched,
+    comparedChannels,
     mismatchRatio,
     passed: mismatched === 0 || mismatchRatio <= maxMismatchRatio,
   };

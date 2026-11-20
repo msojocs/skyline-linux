@@ -526,6 +526,8 @@ npm run test:ops
   仍会显示 tofu。私有 `backgroundUseLineMetrics`/`useCoreTextWordBreak` 仍无法
   由公开引擎编码（CSS line-height 已通过 span height 生效）。
 - L5：Linux 侧确定性帧哈希与 `test/lib/l5.js` 容差比较已就绪
-  （`npm run test:l5`）；Windows ↔ Linux 像素对比仍受官方 appservice guest
-  阻塞（`docs/feasibility.md` 第 3 节），提供
-  `spec/l5-baseline.win32.json` 后自动启用。
+  （`npm run test:l5`）。官方 Windows 引擎帧由 `tools/l5-windows.js` 在
+  Wine 渲染进程中以 dpr=2 采集，基线写入 `spec/l5-baseline.win32.json`；
+  Windows 原始帧为 BGRA，采集工具统一转 RGBA。7 个夹具逐像素完全一致（`shadow` 最大差 1），
+  `overflow`/`fixed-scroll` 仅有边缘级差异，`transform3d` 与
+  `gridview`/`listview` 的已知差异见 `docs/feasibility.md` §3.1。

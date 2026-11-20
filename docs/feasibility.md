@@ -184,9 +184,48 @@ DevTools 自身创建）不在此列，需要进一步复刻其初始化顺序�
 window_controller_`，并提示 `Unable to start engine without AOT data`。这说明
 `createWindow` 的失败路径也可能以 fatal 终止进程，因此测试必须逐用例隔离子进程。
 
-结论：**Wine 下的引擎级测试需要先解决该断言**；L1–L4 不受影响。该断言不影响
-“官方 Windows 模块能提供基准数据”这一事实——模块加载、参数校验、共享内存与帧协议
-均可在当前环境完整观测。
+结论：**最小宿主中的 `createWindow` 断言已通过“渲染进程 + 窗口就绪后注入”规避**；
+L1–L4 不受影响。该断言不影响“官方 Windows 模块能提供基准数据”这一事实——模块加载、
+参数校验、共享内存与帧协议均可在当前环境完整观测。引擎级像素采集的后续结论见 §3.1。
+
+### 3.1 2026-11-20：真实 L5 采集已跑通
+
+C1 原先按“需要完整官方 DevTools 环境”阻塞。实际验证表明，**官方引擎的像素输出不需要
+完整 DevTools UI**，只需要正确的宿主初始化顺序：
+
+1. 在 Electron **渲染进程**（`nodeIntegration`、`contextIsolation:false`）中加载官方
+   `skyline.node`，构造 `SkylineShell` 并注册回调；
+2. 调用 `createWindow(windowId, bundle, width, height, dpr, true, null, addon, descriptor)`；
+   `dpr` 必须为 **2**，否则命中 `flutter_window.cc(97) Check failed:
+   device_pixel_ratio == 2`；
+3. 等待 `setNotifyWindowReadyCallback`。此时官方 addon 才把 `SkylineGlobal` 注入当前
+   渲染进程的 V8；`createWindow` 返回时它仍为 `undefined`；
+4. 调用 `skylineShell.notifyAppLaunch(windowId, 0, { backgroundColorContent })`，让 Dart
+   侧建立页面路由；
+5. 用 `new SkylineGlobal.PageContext(0, windowId)` 创建上下文，通过
+   `createElement`/`setStyle`/`addClass`/`appendChild`/`attach`/`startRender` 回放
+   appservice op 流；
+6. 从共享内存读取 `frameId + frameSize + RGBA`。**Windows 原始帧是 BGRA**（官方
+   pageframe 的 WebGL shader 在 win32 下使用 `.bgra`），需交换 R/B 后再比较。
+
+`tools/l5-windows.js` 与 `tools/l5-win-app/` 实现了上述流程；`npm run l5:windows`
+采集并将结果写入 `spec/l5-baseline.win32.json`。官方引擎限制 dpr=2，因此帧为
+640x480 设备像素；Linux 侧用同一夹具在 `--dpr 2` 下重放，比较时仅排除 Linux debug
+构建右上角的 “DEBUG” 横幅（`ignoreRects`，release Windows 引擎没有该横幅）。
+
+13 个夹具的实测结果（`npm run test:l5`，容差 12/通道）：
+
+| 夹具 | 结果 |
+| --- | --- |
+| stripes/fixed/transform-origin/align-gap/flex-wrap/order/absolute | 逐像素完全一致（maxDelta=0） |
+| shadow | maxDelta=1 |
+| overflow | maxDelta=109，失配率 0.14%（裁剪边缘） |
+| fixed-scroll | maxDelta=26，失配率 0.14%（滚动/固定元素边缘） |
+| transform3d | 失配率 18%，Linux 3D 变换保真差异（记录为已知差异） |
+| gridview/listview | 合成 op 流不会触发官方 native builder 回调，标记不可比 |
+
+完整官方 DevTools UI 在 Wine 下启动后卡在登录/主线程同步 IPC；这不是 L5 采集的
+必要条件，`tools/l5-windows.js` 的渲染进程路径已覆盖 C1 的“官方引擎真实帧”目标。
 
 ## 4. 原生移植的可行性
 

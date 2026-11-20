@@ -33,8 +33,10 @@ const assets = path.join(
 const kernel = path.join(assets, 'kernel_blob.bin');
 const baselinePath = path.join(repoRoot, 'spec', 'l5-baseline.json');
 
-const width = 320;
-const height = 240;
+const logicalWidth = 320;
+const logicalHeight = 240;
+const width = logicalWidth;
+const height = logicalHeight;
 const frameSize = width * height * 4;
 
 const FIXTURES = [
@@ -63,7 +65,13 @@ function prerequisites() {
   return missing;
 }
 
-function render(fixturePath) {
+function render(fixturePath, options = {}) {
+  const dpr = options.dpr === undefined ? 1 : options.dpr;
+  const cssWidth = options.width === undefined ? logicalWidth : options.width;
+  const cssHeight = options.height === undefined ? logicalHeight : options.height;
+  const frameWidth = Math.ceil(cssWidth * dpr);
+  const frameHeight = Math.ceil(cssHeight * dpr);
+  const expectedFrameSize = frameWidth * frameHeight * 4;
   const key = `skyline_l5_${process.pid}_${Date.now().toString(36)}_${Math.random()
     .toString(36)
     .slice(2, 8)}`;
@@ -76,16 +84,17 @@ function render(fixturePath) {
   const result = spawnSync(host, [
     '--assets', assets,
     '--icu', icu,
-    '--width', String(width),
-    '--height', String(height),
+    '--width', String(cssWidth),
+    '--height', String(cssHeight),
+    '--dpr', String(dpr),
     '--shm-key', key,
     '--timeout-ms', '1800',
     '--frames', '0',
     '--no-shutdown',
     '--entrypoint-arg', '1',
     '--entrypoint-arg', '1',
-    '--entrypoint-arg', String(width),
-    '--entrypoint-arg', String(height),
+    '--entrypoint-arg', String(cssWidth),
+    '--entrypoint-arg', String(cssHeight),
     '--entrypoint-arg', '1',
     '--entrypoint-arg', 'stub',
   ], { encoding: 'utf8', timeout: 45000, env });
@@ -99,10 +108,10 @@ function render(fixturePath) {
       throw new Error(`bad shared-memory size for ${path.basename(fixturePath)}`);
     }
     const data = buffer.subarray(16);
-    if (data.readUInt32LE(4) !== frameSize) {
+    if (data.readUInt32LE(4) !== expectedFrameSize) {
       throw new Error(`bad frame size for ${path.basename(fixturePath)}`);
     }
-    return data.subarray(8, 8 + frameSize);
+    return data.subarray(8, 8 + expectedFrameSize);
   } finally {
     try {
       fs.unlinkSync(shmPath);

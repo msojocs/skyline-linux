@@ -29,7 +29,9 @@
 > fixed 节点提升到页面根连接器（滚动祖先内保持固定）、录制器
 > `--animate-ms` 驱动 JS worklet/derived value 采样、`align-self`/`order`/按轴
 > gap/`flex-wrap`/`align-content`、逐边 border、`overflow: hidden` 裁剪、
-> 逐角圆角与资源路径缓存。
+> 逐角圆角与资源路径缓存。L5 已接入官方 Windows 引擎的真实帧基线
+> （`spec/l5-baseline.win32.json`，Wine 渲染进程 + dpr=2 采集）。
+> 阶段 3 任务清单与 x/y 进度见 [docs/phase-3-tasks.md](docs/phase-3-tasks.md)。
 > 渲染引擎的原生 Linux 实现受闭源限制，详见
 > [docs/feasibility.md](docs/feasibility.md) 与
 > [docs/appservice-ops.md](docs/appservice-ops.md)。
@@ -61,11 +63,14 @@ Skyline 运行时与嵌入层。该路线周期长，因此先交付可执行的
 | L2 参数校验 | 每个方法的参数数量/类型/越界错误、窗口生命周期 | 任意目标模块 | Wine + 官方 Electron |
 | L3 共享内存 | 外层头、key 校验、零初始化、跨进程可见性、代际替换 | `skyline-shared-memory` | Wine + 官方 `sharedMemory.node` |
 | L4 帧协议 | 帧头（frameId/frameSize）、拷贝语义、跨平台读写互通 | `skyline-shared-memory` | Wine 写入 / Linux 读取 |
-| L5 引擎渲染 | 确定性页面帧的像素/哈希对比 | `skyline_host` + `spec/l5-baseline.json` | 需完整官方 DevTools 环境 |
+| L5 引擎渲染 | 确定性页面帧的像素/哈希对比 | `skyline_host` + `spec/l5-baseline.json` | Wine + 官方 Windows Electron 渲染进程 |
 
-L1–L4 可在本仓库直接运行；L5 的 Linux 基线/容差 harness 已实现
-（`npm run test:l5`），Windows ↔ Linux 对比仍需完整复刻官方 appservice guest
-环境，受控于 `docs/feasibility.md` 第 3 节的阻塞项。
+L1–L4 可在本仓库直接运行；L5 已有 Linux 基线与**官方 Windows 引擎真实帧**基线
+（`npm run test:l5`）。`tools/l5-windows.js` 在 Wine 渲染进程中以 dpr=2 启动官方
+`skyline.node`，经 `notifyAppLaunch` + `PageContext` 回放夹具并从共享内存读取帧
+（Windows 原始帧为 BGRA，工具转为 RGBA），结果写入
+`spec/l5-baseline.win32.json`。13 个夹具中 7 个逐像素完全一致、`shadow` 最大差 1，`overflow`/
+`fixed-scroll` 仅有边缘级差异，剩余差异见 `docs/feasibility.md` §3.1。
 
 ## 快速开始
 
@@ -119,7 +124,9 @@ npm run ops:record -- --tap-option 1  # 录制真实 tap 触发的增量操作
 npm run ops:record -- --tap-text "Jump To PageB"  # 录制 SPA 路由切换
 npm run test:ops                     # 含路由栈/builder/objectFit/网络图片/键盘
 npm run l5:baseline                  # 生成 Linux L5 帧哈希基线
-npm run test:l5                      # L5 基线 + 可选 Windows 容差比较
+npm run l5:windows                   # Wine 官方引擎采集 spec/l5-baseline.win32.json
+npm run test:l5                      # Linux 基线 + Windows 逐像素容差比较
+npm run test:l5:windows              # 仅比较已提交的 Windows 基线
 
 # 2. 记录官方 Windows 模块的契约快照（需要 Wine 11 + Windows Electron）
 export SKYLINE_WIN_RESOURCES=/path/to/resources/app.asar.unpacked
@@ -141,14 +148,15 @@ npm run test:contract
 ```
 
 测试不依赖网络；仓库不提交任何官方二进制。`npm run spec:record` 产生的
-`spec/skyline-node.win32.json` 是唯一提交的基准文件（不含绝对路径）。
+`spec/skyline-node.win32.json` 与 `npm run l5:windows` 产生的
+`spec/l5-baseline.win32.json` 是提交的基准文件（不含绝对路径）。
 
 ### 当前结果（2026-11-20）
 
 ```
-npm test: 169 tests, 144 pass, 0 fail, 25 skipped
+npm test: 169 tests, 145 pass, 0 fail, 24 skipped
 npm run test:ops: 50 tests, 50 pass
-npm run test:l5: 2 tests, 1 pass, 1 skipped (Windows guest 基线与 L2 engine-context 用例)
+npm run test:l5: 2 tests, 2 pass (Linux 确定性基线 + Windows 逐像素容差比较)
 ```
 
 - 通过：L1/L2 契约对比（默认目标 `reference/skyline-node.js`；`native/build/skyline.node`
@@ -178,7 +186,8 @@ npm run test:l5: 2 tests, 1 pass, 1 skipped (Windows guest 基线与 L2 engine-c
   `NewDirectRenderWidget` 原生绘制；`ForwardHttpGet` -> Dart `HttpClient` ->
   `OnForwardHttpGetResponse` HTTP 通道；`HandleTouchEvent`/`HandlePageRouteDone`
   路由与输入通道；宿主 `--pointer-script` 指针注入命中 YGNode 树）。
-- 跳过：需要完整引擎上下文的 L2 用例（`--engine-context`）与 L5 像素对比。
+- 跳过：需要完整引擎上下文的 L2 用例（`--engine-context`）。L5 的 Windows 基线已提交，
+  `npm run test:l5` 会直接执行逐像素比较。
 - 设置 `SKYLINE_LINUX_SKYLINE_ADDON=/path/to/skyline.node` 后，L1/L2 会自动改为
   对比真实 Linux 实现。
 
@@ -271,8 +280,9 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   update、fixed 节点提升到页面根连接器、录制器 JS worklet/derived value 采样、
   `align-self`/`order`/按轴 gap/`flex-wrap`/`align-content`、逐边 border、
   `overflow: hidden` 裁剪、逐角圆角与资源路径缓存。
-- 未完成：完整 yoga 属性；官方 Windows appservice guest 的 L5 像素采集；私有
-  `dart:ui` 文本编码标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`）；
+- 未完成：完整 yoga 属性；`transform3d` 与官方引擎的保真差异；grid/list 合成 op 流
+  触发官方 native builder 回调；私有 `dart:ui` 文本编码标志
+  （`backgroundUseLineMetrics`/`useCoreTextWordBreak`）；
   `HandleNativeViewPointerEvent` 等 native view 通道。
 
 ### `reference/skyline-node.js`
@@ -290,8 +300,10 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
 
 1. key 字符集：Linux 有意收紧（防路径穿越），测试按“安全 key 一致、危险 key
    必须拒绝”判定。
-2. L5 引擎渲染对比：需先解决最小宿主中的
-   `node::NodePlatform::ForIsolate` 断言（见 `docs/feasibility.md` 3）。
+2. L5 引擎渲染对比：官方 Windows 帧已在 `spec/l5-baseline.win32.json` 中提交，
+   Linux 侧按 dpr=2 重放并逐像素比较。已知差异：`transform3d`（3D 变换保真）、
+   `gridview`/`listview`（合成 op 流不触发官方 builder 回调），见
+   `docs/feasibility.md` §3.1。
 3. 引擎后端按“原生引擎复刻”路线推进：阶段 1 的 Native N-API API 层已完成；阶段 2
    已固定公开 Flutter 3.35.3 引擎、产出符号清单，并把 headless engine 接入
    `skyline.node`（每窗口独立 platform thread、多窗口、共享内存出帧与
@@ -312,6 +324,7 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
 
 ```
 docs/            可行性分析、接口与协议契约、生成式符号清单、阶段 3 兼容层与操作流说明
+docs/phase-3-tasks.md  阶段 3 任务清单与 x/y 进度（后续更新以此为准）
 spec/            由 Windows 官方模块录制的 JSON 快照 + kernel 符号清单
 reference/       可执行接口规范（无引擎），原生实现的 API 层蓝本
 native/          Native N-API 模块（API 层已完成，引擎为 stub）
@@ -320,7 +333,8 @@ native/engine/   阶段 2/3：引擎版本固定、fetch/build 脚本、dart:ui 
 native/host/     阶段 2：headless 软件渲染 host
 apps/empty-page/ 阶段 2：最小纯 dart:ui 页面（编译为 kernel_blob.bin）
 apps/dart-ui-compat-smoke/ 阶段 3：兼容层运行时 smoke（Application + 绿帧）
-tools/           环境检查、kernel 符号提取器、kernel 源树恢复、节点操作流录制工具
+tools/           环境检查、kernel 符号提取器、kernel 源树恢复、节点操作流录制、
+                 L5 Linux/Windows 基线采集与比较
 test/cases/      Windows / Linux 共用的观察用例
 test/lib/        归一化、差分比较、Wine/Linux 运行器、帧协议实现
 test/fixtures/   跨平台共享内存读写夹具、appservice 操作流夹具

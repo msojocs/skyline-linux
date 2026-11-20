@@ -132,6 +132,8 @@
 
 ## 阶段 3：Skyline 运行时复刻
 
+> 任务清单与 x/y 进度见 [phase-3-tasks.md](phase-3-tasks.md)。
+
 ### 进度（2026-11-19）：阶段 3 第一项已落地
 
 - **源码恢复**：`tools/reconstruct-kernel-sources.js` 从官方 kernel 的
@@ -270,9 +272,10 @@
   触发；CJK `fontFamilyFallback`。`npm run test:ops` 覆盖到 50 个用例。
 - **L5 harness（2026-11-20）**：`test/lib/l5.js` 提供 SHA-256 与逐通道容差比较，
   `tools/l5-baseline.js --write` 生成 `spec/l5-baseline.json`；
-  `npm run test:l5` 校验 Linux 基线，并在提供 `spec/l5-baseline.win32.json`
-  时启用 Windows ↔ Linux 容差比较。官方 appservice guest 仍阻塞真实 Windows
-  采集。
+  `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 的渲染进程中以 dpr=2
+  采集真实 Windows 帧，`spec/l5-baseline.win32.json` 已提交。`npm run test:l5`
+  同时校验 Linux 基线与 Windows ↔ Linux 逐像素容差比较（含 `ignoreRects`）。
+  真实采集方法与差异清单见 `docs/feasibility.md` §3.1。
 - **后续增量（2026-11-20）**：CSS `transform-origin`（px/%/关键字）、
   `DecoratedBoxUpdateBorderSideRadius` 逐角圆角（含百分比）、CSS
   linear-gradient 与 `DecoratedBoxUpdateGradient`、root 自身样式 targeted
@@ -282,8 +285,8 @@
   `flex-wrap`/`align-content`、逐边 border 与 `overflow: hidden` 裁剪；资源加载
   按路径缓存（≤4 MB）。
 - **下一步**：私有 `dart:ui` 文本编码标志（`backgroundUseLineMetrics`/
-  `useCoreTextWordBreak`）、L5 的 Windows 官方 guest 基准、
-  `HandleNativeViewPointerEvent`/native view、以及继续补全 yoga 属性。
+  `useCoreTextWordBreak`）、`HandleNativeViewPointerEvent`/native view、
+  `transform3d` 保真对齐，以及继续补全 yoga 属性。
 
 按依赖顺序推进，每一块都以 Windows 官方输出为基准：
 
@@ -340,6 +343,6 @@
    增量 mount~~（已完成，见阶段 3 进度；`clipOp` 也已对齐，
    `lineHeight` 仍受引擎文本编码限制）；
 10. ~~`transition` 动画、builder item 二次变更回调、输入法选区/光标~~（已完成，
-    见阶段 3 进度）；~~L5 Linux 基线/harness~~（已完成）。剩余：Windows 官方
-    appservice guest 的真实 L5 采集、滚动祖先内的 fixed、私有 `dart:ui`
-    文本编码标志、JS worklet 动态采样。
+    见阶段 3 进度）；~~L5 Linux 基线/harness~~（已完成）；~~Windows 官方引擎的
+    真实 L5 采集~~（已完成，见 `docs/feasibility.md` §3.1）。剩余：滚动祖先内的
+    fixed、私有 `dart:ui` 文本编码标志、JS worklet 动态采样。

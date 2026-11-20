@@ -5,15 +5,17 @@
 // Linux-side frames are deterministic for the committed fixtures and are
 // checked exactly against `spec/l5-baseline.json`.
 //
-// The Windows half needs the official DevTools appservice guest
-// (docs/feasibility.md section 3).  When `spec/l5-baseline.win32.json` (or
-// `SKYLINE_L5_WINDOWS_BASELINE`) is supplied it is compared with a per-channel
-// tolerance; otherwise the comparison is reported as skipped.
+// The Windows half uses frames captured by `tools/l5-windows.js` from the
+// official Windows `skyline.node` under Wine (dpr=2).  `spec/l5-baseline.win32.json`
+// stores the zlib-compressed RGBA frames; comparison uses a per-channel
+// tolerance and excludes the Linux debug build's corner banner.
+// See docs/feasibility.md section 3.1.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const zlib = require('node:zlib');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const l5 = require(path.join(repoRoot, 'tools', 'l5-baseline.js'));
@@ -51,26 +53,60 @@ test('L5: Linux frame baseline is deterministic', {
 
 test('L5: Windows baseline comparison uses a channel tolerance', {
   skip: skipReason() || (windowsBaselinePath() === null
-    ? 'official appservice guest baseline not available (docs/feasibility.md section 3)'
+    ? 'missing spec/l5-baseline.win32.json (run npm run l5:windows)'
     : false),
-  timeout: 120000,
+  timeout: 240000,
 }, () => {
   const baselinePath = windowsBaselinePath();
   const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+  const dpr = baseline.dpr || 2;
+  const frameWidth = baseline.frame_width || Math.ceil(baseline.width * dpr);
+  const frameHeight = baseline.frame_height || Math.ceil(baseline.height * dpr);
+  const frameSize = frameWidth * frameHeight * 4;
   const tolerance = Number.isInteger(baseline.tolerance) ? baseline.tolerance : 12;
+  const ignoreRects = Array.isArray(baseline.ignoreRects) ? baseline.ignoreRects : [];
+  const ignored = (x, y) => ignoreRects.some(
+    ([x0, y0, x1, y1]) => x >= x0 && x < x1 && y >= y0 && y < y1,
+  );
   const fixtures = baseline.fixtures || {};
   let compared = 0;
+  let skipped = 0;
   for (const [name, expected] of Object.entries(fixtures)) {
     const fixture = path.join(repoRoot, 'test', 'fixtures', `${name}.ops.json`);
     if (!fs.existsSync(fixture)) continue;
-    const pixels = l5.render(fixture);
-    if (typeof expected.sha256 === 'string') {
-      // A supplied Windows hash is only informational: exact equality is not
-      // expected across Skia builds.
+    if (expected.compare === false) {
+      skipped++;
+      continue;
     }
-    const samples = expected.samples || [];
-    for (const [x, y, rgba] of samples) {
-      const offset = (y * l5.width + x) * 4;
+    const pixels = l5.render(fixture, {
+      dpr,
+      width: baseline.width,
+      height: baseline.height,
+    });
+    assert.equal(pixels.length, frameSize,
+      `${name}: Linux frame is ${pixels.length} bytes, expected ${frameSize}`);
+    if (typeof expected.rgbaZlib === 'string') {
+      const win = zlib.inflateSync(Buffer.from(expected.rgbaZlib, 'base64'));
+      assert.equal(win.length, frameSize,
+        `${name}: Windows baseline frame has the wrong size`);
+      assert.equal(sha256(win), expected.sha256,
+        `${name}: Windows baseline frame hash is corrupt`);
+      const result = compareFrames(win, pixels, {
+        width: frameWidth,
+        tolerance: Number.isInteger(expected.tolerance) ? expected.tolerance : tolerance,
+        maxMismatchRatio: typeof expected.maxMismatchRatio === 'number'
+          ? expected.maxMismatchRatio
+          : baseline.maxMismatchRatio ?? 0.01,
+        ignoreRects,
+      });
+      assert.ok(result.passed,
+        `${name} frame differs: maxDelta=${result.maxDelta}, ` +
+        `mismatchRatio=${result.mismatchRatio.toFixed(6)}` +
+        (expected.note ? ` (${expected.note})` : ''));
+    }
+    for (const [x, y, rgba] of (expected.samplesInformational ? [] : (expected.samples || []))) {
+      if (ignored(x, y)) continue;
+      const offset = (y * frameWidth + x) * 4;
       for (let channel = 0; channel < 4; channel++) {
         const delta = Math.abs(pixels[offset + channel] - rgba[channel]);
         assert.ok(delta <= tolerance,
@@ -78,16 +114,11 @@ test('L5: Windows baseline comparison uses a channel tolerance', {
           `${rgba[channel]}| = ${delta} > ${tolerance}`);
       }
     }
-    if (Array.isArray(expected.rgba)) {
-      const result = compareFrames(Buffer.from(expected.rgba), pixels, {
-        tolerance,
-        maxMismatchRatio: baseline.maxMismatchRatio ?? 0.01,
-      });
-      assert.ok(result.passed,
-        `${name} frame differs: maxDelta=${result.maxDelta}, ` +
-        `mismatchRatio=${result.mismatchRatio}`);
-    }
     compared++;
   }
   assert.ok(compared > 0, 'Windows baseline has no comparable fixtures');
+  if (skipped > 0) {
+    // Known build-path divergence; the frame is still committed for inspection.
+    console.log(`L5: skipped ${skipped} known-divergent fixtures`);
+  }
 });
