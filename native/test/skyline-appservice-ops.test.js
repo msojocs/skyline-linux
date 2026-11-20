@@ -1821,7 +1821,8 @@ test('appservice ops: CSS background-image paints through NewDecoratedBox', {
       { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
       { op: 'setStyle', id: 3,
         value: 'width:160px;height:80px;background-image:url(quad.bmp);' +
-          'background-size:cover;background-repeat:no-repeat;' },
+          'background-size:cover;background-repeat:no-repeat;' +
+          'background-position:center;' },
       { op: 'appendChild', id: 2, child: 3 },
       { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
       { op: 'appendChild', id: 1, child: 2 },
@@ -1841,6 +1842,82 @@ test('appservice ops: CSS background-image paints through NewDecoratedBox', {
     assert.deepEqual(pixelAt(pixels, 120, 20), [0, 255, 0, 255]);
     assert.deepEqual(pixelAt(pixels, 40, 60), [0, 0, 255, 255]);
     assert.deepEqual(pixelAt(pixels, 120, 60), [255, 255, 0, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: background-position and object-position', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-pos-'));
+  writeQuadBmp(path.join(dir, 'quad.bmp'));
+  const ops = path.join(dir, 'position.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'image' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:0px;top:0px;width:160px;height:80px;' +
+          'object-fit:contain;object-position:left top;' },
+      { op: 'setAttributes', id: 3, attrs: { src: 'quad.bmp' } },
+      { op: 'createElement', id: 4, tag: 'empty', name: 'image' },
+      { op: 'setStyle', id: 4,
+        value: 'position:absolute;left:0px;top:80px;width:320px;height:80px;' +
+          'object-fit:contain;object-position:right bottom;' },
+      { op: 'setAttributes', id: 4, attrs: { src: 'quad.bmp' } },
+      { op: 'createElement', id: 5, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 5,
+        value: 'position:absolute;left:0px;top:160px;width:160px;height:80px;' +
+          'background-image:url(quad.bmp);background-size:contain;' +
+          'background-repeat:no-repeat;background-position:center;' },
+      { op: 'createElement', id: 6, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 6,
+        value: 'position:absolute;left:160px;top:160px;width:160px;height:80px;' +
+          'background-image:url(quad.bmp);background-size:contain;' +
+          'background-repeat:no-repeat;background-position:right bottom;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'appendChild', id: 2, child: 4 },
+      { op: 'appendChild', id: 2, child: 5 },
+      { op: 'appendChild', id: 2, child: 6 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      env: { SKYLINE_RESOURCE_ROOT: dir },
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+
+    // object-position: left top -> 80x80 image at (0,0).
+    assert.deepEqual(pixelAt(pixels, 20, 20), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 60, 20), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 20, 60), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 60, 60), [255, 255, 0, 255]);
+    // object-position: right bottom -> image at x=240 inside the second box.
+    assert.deepEqual(pixelAt(pixels, 250, 100), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 290, 100), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 250, 140), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 290, 140), [255, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 200, 100), [255, 255, 255, 255]);
+
+    // background-position: center -> 80x80 image at x=40.
+    assert.deepEqual(pixelAt(pixels, 60, 180), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 100, 180), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 60, 220), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 100, 220), [255, 255, 0, 255]);
+    // background-position: right bottom -> image at x=240.
+    assert.deepEqual(pixelAt(pixels, 250, 180), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 290, 180), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 200, 180), [255, 255, 255, 255]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -269,7 +269,7 @@
   细粒度回调，builder-only 批次不再整页重建；图片 `repeat`、CSS
   `background-image`、Dart `SvgToRgba` SVG 解码、URL 缓存与
   `CancelRequestHttpResource`；输入光标/选区/组合输入与 `InputHoldKeyboard`
-  触发；CJK `fontFamilyFallback`。`npm run test:ops` 覆盖到 50 个用例。
+  触发；CJK `fontFamilyFallback`。`npm run test:ops` 覆盖到 54 个用例。
 - **L5 harness（2026-11-20）**：`test/lib/l5.js` 提供 SHA-256 与逐通道容差比较，
   `tools/l5-baseline.js --write` 生成 `spec/l5-baseline.json`；
   `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 的渲染进程中以 dpr=2
@@ -284,7 +284,8 @@
   `addAnimatedStyle` 时间线；flexbox 增加 `align-self`、`order`、按轴 gap、
   `flex-wrap`/`align-content`、`flex-basis`（px/%/auto）与按
   `flex-shrink * base` 缩放的溢出收缩，逐边 border 与 `overflow: hidden`
-  裁剪；资源加载按路径缓存（≤4 MB）。
+  裁剪；资源加载按路径缓存（≤4 MB）；`background-position` / `object-position`
+  （1/2/4 值关键字、%、px 与边距形式）。
 - **下一步**：`transform3d` 保真对齐、native view 真实内容接入（当前 Linux
   为占位 slot），以及继续补全 yoga 属性。
 

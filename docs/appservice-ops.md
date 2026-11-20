@@ -324,6 +324,11 @@ builder 自身不参与 YGNode 布局（sliver 由 Flutter 定位），`childCou
 - `center`/`none`：按原尺寸居中；`scale-down`：不超过原始尺寸的 contain；
 - `widthFix`：布局阶段读取解码后的宽高比，把高度改成 `width * h / w`。
 
+`object-position`（CSS 或 `<image>` 的 `objectPosition` 属性）调整 contain/
+cover/none/scale-down 结果在节点内的位置，默认 `50% 50%`；repeat 模式默认
+从左上角开始铺 tile。CSS `background-position` 使用相同语法与解析器，默认
+`0% 0%`，并移动 repeat 的 tile grid 原点。
+
 网络图片（`http(s)://`）走 Dart 的 `RequestHttpResource`（`dart:io`
 `HttpClient`）：`LoadImageForNode` 先安装 direct-render widget 并投递一次带
 `requestContextId` 的请求，响应在 UI task runner 上解码为 `DlImage` 后重建页面，
@@ -385,9 +390,12 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
 - 定位：`position: absolute|fixed`、`top/right/bottom/left`（px/%）、`z-index`
 - 盒模型：`width/height`（px/%/auto）、`min/max-*`、`padding`/`margin` 及四边，
   `border`/`border-width`/`border-color`、`border-radius`
-- 绘制：`background`/`background-color`、`opacity`、`object-fit`、`transform`
+- 绘制：`background`/`background-color`、`background-image`、
+  `background-size`、`background-repeat`、`background-position`、
+  `object-fit`、`object-position`、`opacity`、`transform`
   （`translate`/`scale`/`rotate`/`matrix`，绕元素中心）、`box-shadow`
-  （首层 offset/blur/spread/color/inset）
+  （首层 offset/blur/spread/color/inset）。position 支持 1/2/4 值关键字、
+  百分比与 px（含 `right 10px`/`bottom 20%`）。
 - 文本：`font-size`、`font-weight`、`font-style`、`line-height`（px 或倍数）、
   `letter-spacing`、`text-align`、`-webkit-line-clamp`
 
@@ -473,6 +481,9 @@ npm run test:ops
   两页操作流，回放后 `didPush pageId: 1` 且页 B 文本可见。
 - `image objectFit`：`aspectFit` 将 8×8 位图缩放到 100×100 并在 200×100 的
   节点中居中留白。
+- `background/object position`：8×8 四象限位图在 contain 盒内按
+  `object-position:left top` / `right bottom` 与 `background-position:center` /
+  `right bottom` 定位，验证图像起点与留白像素。
 - `network image`：本地 HTTP server -> `RequestHttpResource` -> 解码 -> 重建
   页面 -> 四象限像素。
 - `host keyboard channel`：`--key-script` 触发 `FlutterEngineSendKeyEvent` 与

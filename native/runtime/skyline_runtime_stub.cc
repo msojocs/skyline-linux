@@ -2065,6 +2065,15 @@ enum TransitionProperty : uint32_t {
   kTransitionTransform = 1u << 4,
 };
 
+// One axis of a CSS <position> value (`background-position`, `object-position`).
+// `value` is a percentage in 0..100 or a px offset; `from_end` implements the
+// `right 10px` / `bottom 10px` form.
+struct CssPositionAxis {
+  float value = 0.0f;
+  bool percent = true;
+  bool from_end = false;
+};
+
 struct AppStyle {
   bool row = false;
   int justify = 0;  // 0 start, 1 center, 2 end, 3 space-between
@@ -2116,6 +2125,9 @@ struct AppStyle {
   std::string background_image;
   int background_repeat = 0;  // 0 no-repeat, 1 repeat, 2 repeat-x, 3 repeat-y
   int background_fit = 0;     // 0 fill, 1 contain, 2 cover
+  // CSS background-position (default 0% 0%).
+  CssPositionAxis background_position_x;
+  CssPositionAxis background_position_y;
   // First CSS linear-gradient layer.
   bool has_gradient = false;
   double gradient_angle = 0.0;  // radians
@@ -2168,6 +2180,10 @@ struct AppStyle {
   bool clip = false;  // overflow: hidden/clip
   // Image fit: 0 fill, 1 contain, 2 cover, 3 none, 4 scale-down.
   int object_fit = 0;
+  // CSS object-position (default 50% 50%).
+  CssPositionAxis object_position_x = {50.0f, true, false};
+  CssPositionAxis object_position_y = {50.0f, true, false};
+  bool has_object_position = false;
 };
 
 struct AppNode {
@@ -3401,6 +3417,180 @@ void ApplyFlexShorthand(AppStyle* style, const std::string& raw) {
   style->has_flex_shrink = true;
 }
 
+bool IsHorizontalPositionKeyword(const std::string& token) {
+  return token == "left" || token == "right";
+}
+
+bool IsVerticalPositionKeyword(const std::string& token) {
+  return token == "top" || token == "bottom";
+}
+
+bool ParsePositionOffset(const std::string& raw, CssPositionAxis* out) {
+  float px = -1.0f;
+  float percent = -1.0f;
+  if (!ParseLength(raw, &px, &percent)) return false;
+  if (percent >= 0.0f) {
+    out->value = percent * 100.0f;
+    out->percent = true;
+  } else if (px >= 0.0f) {
+    out->value = px;
+    out->percent = false;
+  } else {
+    return false;
+  }
+  out->from_end = false;
+  return true;
+}
+
+bool ParsePositionAxis(const std::string& raw, bool horizontal,
+                       CssPositionAxis* out) {
+  const std::string token = LowerAscii(TrimAscii(raw));
+  if (token == "center") {
+    out->value = 50.0f;
+    out->percent = true;
+    out->from_end = false;
+    return true;
+  }
+  if (horizontal) {
+    if (token == "left") {
+      out->value = 0.0f;
+      out->percent = true;
+      out->from_end = false;
+      return true;
+    }
+    if (token == "right") {
+      out->value = 100.0f;
+      out->percent = true;
+      out->from_end = false;
+      return true;
+    }
+  } else {
+    if (token == "top") {
+      out->value = 0.0f;
+      out->percent = true;
+      out->from_end = false;
+      return true;
+    }
+    if (token == "bottom") {
+      out->value = 100.0f;
+      out->percent = true;
+      out->from_end = false;
+      return true;
+    }
+  }
+  return ParsePositionOffset(token, out);
+}
+
+// Parses the 1/2/4-value CSS <position> syntax.  Supports keyword, percentage
+// and px forms plus the `right 10px` / `bottom 20%` edge offsets.
+bool ParsePositionPair(const std::string& raw,
+                       CssPositionAxis* x,
+                       CssPositionAxis* y) {
+  const std::vector<std::string> parts = SplitWhitespace(raw);
+  if (parts.empty()) return false;
+  if (parts.size() == 1) {
+    const std::string token = LowerAscii(parts[0]);
+    if (IsVerticalPositionKeyword(token)) {
+      if (!ParsePositionAxis(token, false, y)) return false;
+      *x = CssPositionAxis{50.0f, true, false};
+      return true;
+    }
+    if (!ParsePositionAxis(token, true, x)) return false;
+    *y = CssPositionAxis{50.0f, true, false};
+    return true;
+  }
+  if (parts.size() == 2) {
+    const std::string first = LowerAscii(parts[0]);
+    if (IsVerticalPositionKeyword(first)) {
+      if (!ParsePositionAxis(first, false, y)) return false;
+      if (!ParsePositionAxis(parts[1], true, x)) return false;
+      return true;
+    }
+    if (!ParsePositionAxis(parts[0], true, x)) return false;
+    if (!ParsePositionAxis(parts[1], false, y)) return false;
+    return true;
+  }
+  if (parts.size() >= 4) {
+    // [left|right <offset>] [top|bottom <offset>] in either order.
+    CssPositionAxis xa;
+    CssPositionAxis ya;
+    bool have_x = false;
+    bool have_y = false;
+    const std::string first = LowerAscii(parts[0]);
+    const std::string third = LowerAscii(parts[2]);
+    if (IsHorizontalPositionKeyword(first) && ParsePositionOffset(parts[1], &xa)) {
+      xa.from_end = first == "right";
+      have_x = true;
+      if (IsVerticalPositionKeyword(third) &&
+          ParsePositionOffset(parts[3], &ya)) {
+        ya.from_end = third == "bottom";
+        have_y = true;
+      }
+    } else if (IsVerticalPositionKeyword(first) &&
+               ParsePositionOffset(parts[1], &ya)) {
+      ya.from_end = first == "bottom";
+      have_y = true;
+      if (IsHorizontalPositionKeyword(third) &&
+          ParsePositionOffset(parts[3], &xa)) {
+        xa.from_end = third == "right";
+        have_x = true;
+      }
+    }
+    if (have_x && have_y) {
+      *x = xa;
+      *y = ya;
+      return true;
+    }
+  }
+  return false;
+}
+
+// Extracts `<position>` from the `background` shorthand.  Tokens after `/`
+// are background-size, and colour/image/repeat/fit keywords are ignored.
+void ParseBackgroundShorthandPosition(AppStyle* style, const std::string& raw) {
+  std::vector<std::string> position;
+  bool after_slash = false;
+  for (const std::string& raw_token : TokenizeCssValue(raw)) {
+    const std::string token = LowerAscii(raw_token);
+    if (token.empty() || token == ",") {
+      if (token == ",") break;  // first layer only
+      continue;
+    }
+    if (token == "/") {
+      after_slash = true;
+      continue;
+    }
+    const size_t slash = token.find('/');
+    if (slash != std::string::npos) {
+      const std::string before = TrimAscii(token.substr(0, slash));
+      if (!after_slash && !before.empty()) position.push_back(before);
+      after_slash = true;
+      continue;
+    }
+    if (after_slash) continue;
+    if (token.find('(') != std::string::npos) continue;
+    if (token == "repeat" || token == "repeat-x" || token == "repeat-y" ||
+        token == "no-repeat" || token == "space" || token == "round" ||
+        token == "cover" || token == "contain" || token == "auto" ||
+        token == "none" || token == "scroll" || token == "fixed" ||
+        token == "local" || token == "border-box" ||
+        token == "padding-box" || token == "content-box") {
+      continue;
+    }
+    uint32_t color = 0u;
+    if (ParseCssColor(token, &color)) continue;
+    position.push_back(token);
+  }
+  if (position.empty() || position.size() > 4) return;
+  std::string joined;
+  for (const std::string& token : position) {
+    if (!joined.empty()) joined.push_back(' ');
+    joined += token;
+  }
+  ParsePositionPair(joined, &style->background_position_x,
+                    &style->background_position_y);
+}
+
 void ApplyDeclaration(AppStyle* style,
                       const std::string& raw_key,
                       const std::string& raw_value) {
@@ -3492,11 +3682,19 @@ void ApplyDeclaration(AppStyle* style,
           break;
         }
       }
+      ParseBackgroundShorthandPosition(style, value);
     }
   } else if (key == "background-repeat") {
     style->background_repeat = ParseBackgroundRepeat(value);
   } else if (key == "background-size") {
     style->background_fit = ParseBackgroundFit(value);
+  } else if (key == "background-position") {
+    ParsePositionPair(value, &style->background_position_x,
+                      &style->background_position_y);
+  } else if (key == "background-position-x") {
+    ParsePositionAxis(value, true, &style->background_position_x);
+  } else if (key == "background-position-y") {
+    ParsePositionAxis(value, false, &style->background_position_y);
   } else if (key == "flex-direction") {
     style->row = StartsWith(value, "row");
   } else if (key == "flex-wrap") {
@@ -3809,6 +4007,19 @@ void ApplyDeclaration(AppStyle* style,
     else if (value == "none") style->object_fit = 3;
     else if (value == "scale-down") style->object_fit = 4;
     else style->object_fit = 0;
+  } else if (key == "object-position") {
+    if (ParsePositionPair(value, &style->object_position_x,
+                          &style->object_position_y)) {
+      style->has_object_position = true;
+    }
+  } else if (key == "object-position-x") {
+    if (ParsePositionAxis(value, true, &style->object_position_x)) {
+      style->has_object_position = true;
+    }
+  } else if (key == "object-position-y") {
+    if (ParsePositionAxis(value, false, &style->object_position_y)) {
+      style->has_object_position = true;
+    }
   } else if (key == "-webkit-line-clamp") {
     double number = 0.0;
     if (ParseNumber(value, &number) && number > 0) {
@@ -5300,12 +5511,19 @@ int ImageRepeatMode(const AppNode* node) {
   return node->style.background_repeat;
 }
 
-// Draws `image` into a width x height box, applying a CSS-like object-fit and
-// repeat mode.  Shared by <image> direct-render widgets and CSS background
-// images.
+double ResolvePositionOffset(const CssPositionAxis& axis, double free) {
+  const double offset = axis.percent ? free * (axis.value / 100.0) : axis.value;
+  return axis.from_end ? free - offset : offset;
+}
+
+// Draws `image` into a width x height box, applying a CSS-like object-fit,
+// repeat mode and background/object position.  Shared by <image>
+// direct-render widgets and CSS background images.
 void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& image,
                     double width, double height, int fit, int repeat,
-                    double offset_x, double offset_y) {
+                    double offset_x, double offset_y,
+                    const CssPositionAxis& pos_x,
+                    const CssPositionAxis& pos_y) {
   if (!image || !canvas || canvas->builder() == nullptr) return;
   const double image_width = image->width();
   const double image_height = image->height();
@@ -5326,15 +5544,11 @@ void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& imag
     }
     dest_w = image_width * scale;
     dest_h = image_height * scale;
-    dest_x = (target_w - dest_w) / 2.0;
-    dest_y = (target_h - dest_h) / 2.0;
   } else if (fit == 2) {
     const double scale = std::max(target_w / image_width,
                                   target_h / image_height);
     dest_w = image_width * scale;
     dest_h = image_height * scale;
-    dest_x = (target_w - dest_w) / 2.0;
-    dest_y = (target_h - dest_h) / 2.0;
   }
 
   canvas->save();
@@ -5344,6 +5558,8 @@ void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& imag
                      flutter::DlClipOp::kIntersect);
   }
   if (repeat == 0) {
+    dest_x = ResolvePositionOffset(pos_x, target_w - dest_w);
+    dest_y = ResolvePositionOffset(pos_y, target_h - dest_h);
     canvas->builder()->DrawImageRect(
         image, flutter::DlRect::MakeLTRB(0.0, 0.0, image_width, image_height),
         flutter::DlRect::MakeLTRB(dest_x, dest_y, dest_x + dest_w,
@@ -5351,7 +5567,8 @@ void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& imag
         flutter::DlImageSampling::kLinear, nullptr);
   } else {
     // CSS repeat tiles at the natural image size (or the background-size
-    // result when a fit was requested).
+    // result when a fit was requested).  background-position moves the origin
+    // of the tile grid.
     const double tile_w = fit == 0 ? image_width : dest_w;
     const double tile_h = fit == 0 ? image_height : dest_h;
     if (tile_w <= 0.0 || tile_h <= 0.0) {
@@ -5360,13 +5577,20 @@ void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& imag
     }
     const bool tile_x = repeat == 1 || repeat == 2;
     const bool tile_y = repeat == 1 || repeat == 3;
-    const int columns = tile_x ? static_cast<int>(std::ceil(target_w / tile_w))
-                               : 1;
-    const int rows = tile_y ? static_cast<int>(std::ceil(target_h / tile_h)) : 1;
+    const double origin_x = ResolvePositionOffset(pos_x, target_w - tile_w);
+    const double origin_y = ResolvePositionOffset(pos_y, target_h - tile_h);
+    const int columns =
+        tile_x ? std::max(1, static_cast<int>(
+                                std::ceil((target_w - origin_x) / tile_w)))
+               : 1;
+    const int rows =
+        tile_y ? std::max(1, static_cast<int>(
+                                std::ceil((target_h - origin_y) / tile_h)))
+               : 1;
     for (int row = 0; row < rows; row++) {
       for (int column = 0; column < columns; column++) {
-        const double tx = tile_x ? column * tile_w : dest_x;
-        const double ty = tile_y ? row * tile_h : dest_y;
+        const double tx = tile_x ? origin_x + column * tile_w : origin_x;
+        const double ty = tile_y ? origin_y + row * tile_h : origin_y;
         canvas->builder()->DrawImageRect(
             image, flutter::DlRect::MakeLTRB(0.0, 0.0, image_width, image_height),
             flutter::DlRect::MakeLTRB(tx, ty, tx + tile_w, ty + tile_h),
@@ -5418,8 +5642,24 @@ void DirectRenderImagePaint(intptr_t ptr, Dart_Handle canvas_handle,
     }
     break;
   }
-  DrawImageInBox(canvas, node->image_dl, width, height, fit, ImageRepeatMode(node),
-                 offset_x, offset_y);
+  const int repeat = ImageRepeatMode(node);
+  CssPositionAxis pos_x = node->style.object_position_x;
+  CssPositionAxis pos_y = node->style.object_position_y;
+  if (repeat != 0 && !node->style.has_object_position) {
+    // Tiled images start their tile grid at the top-left unless an explicit
+    // object-position was provided.
+    pos_x = CssPositionAxis{0.0f, true, false};
+    pos_y = CssPositionAxis{0.0f, true, false};
+  }
+  static const char* kPositionKeys[] = {"objectPosition", "object-position"};
+  for (const char* key : kPositionKeys) {
+    const auto found = node->attrs.find(key);
+    if (found == node->attrs.end() || found->second.empty()) continue;
+    ParsePositionPair(found->second, &pos_x, &pos_y);
+    break;
+  }
+  DrawImageInBox(canvas, node->image_dl, width, height, fit, repeat,
+                 offset_x, offset_y, pos_x, pos_y);
 }
 
 // CSS background-image painting through NewDecoratedBox's onPaint callback.
@@ -5439,7 +5679,8 @@ void BackgroundImagePaint(intptr_t ptr, Dart_Handle canvas_handle, double left,
   const double height = std::max(0.0, bottom - top);
   DrawImageInBox(canvas, node->background_image_dl, width, height,
                  node->style.background_fit, node->style.background_repeat, left,
-                 top);
+                 top, node->style.background_position_x,
+                 node->style.background_position_y);
 }
 
 // `package:skyline` registers this Dart callback; native calls it to perform

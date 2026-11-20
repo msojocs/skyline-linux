@@ -5,8 +5,8 @@
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
 > 核心验收：**22 / 22（100%）**
-> 长尾/外部阻塞：**4 / 12**
-> 全部任务：**26 / 34（76.5%）**
+> 长尾/外部阻塞：**5 / 12**
+> 全部任务：**27 / 34（79.4%）**
 >
 > 勾选项表示已在 Linux 回放运行时上实现并通过测试；标有 `blocked` 的任务
 > 依赖外部环境或私有引擎能力。
@@ -17,8 +17,8 @@
 | --- | ---: | ---: | ---: |
 | A. 原始阶段 3 验收项 | 8 | 8 | 100% |
 | B. 后续运行时增量 | 14 | 14 | 100% |
-| C. 长尾 / 外部阻塞 | 4 | 12 | 33.3% |
-| **合计** | **26** | **34** | **76.5%** |
+| C. 长尾 / 外部阻塞 | 5 | 12 | 41.7% |
+| **合计** | **27** | **34** | **79.4%** |
 
 ## A. 原始阶段 3 验收项（8 / 8）
 
@@ -64,7 +64,7 @@
 - [x] **B13** 资源路径缓存（`LoadResourceSync`/`Async`，≤4 MB）
 - [x] **B14** L5 夹具扩展（transform-origin/fixed-scroll/align-gap/flex-wrap/order/overflow）
 
-## C. 长尾 / 外部阻塞（4 / 12）
+## C. 长尾 / 外部阻塞（5 / 12）
 
 - [x] **C1** 官方 Windows appservice guest 的真实 L5 采集与像素对比
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
@@ -111,7 +111,15 @@
     页面保持原有不收缩布局，scroll-view 内容不参与收缩。
   - 新增 L5 夹具 `appservice-flex-basis.ops.json`（grow/basis、1:3 shrink、
     25% basis 三行），与官方 Windows 帧逐像素一致（maxDelta=0）。
-- [ ] **C5** `background-position` / `object-position`
+- [x] **C5** `background-position` / `object-position`
+  - 支持 1/2/4 值 CSS `<position>` 语法：关键字（left/right/top/bottom/
+    center）、百分比、px，以及 `right 10px` / `bottom 20%` 边距形式。
+  - `background-position` 默认 `0% 0%`，作用于 `background-size` 后的图像；
+    repeat 模式下移动 tile grid 原点。
+  - `object-position` 默认 `50% 50%`，作用于 `object-fit` 的 contain/cover/
+    none/scale-down 结果；`<image>` 的 `objectPosition` 属性也可覆盖。
+  - `test:ops` 新增 4 个 contain 盒（object-position left/right、background-
+    position center/right-bottom）像素用例（54 / 54）。
 - [ ] **C6** `box-sizing`（`content-box`）
 - [ ] **C7** 百分比 `padding` / `margin`
 - [ ] **C8** `position: sticky`
@@ -124,8 +132,8 @@
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **148 / 172** | 24 skipped，0 fail |
-| `npm run test:ops` | **53 / 53** | appservice 操作流回放 |
+| `npm test` | **149 / 173** | 24 skipped，0 fail |
+| `npm run test:ops` | **54 / 54** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

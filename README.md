@@ -29,7 +29,8 @@
 > fixed 节点提升到页面根连接器（滚动祖先内保持固定）、录制器
 > `--animate-ms` 驱动 JS worklet/derived value 采样、`align-self`/`order`/按轴
 > gap/`flex-wrap`/`align-content`、`flex-basis`/`flex-shrink`、逐边 border、
-> `overflow: hidden` 裁剪、逐角圆角与资源路径缓存。L5 已接入官方 Windows
+> `overflow: hidden` 裁剪、逐角圆角、资源路径缓存与
+> `background-position`/`object-position`。L5 已接入官方 Windows
 > 引擎的真实帧基线
 > （`spec/l5-baseline.win32.json`，Wine 渲染进程 + dpr=2 采集）。
 > 阶段 3 任务清单与 x/y 进度见 [docs/phase-3-tasks.md](docs/phase-3-tasks.md)。
@@ -281,7 +282,8 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   update、fixed 节点提升到页面根连接器、录制器 JS worklet/derived value 采样、
   `align-self`/`order`/按轴 gap/`flex-wrap`/`align-content`、`flex-basis`
   （px/%/auto）与 `flex-shrink` 缩放收缩、逐边 border、
-  `overflow: hidden` 裁剪、逐角圆角与资源路径缓存，以及私有 `dart:ui` 文本编码
+  `overflow: hidden` 裁剪、逐角圆角与资源路径缓存、`background-position` /
+  `object-position`，以及私有 `dart:ui` 文本编码
   标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`，按官方位布局写入
   native 并在 SkParagraph 中应用行框背景/选区）、native view 通道
   （`<texture>` → `NewTexture`/`TextureDispose`，指针经
