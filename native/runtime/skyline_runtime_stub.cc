@@ -2491,8 +2491,14 @@ bool DeferFixedChild(AppNode* child) {
   return true;
 }
 
+// Parsed once per rule when the stylesheet is loaded; `ResolveStyles` runs for
+// every node, so re-parsing here was the dominant cost of a full restyle.
+struct Selector;
+
 struct CssRule {
   std::string selector;
+  std::shared_ptr<Selector> parsed_selector;
+  int specificity = 0;
   std::vector<std::pair<std::string, std::string>> declarations;
   int order = 0;
 };
@@ -5029,6 +5035,9 @@ void ParseStyleSheet(const std::string& css) {
       if (selector_text.empty()) continue;
       CssRule rule;
       rule.selector = selector_text;
+      rule.parsed_selector =
+          std::make_shared<Selector>(ParseSelector(selector_text));
+      rule.specificity = SelectorSpecificity(*rule.parsed_selector);
       rule.declarations = declarations;
       rule.order = g_next_rule_order++;
       if (g_page != nullptr) g_page->rules.push_back(rule);
@@ -5060,10 +5069,11 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
     };
     std::vector<Match> matches;
     for (const CssRule& rule : g_page->rules) {
-      const Selector selector = ParseSelector(rule.selector);
-      if (SelectorMatches(selector, node)) {
+      const Selector* selector = rule.parsed_selector.get();
+      if (selector == nullptr) continue;
+      if (SelectorMatches(*selector, node)) {
         matches.push_back(
-            Match{SelectorSpecificity(selector), rule.order, &rule});
+            Match{rule.specificity, rule.order, &rule});
       }
     }
     std::sort(matches.begin(), matches.end(),
@@ -9751,8 +9761,56 @@ void SnapshotNode(AppNode* node) {
   for (AppNode* child : node->children) SnapshotNode(child);
 }
 
-bool IsStructuralOpKind(const char* kind) {
-  return std::strcmp(kind, "createElement") == 0 ||
+// True when a style diff can change box metrics.  Paint-only changes (colour,
+// background, opacity, border colour, shadow, gradient, radius, transform) do
+// not require a full layout pass; skipping it keeps class-driven highlight
+// updates in the millisecond range on large pages.
+bool LayoutAffectingStyleChanged(const AppStyle& a, const AppStyle& b) {
+  const auto ne = [](double x, double y) {
+    return x != y && !(std::isnan(x) && std::isnan(y));
+  };
+  if (a.row != b.row || a.justify != b.justify || a.align != b.align ||
+      a.align_self != b.align_self || a.wrap != b.wrap ||
+      a.align_content != b.align_content || a.order != b.order ||
+      ne(a.gap, b.gap) || ne(a.row_gap, b.row_gap) ||
+      ne(a.column_gap, b.column_gap) || a.position != b.position) {
+    return true;
+  }
+  for (int i = 0; i < 4; i++) {
+    if (ne(a.padding[i], b.padding[i]) || ne(a.margin[i], b.margin[i]) ||
+        ne(a.padding_percent[i], b.padding_percent[i]) ||
+        ne(a.margin_percent[i], b.margin_percent[i]) ||
+        ne(a.inset[i], b.inset[i]) ||
+        ne(a.inset_percent[i], b.inset_percent[i]) ||
+        ne(a.side_border_width[i], b.side_border_width[i])) {
+      return true;
+    }
+  }
+  if (ne(a.width, b.width) || ne(a.height, b.height) ||
+      ne(a.width_percent, b.width_percent) ||
+      ne(a.height_percent, b.height_percent) || a.box_sizing != b.box_sizing ||
+      ne(a.min_width, b.min_width) || ne(a.max_width, b.max_width) ||
+      ne(a.min_height, b.min_height) || ne(a.max_height, b.max_height) ||
+      ne(a.flex, b.flex) || a.has_flex != b.has_flex ||
+      ne(a.flex_shrink, b.flex_shrink) ||
+      a.has_flex_shrink != b.has_flex_shrink ||
+      ne(a.flex_basis, b.flex_basis) ||
+      ne(a.flex_basis_percent, b.flex_basis_percent) ||
+      ne(a.border_width, b.border_width)) {
+    return true;
+  }
+  // Text metrics: content, font size, line height and letter spacing decide
+  // the measured text box.
+  if (ne(a.font_size, b.font_size) || ne(a.line_height, b.line_height) ||
+      ne(a.line_height_factor, b.line_height_factor) ||
+      ne(a.letter_spacing, b.letter_spacing) ||
+      a.font_families != b.font_families || a.max_lines != b.max_lines) {
+    return true;
+  }
+  return false;
+}
+
+bool IsStructuralOpKind(const char* kind) {  return std::strcmp(kind, "createElement") == 0 ||
          std::strcmp(kind, "appendChild") == 0 ||
          std::strcmp(kind, "insertBefore") == 0 ||
          std::strcmp(kind, "removeChild") == 0 ||
@@ -9825,25 +9883,29 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
 
   std::vector<Dart_Handle> yoga_nodes;
   bool rebuild = false;
+  bool layout_needed = false;
 
   std::vector<AppNode*> pending;
   pending.push_back(root);
-  while (!pending.empty() && !rebuild) {
+  while (!pending.empty()) {
     AppNode* node = pending.back();
     pending.pop_back();
     for (AppNode* child : node->children) {
       if (!child->released) pending.push_back(child);
     }
     if (!node->has_previous_style) {
+      // The node has no baseline to diff against; leave it for the rebuild
+      // but keep applying paint updates to the rest of the tree.
       rebuild = true;
-      break;
+      continue;
     }
     if (StyleNeedsRebuild(node, node->previous_style, node->style)) {
       rebuild = true;
-      break;
+      continue;
     }
     const AppStyle& before = node->previous_style;
     const AppStyle& after = node->style;
+    if (LayoutAffectingStyleChanged(before, after)) layout_needed = true;
 
     if (node->tag == "text") {
       std::string storage;
@@ -9871,11 +9933,15 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       const bool any = text_changed || color_changed || size_changed ||
                        weight_changed || style_changed || height_changed ||
                        spacing_changed || align_changed || max_lines_changed;
+      if (text_changed || size_changed || weight_changed || style_changed ||
+          height_changed || spacing_changed) {
+        layout_needed = true;
+      }
       if (any) {
         if (node->text_span_p == nullptr || node->text_widget_p == nullptr ||
             text.text == nullptr || text.apply == nullptr) {
           rebuild = true;
-          break;
+          continue;
         }
         Dart_Handle span = Dart_HandleFromPersistent(node->text_span_p);
         Dart_Handle widget = Dart_HandleFromPersistent(node->text_widget_p);
@@ -9913,8 +9979,14 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       if (node->decorated_box_p != nullptr) {
         Dart_Handle decorated =
             Dart_HandleFromPersistent(node->decorated_box_p);
-        if (after.has_background && before.background != after.background &&
+        // A removed background (e.g. the old A-Z letter losing `.selected`)
+        // must clear the existing decorated box; color 0 is transparent.
+        if (before.has_background != after.has_background &&
             update_color != nullptr) {
+          update_color(decorated, after.has_background ? after.background : 0u);
+        } else if (after.has_background &&
+                   before.background != after.background &&
+                   update_color != nullptr) {
           update_color(decorated, after.background);
         }
         if (BorderSidesChanged(before, after) && update_border != nullptr) {
@@ -9946,7 +10018,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
         if (RadiiChanged(before, after)) {
           if (update_radius == nullptr) {
             rebuild = true;
-            break;
+            continue;
           }
           static const uint8_t kEdges[4] = {5, 6, 8, 7};  // TL,TR,BR,BL
           for (int corner = 0; corner < 4; corner++) {
@@ -9961,13 +10033,13 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
           if (after.has_gradient) {
             if (update_gradient == nullptr) {
               rebuild = true;
-              break;
+              continue;
             }
             update_gradient(decorated, BuildGradientHandle(after));
           } else {
             if (clear_gradient == nullptr) {
               rebuild = true;
-              break;
+              continue;
             }
             clear_gradient(decorated);
           }
@@ -9985,7 +10057,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       if (node->clip_widget_p != nullptr && RadiiChanged(before, after)) {
         if (update_clip_radius == nullptr) {
           rebuild = true;
-          break;
+          continue;
         }
         const double tl = EffectiveCornerRadius(after, 0);
         const double tr = EffectiveCornerRadius(after, 1);
@@ -10069,6 +10141,9 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
     }
   }
   if (rebuild) return false;
+  // Paint-only batch (colour / highlight / opacity): the layout snapshot is
+  // still valid, so skip the page-wide measure + layout pass.
+  if (!layout_needed) return true;
 
   const float viewport_w =
       g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
@@ -10219,9 +10294,53 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
                widgets.size());
 }
 
+// Live-op batches that only need a rebuild because a style changed (e.g.
+// `display:none` <-> `flex` for the A-Z bubble) are deferred briefly.  A quick
+// tap flushes the press and release class updates milliseconds apart; merging
+// them into one paint-only update avoids two full page rebuilds (each ~700 ms
+// on the address-book page) and lets the selected highlight repaint at once.
+// UI thread only.
+int g_deferred_rebuild_generation = 0;
+bool g_deferred_rebuild_pending = false;
+
+void CancelDeferredRebuild() {
+  g_deferred_rebuild_generation += 1;
+  g_deferred_rebuild_pending = false;
+}
+
 void FlushAppServicePage(RuntimeHolder* holder, bool structural) {
-  if (!structural && ApplyTargetedUpdates(holder)) return;
-  RebuildAppServicePage(holder);
+  if (structural) {
+    CancelDeferredRebuild();
+    RebuildAppServicePage(holder);
+    return;
+  }
+  if (ApplyTargetedUpdates(holder)) {
+    CancelDeferredRebuild();
+    return;
+  }
+  const int generation = ++g_deferred_rebuild_generation;
+  g_deferred_rebuild_pending = true;
+  auto runner = UiTaskRunner();
+  if (!runner) {
+    g_deferred_rebuild_pending = false;
+    RebuildAppServicePage(holder);
+    return;
+  }
+  runner->PostDelayedTask(
+      [holder, generation]() {
+        if (generation != g_deferred_rebuild_generation ||
+            !g_deferred_rebuild_pending) {
+          return;
+        }
+        if (Dart_CurrentIsolate() == nullptr && g_isolate == nullptr) {
+          g_deferred_rebuild_pending = false;
+          return;
+        }
+        DemoPageApiScope scope;
+        g_deferred_rebuild_pending = false;
+        RebuildAppServicePage(holder);
+      },
+      fml::TimeDelta::FromMilliseconds(300));
 }
 
 // -- CSS transitions and animated styles ------------------------------------
@@ -11225,26 +11344,43 @@ fml::RefPtr<fml::TaskRunner> g_live_ui_runner;
 void ScheduleLiveOps(std::string payload, int attempt) {
   auto runner = UiTaskRunner();
   if (!runner) return;
+  const auto scheduled = std::chrono::steady_clock::now();
   std::fprintf(stderr,
                "[skyline-runtime] live ops scheduled (attempt=%d, bytes=%zu)\n",
                attempt, payload.size());
-  runner->PostDelayedTask(
-      [payload, attempt]() {
-        DemoPageApiScope scope;
-        if (g_isolate == nullptr || g_fallback_holder.ffi_table == nullptr) {
-          if (attempt < 20) {
-            ScheduleLiveOps(payload, attempt + 1);
-          } else {
-            std::fprintf(stderr,
-                         "[skyline-runtime] live page: Dart app not ready\n");
-          }
-          return;
-        }
-        // Batches share one persistent page: the bridge may flush element
-        // creation before the attach and deltas afterwards.
-        appservice::ApplyLiveOpsBatch(&g_fallback_holder, payload.c_str());
-      },
-      fml::TimeDelta::FromMilliseconds(500));
+  // Run the batch immediately; the Dart app may not have registered its
+  // callbacks yet, in which case we retry after 500 ms.  (The old code delayed
+  // every batch by 500 ms, which alone made every setData visibly late.)
+  runner->PostTask([payload, attempt, scheduled, runner]() {
+    const auto started = std::chrono::steady_clock::now();
+    const auto delay_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              started - scheduled)
+                              .count();
+    std::fprintf(stderr,
+                 "[skyline-runtime] live ops begin delay=%lldms bytes=%zu\n",
+                 static_cast<long long>(delay_ms), payload.size());
+    DemoPageApiScope scope;
+    if (g_isolate == nullptr || g_fallback_holder.ffi_table == nullptr) {
+      if (attempt < 20) {
+        runner->PostDelayedTask(
+            [payload, attempt]() { ScheduleLiveOps(payload, attempt + 1); },
+            fml::TimeDelta::FromMilliseconds(500));
+      } else {
+        std::fprintf(stderr,
+                     "[skyline-runtime] live page: Dart app not ready\n");
+      }
+      return;
+    }
+    // Batches share one persistent page: the bridge may flush element
+    // creation before the attach and deltas afterwards.
+    appservice::ApplyLiveOpsBatch(&g_fallback_holder, payload.c_str());
+    const auto finished = std::chrono::steady_clock::now();
+    std::fprintf(stderr, "[skyline-runtime] live ops end processing=%lldms\n",
+                 static_cast<long long>(
+                     std::chrono::duration_cast<std::chrono::milliseconds>(
+                         finished - started)
+                         .count()));
+  });
 }
 
 // UI thread: remember the engine task runner and flush any page ops that were

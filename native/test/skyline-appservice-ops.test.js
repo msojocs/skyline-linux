@@ -413,6 +413,46 @@ test('appservice ops: percent transforms, border triangles and text whitespace',
   }
 });
 
+test('appservice ops: removing a background repaints without a rebuild', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-bgclear-'));
+  const ops = path.join(dir, 'bgclear.ops.json');
+  // A-Z highlight switching: the old letter loses its background while the new
+  // one gains it.  The targeted update must clear an existing decorated box
+  // instead of leaving the old colour behind.
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1,
+        css: '.box{width:100px;height:100px;background:#FF0000;}' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'addClass', id: 3, prefix: 'box', name: 1 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 200, ops: [{ op: 'removeClass', id: 3, prefix: 'box' }] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, { timeoutMs: 1200, frames: 0 });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    assert.deepEqual(pixelAt(pixels, 50, 50), [255, 255, 255, 255]);
+    assert.doesNotMatch(logs, /appservice flush: callbacks missing/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('appservice ops: post-attach updates rebuild through the runtime', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
