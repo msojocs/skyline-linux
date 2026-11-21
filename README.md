@@ -74,7 +74,10 @@ L1–L4 可在本仓库直接运行；L5 已有 Linux 基线与**官方 Windows 
 （`npm run test:l5`）。`tools/l5-windows.js` 在 Wine 渲染进程中以 dpr=2 启动官方
 `skyline.node`，经 `notifyAppLaunch` + `PageContext` 回放夹具并从共享内存读取帧
 （Windows 原始帧为 BGRA，工具转为 RGBA），结果写入
-`spec/l5-baseline.win32.json`。17 个夹具中 12 个逐像素完全一致、`shadow` 最大差 1，`overflow` 仅有边缘级差异，剩余差异见 `docs/feasibility.md` §3.1。
+`spec/l5-baseline.win32.json`。20 个夹具中 12 个逐像素完全一致，
+`shadow`/`radial-conic`/`background-size` 最大差 1，`overflow` 仅有边缘级差异，
+`transform3d`/`transform-origin-z` 为已知 3D/官方引擎差异，`gridview`/`listview`
+不可比；详见 `docs/feasibility.md` §3.1。
 
 ## 快速开始
 
