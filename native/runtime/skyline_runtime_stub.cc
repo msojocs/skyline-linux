@@ -2189,6 +2189,10 @@ struct AppStyle {
   bool has_transform = false;
   float transform[16] = {1, 0, 0, 0, 0, 1, 0, 0,
                          0, 0, 1, 0, 0, 0, 0, 1};
+  // Percentage translations (`translateY(-50%)`) need the measured border box,
+  // so they are kept aside and folded into the matrix when it is built.
+  float translate_percent_x = std::nanf("");
+  float translate_percent_y = std::nanf("");
   // CSS transform-origin (px or percent; NaN = unset, default 50% 50%).
   float transform_origin_x = std::nanf("");
   float transform_origin_y = std::nanf("");
@@ -2795,6 +2799,21 @@ bool ParsePxToken(const std::string& raw, double* out) {
   return ParseNumber(value, out);
 }
 
+// `translate`/`translateX`/`translateY` accept percentages, which resolve
+// against the element's own border box once it has been measured.
+bool ParseTranslateToken(const std::string& raw, double* out,
+                         double* percent) {
+  std::string value = TrimAscii(raw);
+  if (EndsWith(value, "%")) {
+    value.resize(value.size() - 1);
+    double number = 0.0;
+    if (!ParseNumber(value, &number)) return false;
+    *percent = number / 100.0;
+    return true;
+  }
+  return ParsePxToken(value, out);
+}
+
 bool ParseAngleToken(const std::string& raw, double* radians) {
   std::string value = TrimAscii(raw);
   double number = 0.0;
@@ -2839,11 +2858,13 @@ std::vector<std::string> TransformArguments(const std::string& args) {
 }
 
 // Parses `transform: translate(...) rotate(...) scale(...) ...` into a
-// column-major matrix.  Percent translations are not supported here (the
-// element size is unknown at parse time).
+// column-major matrix.  Percentage translations are kept in
+// `translate_percent_*` and resolved against the measured border box.
 void ParseTransform(const std::string& raw, AppStyle* style) {
   float matrix[16];
   MatrixIdentity(matrix);
+  style->translate_percent_x = std::nanf("");
+  style->translate_percent_y = std::nanf("");
   size_t index = 0;
   bool any = false;
   while (index < raw.size()) {
@@ -2868,20 +2889,35 @@ void ParseTransform(const std::string& raw, AppStyle* style) {
     if (name == "translate" || name == "translate3d") {
       double tx = 0.0;
       double ty = 0.0;
-      if (values.empty() || !ParsePxToken(values[0], &tx)) continue;
-      if (values.size() > 1) ParsePxToken(values[1], &ty);
+      double pct_x = std::nan("");
+      double pct_y = std::nan("");
+      if (values.empty() ||
+          !ParseTranslateToken(values[0], &tx, &pct_x)) {
+        continue;
+      }
+      if (values.size() > 1) ParseTranslateToken(values[1], &ty, &pct_y);
       double tz = 0.0;
       if (values.size() > 2) ParsePxToken(values[2], &tz);
+      if (!std::isnan(pct_x)) style->translate_percent_x = pct_x;
+      if (!std::isnan(pct_y)) style->translate_percent_y = pct_y;
       local[12] = static_cast<float>(tx);
       local[13] = static_cast<float>(ty);
       local[14] = static_cast<float>(tz);
     } else if (name == "translatex") {
       double tx = 0.0;
-      if (values.empty() || !ParsePxToken(values[0], &tx)) continue;
+      double pct_x = std::nan("");
+      if (values.empty() || !ParseTranslateToken(values[0], &tx, &pct_x)) {
+        continue;
+      }
+      if (!std::isnan(pct_x)) style->translate_percent_x = pct_x;
       local[12] = static_cast<float>(tx);
     } else if (name == "translatey") {
       double ty = 0.0;
-      if (values.empty() || !ParsePxToken(values[0], &ty)) continue;
+      double pct_y = std::nan("");
+      if (values.empty() || !ParseTranslateToken(values[0], &ty, &pct_y)) {
+        continue;
+      }
+      if (!std::isnan(pct_y)) style->translate_percent_y = pct_y;
       local[13] = static_cast<float>(ty);
     } else if (name == "translatez") {
       double tz = 0.0;
@@ -3741,9 +3777,17 @@ void ResolveTransformOrigin(const AppStyle& style, float width, float height,
 // Applies the CSS transform-origin z offset to the parsed matrix:
 // T(0,0,z) * M * T(0,0,-z).  The YGNode widget applies the 2D origin
 // translation itself, so the two compose into the full 3D pivot.
-void BuildTransformMatrix(const AppStyle& style, double* out) {
+// Percentage translations resolve against the measured border box.
+void BuildTransformMatrix(const AppStyle& style, double width, double height,
+                          double* out) {
   float matrix[16];
   std::memcpy(matrix, style.transform, sizeof(matrix));
+  if (!std::isnan(style.translate_percent_x)) {
+    matrix[12] += static_cast<float>(style.translate_percent_x * width);
+  }
+  if (!std::isnan(style.translate_percent_y)) {
+    matrix[13] += static_cast<float>(style.translate_percent_y * height);
+  }
   if (std::fabs(style.transform_origin_z) > 0.0001f) {
     float pre[16];
     float post[16];
@@ -5199,6 +5243,28 @@ const char* NodeText(const AppNode* node, std::string* storage) {
   return storage->c_str();
 }
 
+// WXML text follows CSS `white-space: normal`: whitespace runs collapse to a
+// single space and leading/trailing whitespace is dropped.  The SDK hands us
+// the raw template text (indentation and newlines included), which otherwise
+// measures as a huge multiline block (e.g. the A-Z popup letter).
+std::string NormalizeTextWhitespace(const std::string& raw) {
+  std::string out;
+  out.reserve(raw.size());
+  bool pending_space = false;
+  for (const unsigned char c : raw) {
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') {
+      pending_space = !out.empty();
+      continue;
+    }
+    if (pending_space) {
+      out.push_back(' ');
+      pending_space = false;
+    }
+    out.push_back(static_cast<char>(c));
+  }
+  return out;
+}
+
 double GlyphWidth(uint32_t codepoint, double font_size) {
   if (codepoint == ' ') return 0.30 * font_size;
   if (codepoint == '\t') return 1.20 * font_size;
@@ -5524,7 +5590,8 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
   const bool is_text = node->tag == "text";
   std::string text_storage;
   const std::string text =
-      is_text ? std::string(NodeText(node, &text_storage)) : std::string();
+      is_text ? NormalizeTextWhitespace(NodeText(node, &text_storage))
+              : std::string();
 
   float width = -1.0f;
   if (style.width_percent >= 0.0f) {
@@ -5743,6 +5810,11 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
     if (height < MinBoxHeight(style)) height = MinBoxHeight(style);
     if (height > MaxBoxHeight(style)) height = MaxBoxHeight(style);
   }
+  // A border box can never be smaller than its borders (and padding).  This
+  // matters for CSS border triangles: `width:0;height:0;border:20px` is a
+  // 40x40 box, not a zero-size one.
+  if (width >= 0.0f && width < extra_w) width = extra_w;
+  if (height >= 0.0f && height < extra_h) height = extra_h;
 
   node->measured_w = width;
   node->measured_h = height;
@@ -7608,7 +7680,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       }
     }
     std::string text_storage;
-    const char* text = NodeText(node, &text_storage);
+    const std::string text =
+        NormalizeTextWhitespace(NodeText(node, &text_storage));
     // NewTextSpan's `height` is the Flutter line-height multiplier, while CSS
     // line-height is in pixels; convert back to a multiplier.
     const double line_height =
@@ -7616,8 +7689,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                                 : style.line_height_factor;
     Dart_Handle span_handle = nullptr;
     inner = CreateTextWidget(
-        newText, newTextSpan, node->address, text, style.font_size, style.color,
-        style.font_weight, style.font_style,
+        newText, newTextSpan, node->address, text.c_str(), style.font_size,
+        style.color, style.font_weight, style.font_style,
         std::isnan(style.letter_spacing) ? std::nan("") : style.letter_spacing,
         line_height, style.text_align, static_cast<int>(style.max_lines),
         style.font_families, &span_handle);
@@ -8282,7 +8355,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
           data_type == Dart_TypedData_kFloat64 && length == 16 &&
           data != nullptr) {
         auto* values = static_cast<double*>(data);
-        BuildTransformMatrix(style, values);
+        BuildTransformMatrix(style, node->measured_w, node->measured_h,
+                             values);
       }
       Dart_TypedDataReleaseData(matrix);
       setup(yoga_node, matrix);
@@ -9672,7 +9746,7 @@ void SnapshotNode(AppNode* node) {
   node->has_previous_style = true;
   if (node->tag == "text") {
     std::string storage;
-    node->previous_text = NodeText(node, &storage);
+    node->previous_text = NormalizeTextWhitespace(NodeText(node, &storage));
   }
   for (AppNode* child : node->children) SnapshotNode(child);
 }
@@ -9773,7 +9847,8 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
 
     if (node->tag == "text") {
       std::string storage;
-      const std::string text_value = NodeText(node, &storage);
+      const std::string text_value =
+          NormalizeTextWhitespace(NodeText(node, &storage));
       const bool text_changed = text_value != node->previous_text;
       const bool color_changed = before.color != after.color;
       const bool size_changed = std::fabs(before.font_size - after.font_size) > 0.01;
@@ -9936,6 +10011,10 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
           before.has_transform != after.has_transform ||
           std::memcmp(before.transform, after.transform,
                       sizeof(before.transform)) != 0 ||
+          !SameFloatOrNan(before.translate_percent_x,
+                          after.translate_percent_x) ||
+          !SameFloatOrNan(before.translate_percent_y,
+                          after.translate_percent_y) ||
           !SameFloatOrNan(before.transform_origin_x, after.transform_origin_x) ||
           !SameFloatOrNan(before.transform_origin_y, after.transform_origin_y) ||
           !SameFloatOrNan(before.transform_origin_x_percent,
@@ -9960,7 +10039,8 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
                 data_type == Dart_TypedData_kFloat64 && length == 16 &&
                 data != nullptr) {
               auto* values = static_cast<double*>(data);
-              BuildTransformMatrix(after, values);
+              BuildTransformMatrix(after, node->measured_w, node->measured_h,
+                                   values);
             }
             Dart_TypedDataReleaseData(matrix);
             Dart_Handle yoga =
@@ -9985,7 +10065,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
     node->previous_style = after;
     if (node->tag == "text") {
       std::string storage;
-      node->previous_text = NodeText(node, &storage);
+      node->previous_text = NormalizeTextWhitespace(NodeText(node, &storage));
     }
   }
   if (rebuild) return false;
