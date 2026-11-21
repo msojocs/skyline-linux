@@ -679,7 +679,9 @@ using YGNodeTransformOriginFn = void (*)(Dart_Handle yoga_node, double origin_x,
                                          double align_y);
 
 using DispatchTouchEventFn = void (*)(uint8_t type, double x, double y);
-using ScrollViewUpdateScrollTopFn = void (*)(Dart_Handle scroll_view, double top);
+// The kernel declares ScrollViewUpdateScrollTop as (Handle, Float): the
+// argument is a 32-bit float, so passing a double corrupts the value.
+using ScrollViewUpdateScrollTopFn = void (*)(Dart_Handle scroll_view, float top);
 using ConnectorUpdateChildrenFn = void (*)(Dart_Handle connector,
                                            uint8_t stackingPaint,
                                            Dart_Handle children);
@@ -2311,6 +2313,10 @@ struct AppNode {
   std::vector<AppNode*> children;
   AppNode* parent = nullptr;
   bool released = false;
+  // True when this node is a sliver-hosted root (sticky-section child, scroll
+  // view child, or list/grid item).  Its layout buffer is origin-relative and
+  // must be restored after any page-wide LayoutNode pass.
+  bool sliver_layout = false;
 
   AppStyle style;
   float measured_w = 0.0f;
@@ -2530,6 +2536,32 @@ struct OpPage {
 };
 
 OpPage* g_page = nullptr;
+
+// Layout geometry published for the appservice selector-query APIs
+// (`createSelectorQuery().boundingClientRect`).  The appservice JS queries node
+// geometry synchronously from the NAPI thread while the UI thread may be
+// building a page, so keep an immutable, mutex-protected snapshot instead of
+// walking the live tree.
+struct NodeRectSnapshot {
+  float left = 0.0f;
+  float top = 0.0f;
+  float width = 0.0f;
+  float height = 0.0f;
+};
+std::mutex g_rect_mutex;
+std::unordered_map<uint32_t, NodeRectSnapshot> g_rect_snapshot;
+
+void PublishNodeRects() {
+  std::lock_guard<std::mutex> lock(g_rect_mutex);
+  g_rect_snapshot.clear();
+  if (g_page == nullptr) return;
+  for (auto& entry : g_page->nodes) {
+    const AppNode* node = entry.second;
+    if (node == nullptr || node->released) continue;
+    g_rect_snapshot[node->id] = NodeRectSnapshot{
+        node->abs_x, node->abs_y, node->measured_w, node->measured_h};
+  }
+}
 // Captured on the UI thread; the host keyboard channel is called from the
 // embedder thread and must marshal work back onto the UI runner.
 fml::RefPtr<fml::TaskRunner> g_ui_task_runner;
@@ -3107,6 +3139,14 @@ std::string ParseCssUrl(const std::string& raw) {
   while (value_start < raw.size() &&
          std::isspace(static_cast<unsigned char>(raw[value_start]))) {
     value_start++;
+  }
+  // Quoted URLs may contain `)` and `;` (data URIs); end at the quote.
+  if (value_start < raw.size() &&
+      (raw[value_start] == '"' || raw[value_start] == '\'')) {
+    const char quote = raw[value_start];
+    const size_t quote_end = raw.find(quote, value_start + 1);
+    if (quote_end == std::string::npos) return std::string();
+    return raw.substr(value_start + 1, quote_end - value_start - 1);
   }
   const size_t end = raw.find(')', value_start);
   if (end == std::string::npos) return std::string();
@@ -4535,12 +4575,38 @@ void ApplyDeclarations(AppStyle* style,
 std::vector<std::pair<std::string, std::string>> ParseDeclarations(
     const std::string& body) {
   std::vector<std::pair<std::string, std::string>> out;
-  for (const std::string& raw : SplitChar(body, ';')) {
+  std::string current;
+  int paren_depth = 0;
+  char quote = '\0';
+  auto emit = [&out](const std::string& raw) {
     const size_t colon = raw.find(':');
-    if (colon == std::string::npos) continue;
+    if (colon == std::string::npos) return;
     out.emplace_back(TrimAscii(raw.substr(0, colon)),
                      TrimAscii(raw.substr(colon + 1)));
+  };
+  // Split on top-level semicolons only: data URIs contain `;` inside url(...)
+  // (e.g. `url("data:image/svg+xml;charset=utf8,...")`).
+  for (char c : body) {
+    if (quote != '\0') {
+      current.push_back(c);
+      if (c == quote) quote = '\0';
+    } else if (c == '"' || c == '\'') {
+      quote = c;
+      current.push_back(c);
+    } else if (c == '(') {
+      paren_depth++;
+      current.push_back(c);
+    } else if (c == ')') {
+      if (paren_depth > 0) paren_depth--;
+      current.push_back(c);
+    } else if (c == ';' && paren_depth == 0) {
+      emit(current);
+      current.clear();
+    } else {
+      current.push_back(c);
+    }
   }
+  emit(current);
   return out;
 }
 
@@ -4600,10 +4666,28 @@ bool NodeHasClass(const AppNode* node, const std::string& name) {
   return false;
 }
 
+// WXML custom elements are hyphenated (`sticky-header`, `scroll-view`) while
+// the adapter's shadow nodes drop the hyphen (`stickyheader`).  Compare
+// element selectors with hyphens/underscores removed so CSS rules such as
+// `sticky-header { position: sticky }` reach their nodes.
+std::string NormalizeElementName(const std::string& name) {
+  std::string out;
+  out.reserve(name.size());
+  for (char c : name) {
+    if (c == '-' || c == '_') continue;
+    out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+  }
+  return out;
+}
+
 bool SelectorMatches(const Selector& selector, const AppNode* node) {
   if (!selector.element.empty() && selector.element != node->tag &&
       selector.element != node->name) {
-    return false;
+    const std::string wanted = NormalizeElementName(selector.element);
+    if (wanted != NormalizeElementName(node->tag) &&
+        wanted != NormalizeElementName(node->name)) {
+      return false;
+    }
   }
   if (!selector.id.empty()) {
     const auto found = node->attrs.find("id");
@@ -4612,6 +4696,37 @@ bool SelectorMatches(const Selector& selector, const AppNode* node) {
   for (const std::string& klass : selector.classes) {
     if (!NodeHasClass(node, klass)) return false;
   }
+  return true;
+}
+
+// Index of the `}` matching the `{` at `open`, skipping nested blocks.  WXSS
+// @media/@supports bodies contain their own rules, so the old "first closing
+// brace" scan merged an inner rule into the at-rule selector and leaked the
+// rest of the block out as top-level rules.
+size_t FindMatchingBrace(const std::string& css, size_t open) {
+  int depth = 0;
+  for (size_t i = open; i < css.size(); i++) {
+    if (css[i] == '{') {
+      depth++;
+    } else if (css[i] == '}') {
+      depth--;
+      if (depth == 0) return i;
+    }
+  }
+  return std::string::npos;
+}
+
+// Platform colour scheme used to evaluate `prefers-color-scheme` media
+// queries.  The simulator defaults to light; `UpdatePlatformBrightness`
+// (Brightness enum: 1 light, 2 dark) can switch it before the next replay.
+bool g_media_dark = false;
+
+bool MediaQueryMatches(const std::string& condition) {
+  if (condition.find("prefers-color-scheme") != std::string::npos) {
+    if (condition.find("dark") != std::string::npos) return g_media_dark;
+    if (condition.find("light") != std::string::npos) return !g_media_dark;
+  }
+  // Unsupported features are treated as matching (best effort).
   return true;
 }
 
@@ -4631,53 +4746,64 @@ void ParseStyleSheet(const std::string& css) {
   while (cursor < cleaned.size()) {
     const size_t open = cleaned.find('{', cursor);
     if (open == std::string::npos) break;
-    const size_t close = cleaned.find('}', open + 1);
+    const size_t close = FindMatchingBrace(cleaned, open);
     if (close == std::string::npos) break;
     const std::string selectors = TrimAscii(cleaned.substr(cursor, open - cursor));
     const std::string body = cleaned.substr(open + 1, close - open - 1);
-    const auto declarations = ParseDeclarations(body);
-    if (selectors == "@font-face") {
-      FontFaceRequest font;
-      for (const auto& decl : declarations) {
-        const std::string key = LowerAscii(TrimAscii(decl.first));
-        if (key == "font-family") {
-          std::string family = TrimAscii(decl.second);
-          if (family.size() >= 2 &&
-              (family.front() == '"' || family.front() == '\'') &&
-              family.back() == family.front()) {
-            family = family.substr(1, family.size() - 2);
-          }
-          font.family = family;
-        } else if (key == "src") {
-          const size_t url_at = decl.second.find("url(");
-          if (url_at != std::string::npos) {
-            const size_t begin = url_at + 4;
-            const size_t end = decl.second.find(')', begin);
-            if (end != std::string::npos) {
-              std::string url =
-                  TrimAscii(decl.second.substr(begin, end - begin));
-              if (url.size() >= 2 &&
-                  (url.front() == '"' || url.front() == '\'') &&
-                  url.back() == url.front()) {
-                url = url.substr(1, url.size() - 2);
+    if (!selectors.empty() && selectors.front() == '@') {
+      const std::string at_rule = LowerAscii(selectors);
+      if (at_rule.rfind("@media", 0) == 0) {
+        if (MediaQueryMatches(at_rule)) ParseStyleSheet(body);
+      } else if (at_rule.rfind("@supports", 0) == 0) {
+        ParseStyleSheet(body);
+      } else if (at_rule.rfind("@font-face", 0) == 0) {
+        const auto declarations = ParseDeclarations(body);
+        FontFaceRequest font;
+        for (const auto& decl : declarations) {
+          const std::string key = LowerAscii(TrimAscii(decl.first));
+          if (key == "font-family") {
+            std::string family = TrimAscii(decl.second);
+            if (family.size() >= 2 &&
+                (family.front() == '"' || family.front() == '\'') &&
+                family.back() == family.front()) {
+              family = family.substr(1, family.size() - 2);
+            }
+            font.family = family;
+          } else if (key == "src") {
+            const size_t url_at = decl.second.find("url(");
+            if (url_at != std::string::npos) {
+              const size_t begin = url_at + 4;
+              const size_t end = decl.second.find(')', begin);
+              if (end != std::string::npos) {
+                std::string url =
+                    TrimAscii(decl.second.substr(begin, end - begin));
+                if (url.size() >= 2 &&
+                    (url.front() == '"' || url.front() == '\'') &&
+                    url.back() == url.front()) {
+                  url = url.substr(1, url.size() - 2);
+                }
+                font.url = url;
               }
-              font.url = url;
             }
           }
         }
+        if (!font.family.empty() && !font.url.empty() && g_page != nullptr) {
+          g_page->fonts.push_back(font);
+        }
       }
-      if (!font.family.empty() && !font.url.empty() && g_page != nullptr) {
-        g_page->fonts.push_back(font);
-      }
-    } else {
-      for (const std::string& selector_text : SplitChar(selectors, ',')) {
-        if (selector_text.empty()) continue;
-        CssRule rule;
-        rule.selector = selector_text;
-        rule.declarations = declarations;
-        rule.order = g_next_rule_order++;
-        if (g_page != nullptr) g_page->rules.push_back(rule);
-      }
+      // @keyframes/@-webkit-keyframes are not replayed; skipping them keeps
+      // their `0%`/`from` selectors from becoming bogus element rules.
+      cursor = close + 1;
+      continue;
+    }
+    const auto declarations = ParseDeclarations(body);
+    for (const std::string& selector_text : SplitChar(selectors, ',')) {
+      if (selector_text.empty()) continue;
+      CssRule rule;
+      rule.selector = selector_text;
+      rule.declarations = declarations;
+      rule.order = g_next_rule_order++;
+      if (g_page != nullptr) g_page->rules.push_back(rule);
     }
     cursor = close + 1;
   }
@@ -4725,6 +4851,22 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
   }
   if (!node->inline_style.empty()) {
     ApplyDeclarations(&style, ParseDeclarations(node->inline_style));
+  }
+  // `<root-portal>` children are hoisted out of their ancestor's layout and
+  // clipping: they render against the page viewport.  Treat the portal box as
+  // a viewport-sized fixed container so absolutely positioned children (the
+  // usual pattern, e.g. an A-Z side index) resolve their insets correctly and
+  // are promoted to the page root by DeferFixedChild.  The detached
+  // `root-portal-content` node carries the actual subtree.
+  if (node->name == "root-portal" || node->name == "rootportal" ||
+      node->name == "root-portal-content" ||
+      node->name == "rootportalcontent" || node->tag == "root-portal" ||
+      node->tag == "rootportal") {
+    style.position = 2;  // fixed
+    for (int side = 0; side < 4; side++) {
+      style.inset[side] = 0.0f;
+      style.inset_percent[side] = std::nanf("");
+    }
   }
   node->style = style;
   // A running CSS transition writes an interpolated style over the cascade
@@ -5029,27 +5171,62 @@ bool FlattenFragments(AppNode* node) {
       }
       child->children.clear();
       child->parent = nullptr;
-    } else if (child->name == "stickysection") {
-      // The explicit `stickysection` wrapper produced by glass-easel does not
-      // paint through MultiSliver on this build (the list sliver inside the
-      // section produces no pixels even with fresh frames).  Promote its
-      // header and list slivers to the enclosing scroll view so the content is
-      // visible; sticky headers render inline instead of pinned.
-      changed = true;
-      FlattenFragments(child);
-      for (AppNode* grand : child->children) {
-        if (grand == nullptr) continue;
-        grand->parent = node;
-        flat.push_back(grand);
-      }
-      child->children.clear();
-      child->parent = nullptr;
     } else {
+      // Keep the explicit `stickysection` wrapper: it becomes a proper
+      // MultiSliver section with pinned headers.  Flattening it into the
+      // scroll view used to work around missing pixels, but it breaks the
+      // pinned-header paint math at large scroll offsets (headers stack up).
       if (FlattenFragments(child)) changed = true;
       flat.push_back(child);
     }
   }
   if (changed) node->children.swap(flat);
+  return changed;
+}
+
+bool IsRootPortalContentName(const std::string& name) {
+  return name == "root-portal-content" || name == "rootportalcontent" ||
+         name == "root-portal" || name == "rootportal";
+}
+
+// The appservice root-portal adapter creates a detached `root-portal-content`
+// node and (in the webview renderer) appends it to the document root.  In the
+// Skyline op stream the node and its subtree are created but never attached,
+// so the A-Z side index in the address-book sample disappears.  Hoist those
+// detached portals to the page root; their style is fixed/full-viewport (see
+// ResolveStyles), so they behave like the CSS `fixed` overlay they replace.
+bool AttachDetachedPortalContent(AppNode* root) {
+  if (root == nullptr || g_page == nullptr) return false;
+  bool changed = false;
+  for (auto& entry : g_page->nodes) {
+    AppNode* node = entry.second;
+    if (node == nullptr || node == root || node->released ||
+        !IsRootPortalContentName(node->name)) {
+      continue;
+    }
+    if (node->parent != nullptr) {
+      // The root-portal adapter attaches its content to the PageContext's
+      // `empty/root` node (getRootNode) rather than the page element on later
+      // data updates; render it at the page root instead.
+      if (node->parent->name == "root") {
+        DetachFromParent(node);
+      } else {
+        if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+          std::fprintf(stderr,
+                       "[skyline-runtime] portal #%u kept under #%u/%s%s\n",
+                       node->id, node->parent->id, node->parent->name.c_str(),
+                       node->parent->released ? " (released)" : "");
+        }
+        continue;
+      }
+    }
+    AppendChild(root, node);
+    changed = true;
+    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      std::fprintf(stderr, "[skyline-runtime] attached detached portal #%u (%s)\n",
+                   node->id, node->name.c_str());
+    }
+  }
   return changed;
 }
 
@@ -5889,6 +6066,46 @@ void WriteLayoutMetrics(const std::vector<NodeMetric>& metrics) {
   }
 }
 
+// Flutter places slivers itself, so a sliver child's YGNode buffer must hold
+// positions relative to the sliver origin.  The page-wide pass stores them
+// relative to the enclosing box; replaying that buffer inside a sliver makes
+// YGNodeRenderObject.paint add the offset a second time (a header after a
+// 166 px block painted at 332 px).  Re-run the subtree's layout at the origin
+// before handing it to NewStickySection / NewScrollView.
+void ResetNodeLayoutToOrigin(AppNode* node) {
+  if (node == nullptr) return;
+  node->sliver_layout = true;
+  std::vector<NodeMetric> metrics;
+  // Keep the window-absolute origin: only the YGNode paint/hit buffers must be
+  // sliver-relative, while selector queries need viewport coordinates.
+  LayoutNode(node, 0.0f, 0.0f, node->measured_w, node->measured_h, &metrics,
+             node->abs_x, node->abs_y);
+  WriteLayoutMetrics(metrics);
+}
+
+// Restores origin-relative buffers for every sliver-hosted subtree after a
+// page-wide LayoutNode/WriteLayoutMetrics pass (targeted updates, animations).
+void RestoreSliverLayoutMetrics() {
+  if (g_page == nullptr) return;
+  for (auto& entry : g_page->nodes) {
+    AppNode* node = entry.second;
+    if (node == nullptr || node->released || !node->sliver_layout) continue;
+    if (node->parent != nullptr && node->parent->sliver_layout) continue;
+    std::vector<NodeMetric> metrics;
+    LayoutNode(node, 0.0f, 0.0f, node->measured_w, node->measured_h, &metrics,
+               node->abs_x, node->abs_y);
+    WriteLayoutMetrics(metrics);
+  }
+}
+
+// A structural rebuild re-derives the sliver roots while building widgets.
+void ClearSliverLayoutMarks() {
+  if (g_page == nullptr) return;
+  for (auto& entry : g_page->nodes) {
+    if (entry.second != nullptr) entry.second->sliver_layout = false;
+  }
+}
+
 // -- widget materialization --------------------------------------------------
 
 // Yoga metrics are written before widget construction, so allocate every
@@ -6095,6 +6312,25 @@ bool IsBuilderName(const std::string& name) {
 
 bool IsScrollViewName(const std::string& name) {
   return name == "scrollview" || name == "scroll-view";
+}
+
+// glass-easel wraps the real adapter node (`scrollview`, which carries the
+// scroll-y / scroll-x / show-scrollbar attributes) in a `wx-x scroll-view`
+// component host.  Building the scroll view on the wrapper loses those
+// attributes (both axes read as false, so the recognizer disables scrolling);
+// the wrapper must stay a plain box and the inner node becomes the scroll view.
+const AppNode* AdapterScrollViewChild(const AppNode* node) {
+  if (node == nullptr || node->name != "scroll-view") return nullptr;
+  for (const AppNode* child : node->children) {
+    if (child != nullptr && !child->released && child->name == "scrollview") {
+      return child;
+    }
+  }
+  return nullptr;
+}
+
+bool IsScrollViewComponentWrapper(const AppNode* node) {
+  return AdapterScrollViewChild(node) != nullptr;
 }
 
 // Sliver containers (sticky sections) sit between a scroll view and the
@@ -6746,6 +6982,63 @@ bool StartNetworkImage(AppNode* node, const std::string& source,
   return false;
 }
 
+int HexValue(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+bool DecodeBase64(const std::string& input, std::vector<uint8_t>* out) {
+  int value = 0;
+  int bits = -8;
+  for (char c : input) {
+    int digit = -1;
+    if (c >= 'A' && c <= 'Z') digit = c - 'A';
+    else if (c >= 'a' && c <= 'z') digit = c - 'a' + 26;
+    else if (c >= '0' && c <= '9') digit = c - '0' + 52;
+    else if (c == '+' || c == '-') digit = 62;
+    else if (c == '/' || c == '_') digit = 63;
+    else if (c == '=') break;
+    else continue;  // whitespace / newlines
+    value = (value << 6) | digit;
+    bits += 6;
+    if (bits >= 0) {
+      out->push_back(static_cast<uint8_t>((value >> bits) & 0xFF));
+      bits -= 8;
+    }
+  }
+  return !out->empty();
+}
+
+// RFC 2397 data URIs (base64 or percent-encoded) are used for inline SVG icons
+// such as the navigation bar's back chevron.
+bool DecodeDataUri(const std::string& uri, std::vector<uint8_t>* out) {
+  if (!StartsWith(uri, "data:")) return false;
+  const size_t comma = uri.find(',');
+  if (comma == std::string::npos) return false;
+  const std::string meta = LowerAscii(uri.substr(5, comma - 5));
+  const std::string payload = uri.substr(comma + 1);
+  if (meta.find(";base64") != std::string::npos) {
+    return DecodeBase64(payload, out);
+  }
+  out->clear();
+  out->reserve(payload.size());
+  for (size_t i = 0; i < payload.size(); i++) {
+    if (payload[i] == '%' && i + 2 < payload.size()) {
+      const int hi = HexValue(payload[i + 1]);
+      const int lo = HexValue(payload[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        out->push_back(static_cast<uint8_t>((hi << 4) | lo));
+        i += 2;
+        continue;
+      }
+    }
+    out->push_back(static_cast<uint8_t>(payload[i]));
+  }
+  return !out->empty();
+}
+
 bool LoadImageSource(AppNode* node, const std::string& source, bool background,
                      RuntimeHolder* holder) {
   if (source.empty()) {
@@ -6763,6 +7056,30 @@ bool LoadImageSource(AppNode* node, const std::string& source, bool background,
 
   if (StartsWith(source, "http://") || StartsWith(source, "https://")) {
     return StartNetworkImage(node, source, background, holder);
+  }
+
+  if (StartsWith(source, "data:")) {
+    std::vector<uint8_t> bytes;
+    if (!DecodeDataUri(source, &bytes)) {
+      std::fprintf(stderr, "[skyline-runtime] image #%u: bad data URI\n",
+                   node->id);
+      node->image_failed = true;
+      return false;
+    }
+    if (SourceLooksLikeSvg(source, bytes.data(), bytes.size())) {
+      return StartSvgDecode(node, source, bytes, background, holder);
+    }
+    sk_sp<flutter::DlImage> image =
+        DecodeEncodedImage(bytes.data(), bytes.size());
+    if (!image) {
+      std::fprintf(stderr, "[skyline-runtime] image #%u: cannot decode data URI\n",
+                   node->id);
+      node->image_failed = true;
+      return false;
+    }
+    CacheImage(source, image);
+    AssignNodeImage(node, image, background);
+    return true;
   }
 
   const std::string resolved = ResolveResourcePath(source);
@@ -7243,8 +7560,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     // YGNode (a ParentDataWidget under a sliver is invalid).
     return builder;
   } else {
-    const bool is_scroll_view =
-        IsScrollViewName(node->name) && newScrollView != nullptr;
+    const bool is_scroll_view = IsScrollViewName(node->name) &&
+                                newScrollView != nullptr &&
+                                !IsScrollViewComponentWrapper(node);
     const bool is_list_view =
         IsListViewName(node->name) && newListView != nullptr;
     const bool is_grid_view =
@@ -7279,7 +7597,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         }
         std::vector<NodeMetric> item_metrics;
         LayoutNode(item, 0.0f, 0.0f, item->measured_w, item->measured_h,
-                   &item_metrics);
+                   &item_metrics, item->abs_x, item->abs_y);
+        item->sliver_layout = true;
         WriteLayoutMetrics(item_metrics);
         Dart_Handle widget =
             BuildWidget(item, newYGNode, newYGConnector, newText, newTextSpan,
@@ -7390,7 +7709,10 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         }
         // A section container with sticky children becomes a StickySection
         // sliver: sticky children are pinned headers, the rest are adapters.
+        // Scroll views are built normally and handle their own children.
         if (scroll_sticky_header != nullptr && scroll_sticky_section != nullptr &&
+            !IsScrollViewName(child->name) && !IsListViewName(child->name) &&
+            !IsGridViewName(child->name) && !IsBuilderName(child->name) &&
             HasStickyFlowChildren(child)) {
           std::vector<Dart_Handle> grandchildren;
           std::vector<AppNode*> flow = OrderedFlowChildren(child);
@@ -7405,12 +7727,18 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             std::fprintf(stderr, "\n");
           }
           for (AppNode* grand : flow) {
+            // Box children become SliverToBoxAdapters; Flutter stacks them at
+            // their own offsets, so re-layout them at the sliver origin.
+            if (!IsListViewName(grand->name) &&
+                !IsGridViewName(grand->name) && !IsBuilderName(grand->name)) {
+              ResetNodeLayoutToOrigin(grand);
+            }
             Dart_Handle item =
                 BuildWidget(grand, newYGNode, newYGConnector, newText,
                             newTextSpan, newDecoratedBox, newOpacity,
                             newScrollView, newListView, newGridView,
                             newDirectRenderWidget, newListBuilder,
-                            newGridBuilder, false);
+                            newGridBuilder, true);
             if (item == nullptr || Dart_IsError(item) || Dart_IsNull(item)) {
               if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
                 std::fprintf(stderr,
@@ -7458,6 +7786,12 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         }
         // A scroll view's children live under Flutter's ListView, not under a
         // YGConnector, so they must be top-level YGNodes (no ParentDataWidget).
+        // Slivers position those boxes themselves, so their layout buffers
+        // must be origin-relative rather than page-relative.
+        if (is_scroll_view && !IsListViewName(child->name) &&
+            !IsGridViewName(child->name) && !IsBuilderName(child->name)) {
+          ResetNodeLayoutToOrigin(child);
+        }
         Dart_Handle widget =
             BuildWidget(child, newYGNode, newYGConnector, newText, newTextSpan,
                         newDecoratedBox, newOpacity, newScrollView, newListView,
@@ -7466,7 +7800,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         if (widget == nullptr) continue;
         child_widgets.push_back(widget);
         child_nodes.push_back(child);
-        if (child->style.position == 3) has_sticky_child = true;
+        if (child->style.position == 3 || IsStickyHeaderNode(child)) {
+          has_sticky_child = true;
+        }
       }
       // Fixed nodes were skipped above.  At the page root they become direct
       // children of the root connector and use viewport-relative layout.
@@ -7505,7 +7841,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             for (size_t i = 0; i < child_widgets.size(); i++) {
               Dart_Handle item = child_widgets[i];
               AppNode* child = child_nodes[i];
-              if (child != nullptr && child->style.position == 3) {
+              if (child != nullptr &&
+                  (child->style.position == 3 || IsStickyHeaderNode(child))) {
                 float offset_top = 0.0f;
                 if (!std::isnan(child->style.inset[0])) {
                   offset_top = child->style.inset[0];
@@ -7928,7 +8265,9 @@ void MaterializeBuilderItem(RuntimeHolder* holder, intptr_t address,
   }
   if (item->measured_w <= 0.0f) item->measured_w = width;
   std::vector<NodeMetric> metrics;
-  LayoutNode(item, 0.0f, 0.0f, item->measured_w, item->measured_h, &metrics);
+  LayoutNode(item, 0.0f, 0.0f, item->measured_w, item->measured_h, &metrics,
+             item->abs_x, item->abs_y);
+  item->sliver_layout = true;
   WriteLayoutMetrics(metrics);
 
   Dart_Handle widget =
@@ -8062,7 +8401,9 @@ Dart_Handle RebuildBuilderItemContent(RuntimeHolder* holder, AppNode* builder,
   }
   if (item->measured_w <= 0.0f) item->measured_w = width;
   std::vector<NodeMetric> metrics;
-  LayoutNode(item, 0.0f, 0.0f, item->measured_w, item->measured_h, &metrics);
+  LayoutNode(item, 0.0f, 0.0f, item->measured_w, item->measured_h, &metrics,
+             item->abs_x, item->abs_y);
+  item->sliver_layout = true;
   WriteLayoutMetrics(metrics);
 
   auto* newYGNode = reinterpret_cast<NewYGNodeFn>(
@@ -9475,6 +9816,10 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
   std::vector<NodeMetric> metrics;
   LayoutNode(root, 0.0f, 0.0f, viewport_w, viewport_h, &metrics);
   WriteLayoutMetrics(metrics);
+  // Sliver-hosted subtrees are positioned by Flutter; restore their
+  // origin-relative buffers clobbered by the page-wide pass above.
+  RestoreSliverLayoutMetrics();
+  PublishNodeRects();
   for (Dart_Handle widget : yoga_nodes) mark_needs_layout(widget);
   Dart_Handle root_handle = Dart_HandleFromPersistent(g_page->root_node);
   mark_needs_layout(root_handle);
@@ -9529,6 +9874,7 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
   }
 
   ResolveStyles(root, nullptr);
+  ClearSliverLayoutMarks();
   const float viewport_w =
       g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
   const float viewport_h =
@@ -9572,6 +9918,11 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
                     newDecoratedBox, newOpacity, newScrollView, newListView,
                     newGridView, newDirectRenderWidget, newListBuilder,
                     newGridBuilder, false);
+    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      std::fprintf(stderr, "[ops-debug] rebuild fixed #%u/%s widget=%s\n",
+                   fixed->id, fixed->name.c_str(),
+                   widget != nullptr && !Dart_IsError(widget) ? "ok" : "failed");
+    }
     if (widget != nullptr && !Dart_IsError(widget)) widgets.push_back(widget);
   }
   g_collect_fixed_nodes = false;
@@ -9587,6 +9938,7 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
     Dart_Handle root_handle = Dart_HandleFromPersistent(g_page->root_node);
     markNeedsLayout(root_handle);
   }
+  PublishNodeRects();
   SnapshotNode(root);
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
     DebugDumpNode(root, 0);
@@ -9985,6 +10337,7 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   }
 
   ResolveStyles(root, nullptr);
+  ClearSliverLayoutMarks();
   const float viewport_w =
       g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
   const float viewport_h =
@@ -10035,6 +10388,7 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   if (root->connector != nullptr) {
     g_page->root_connector = Dart_NewPersistentHandle(root->connector);
   }
+  PublishNodeRects();
   SnapshotNode(root);
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
     DebugDumpNode(root, 0);
@@ -10097,6 +10451,12 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
     ApplyOperation(op);
     const char* kind = MemberText(op, "op");
     if (std::strcmp(kind, "attach") == 0) {
+      // Match the live path: detached root-portal content is hoisted to the
+      // page root and late-filled fragments are flattened before building.
+      if (AppNode* root = FindNode(g_page->root_id)) {
+        AttachDetachedPortalContent(root);
+        FlattenFragments(root);
+      }
       const uint8_t open_type = g_page->pending_open_type != 0
                                     ? g_page->pending_open_type
                                     : (g_page->page_count == 0 ? 0 : 4);
@@ -10128,6 +10488,10 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
     }
   }
   if (g_page->page_count == 0 && g_page->root_id != 0) {
+    if (AppNode* root = FindNode(g_page->root_id)) {
+      AttachDetachedPortalContent(root);
+      FlattenFragments(root);
+    }
     MaterializeAttachedPage(holder, builders, g_page->root_id, 0, 0, 0);
   }
   if (g_page->page_count == 0) {
@@ -10347,13 +10711,18 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
     const char* kind = MemberText(op, "op");
     if (kind == nullptr) continue;
     if (std::strcmp(kind, "attach") == 0) {
+      // Match the live path: detached root-portal content is hoisted to the
+      // page root and late-filled fragments are flattened before building.
+      if (AppNode* root = FindNode(g_page->root_id)) {
+        AttachDetachedPortalContent(root);
+        FlattenFragments(root);
+      }
       const uint8_t open_type = g_page->pending_open_type != 0
                                     ? g_page->pending_open_type
                                     : (g_page->page_count == 0 ? 0 : 4);
       const int32_t page_id =
           g_page->pending_page_id != 0 ? g_page->pending_page_id
                                        : (g_page->page_count == 0 ? 0 : 1);
-      if (AppNode* root = FindNode(g_page->root_id)) FlattenFragments(root);
       if (MaterializeAttachedPage(holder, builders, g_page->root_id, open_type,
                                   page_id, g_page->pending_callback_id)) {
         created_route = true;
@@ -10394,7 +10763,8 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
   // only now; flattening changes the tree, so force a structural rebuild.
   if (g_page->root_id != 0) {
     if (AppNode* root = FindNode(g_page->root_id)) {
-      if (FlattenFragments(root)) {
+      const bool portal_changed = AttachDetachedPortalContent(root);
+      if (FlattenFragments(root) || portal_changed) {
         needs_flush = true;
         structural = true;
       }
@@ -10423,9 +10793,32 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
 
 // Synthetic keyboard input: append/delete text on the focused node and push
 // the change through the normal fine-grained update path.
+// Scrolls a materialized scroll view to `top` (UI thread).  Used by the
+// DevTools `scroll-into-view` bridge once the appservice component property
+// changes.
+void ScrollNodeTo(uint32_t node_id, double top) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* node = FindNode(node_id);
+  if (node == nullptr || node->scroll_view_p == nullptr) {
+    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] scrollNodeTo #%u: %s\n", node_id,
+                   node == nullptr ? "no node" : "no scroll widget");
+    }
+    return;
+  }
+  auto* update = reinterpret_cast<ScrollViewUpdateScrollTopFn>(FindCallback(
+      g_page->holder->ffi_table, kScrollViewUpdateScrollTopHash));
+  if (update == nullptr) return;
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr, "[skyline-runtime] scrollNodeTo #%u -> %g\n", node_id,
+                 top);
+  }
+  update(Dart_HandleFromPersistent(node->scroll_view_p), top);
+}
+
 void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
-                    const std::string& text) {
-  if (g_page == nullptr || kind == 1 /* key up */) return;
+                    const std::string& text) {  if (g_page == nullptr || kind == 1 /* key up */) return;
   AppNode* input = FindNode(g_page->focused_input_id);
   if (input == nullptr) {
     std::fprintf(stderr,
@@ -10597,6 +10990,34 @@ void ApplyPendingLiveOpsOnUi() {
     g_pending_live_ops.clear();
   }
   ScheduleLiveOps(std::move(payload), 0);
+}
+
+SKYLINE_EXPORT extern "C" int32_t SkylineGetNodeRect(uint32_t node_id,
+                                                     float* out) {
+  if (out == nullptr) return 0;
+  std::lock_guard<std::mutex> lock(appservice::g_rect_mutex);
+  const auto found = appservice::g_rect_snapshot.find(node_id);
+  if (found == appservice::g_rect_snapshot.end()) return 0;
+  out[0] = found->second.left;
+  out[1] = found->second.top;
+  out[2] = found->second.width;
+  out[3] = found->second.height;
+  return 1;
+}
+
+SKYLINE_EXPORT extern "C" void SkylineScrollNodeTo(uint32_t node_id,
+                                                   double top) {
+  fml::RefPtr<fml::TaskRunner> runner;
+  {
+    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
+    if (!g_live_ready) return;
+    runner = g_live_ui_runner;
+  }
+  if (!runner) return;
+  runner->PostTask([node_id, top]() {
+    DemoPageApiScope scope;
+    appservice::ScrollNodeTo(node_id, top);
+  });
 }
 
 SKYLINE_EXPORT extern "C" void SkylineApplyLiveOps(const char* json,

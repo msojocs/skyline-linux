@@ -22,6 +22,7 @@
 #include <cstring>
 #include <deque>
 #include <map>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -33,6 +34,8 @@ namespace {
 
 constexpr size_t kFrameHeaderBytes = 8;
 constexpr uint64_t kVsyncPeriodNanos = 16666667;  // 60 Hz hint.
+constexpr int32_t kTouchDevice = 1;
+constexpr int32_t kMouseDevice = 2;
 
 bool FileExists(const std::string& path) {
   std::FILE* file = std::fopen(path.c_str(), "rb");
@@ -190,23 +193,41 @@ class WindowHost {
     frame_buffer_size_ = size;
   }
 
+  // Queue a closure for the platform thread (the `Run` thread owns `engine_`
+  // and is the only thread allowed to call the input embedder APIs).
+  void PostPlatformTask(std::function<void()> task) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (stop_ || !ready_) return;
+      platform_tasks_.push_back(std::move(task));
+    }
+    cv_.notify_all();
+  }
+
   // DevTools simulator input.  The caller passes logical (CSS) pixels; Flutter
   // expects physical pixels for the implicit view.
+  //
+  // `FlutterEngineSendPointerEvent` is platform-thread-only (the window's
+  // `Run` thread).  The NAPI/JS thread must not call it directly: doing so
+  // deadlocks the appservice webview on touch and trips the engine's
+  // weak_ptr thread check.  Marshal the event onto the platform thread and
+  // keep the mailbox FIFO so down/move/up stay ordered.
   void SendPointer(Engine::PointerPhase phase, double x, double y) {
-    FlutterEngine engine = nullptr;
     double dpr = 1.0;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      engine = engine_;
       dpr = pixel_ratio_;
     }
-    if (engine == nullptr) return;
     FlutterPointerEvent event = {};
     event.struct_size = sizeof(event);
     event.timestamp = FlutterEngineGetCurrentTime();
     event.x = x * dpr;
     event.y = y * dpr;
-    event.device = 1;
+    // Touch and mouse need distinct device ids: the engine keeps one pointer
+    // state per device, so hovering with a "touch" device while it is down
+    // trips the converter's !is_down checks.
+    event.device = phase == Engine::PointerPhase::kHover ? kMouseDevice
+                                                        : kTouchDevice;
     event.view_id = 0;
     event.signal_kind = kFlutterPointerSignalKindNone;
     switch (phase) {
@@ -231,31 +252,49 @@ class WindowHost {
         event.device_kind = kFlutterPointerDeviceKindMouse;
         break;
     }
-    FlutterEngineSendPointerEvent(engine, &event, 1);
+    PostPlatformTask([this, event, phase]() {
+      if (engine_ == nullptr) return;
+      // Synthetic touch sequences from the simulator can repeat a phase (for
+      // example a click handler firing after a touch sequence).  The engine
+      // aborts the whole process on a duplicate down / orphan move / up, so
+      // keep the single-touch state machine coherent here.
+      if (event.device_kind == kFlutterPointerDeviceKindTouch) {
+        if (phase == Engine::PointerPhase::kDown) {
+          if (touch_down_) return;
+          touch_down_ = true;
+        } else if (phase == Engine::PointerPhase::kUp ||
+                   phase == Engine::PointerPhase::kCancel) {
+          if (!touch_down_) return;
+          touch_down_ = false;
+        } else if (phase == Engine::PointerPhase::kMove) {
+          if (!touch_down_) return;
+        }
+      }
+      FlutterEngineSendPointerEvent(engine_, &event, 1);
+    });
   }
 
   void SendWheel(double x, double y, double delta_x, double delta_y) {
-    FlutterEngine engine = nullptr;
     double dpr = 1.0;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      engine = engine_;
       dpr = pixel_ratio_;
     }
-    if (engine == nullptr) return;
     FlutterPointerEvent event = {};
     event.struct_size = sizeof(event);
     event.phase = kMove;
     event.timestamp = FlutterEngineGetCurrentTime();
     event.x = x * dpr;
     event.y = y * dpr;
-    event.device = 2;
+    event.device = kMouseDevice;
     event.view_id = 0;
     event.device_kind = kFlutterPointerDeviceKindMouse;
     event.signal_kind = kFlutterPointerSignalKindScroll;
     event.scroll_delta_x = delta_x;
     event.scroll_delta_y = delta_y;
-    FlutterEngineSendPointerEvent(engine, &event, 1);
+    PostPlatformTask([this, event]() {
+      if (engine_ != nullptr) FlutterEngineSendPointerEvent(engine_, &event, 1);
+    });
   }
 
  private:
@@ -368,14 +407,17 @@ class WindowHost {
 
     while (true) {
       std::deque<intptr_t> batons;
+      std::deque<std::function<void()>> tasks;
       {
         std::unique_lock<std::mutex> lock(mutex_);
         cv_.wait_for(lock, std::chrono::milliseconds(5), [this]() {
-          return stop_ || !batons_.empty();
+          return stop_ || !batons_.empty() || !platform_tasks_.empty();
         });
-        if (stop_ && batons_.empty()) break;
+        if (stop_ && batons_.empty() && platform_tasks_.empty()) break;
         batons.swap(batons_);
+        tasks.swap(platform_tasks_);
       }
+      for (auto& task : tasks) task();
       for (intptr_t baton : batons) {
         const uint64_t now = FlutterEngineGetCurrentTime();
         FlutterEngineOnVsync(engine, baton, now, now + kVsyncPeriodNanos);
@@ -503,6 +545,9 @@ class WindowHost {
   std::condition_variable cv_;
   std::condition_variable ready_cv_;
   std::deque<intptr_t> batons_;
+  std::deque<std::function<void()>> platform_tasks_;
+  // Platform-thread-only single-touch state (see SendPointer).
+  bool touch_down_ = false;
   bool ready_ = false;
   bool stop_ = false;
   std::string init_error_;

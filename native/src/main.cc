@@ -18,6 +18,10 @@
 #include "host_engine.hh"
 // Defined by the embedded Skyline runtime in libflutter_engine.so.
 extern "C" void SkylineApplyLiveOps(const char* json, double window_id);
+// Viewport-relative layout rect of a node (left, top, width, height).
+extern "C" int32_t SkylineGetNodeRect(uint32_t node_id, float* out);
+// Scroll a materialized scroll-view node to a vertical offset.
+extern "C" void SkylineScrollNodeTo(uint32_t node_id, double top);
 #endif
 
 namespace {
@@ -327,8 +331,7 @@ napi_value LogFromJs(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
-napi_value ApplyPageOps(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
+napi_value ApplyPageOps(napi_env env, napi_callback_info info) {  size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   if (argc < 2 || !IsType(env, argv[1], napi_string)) {
@@ -342,6 +345,56 @@ napi_value ApplyPageOps(napi_env env, napi_callback_info info) {
 #else
   (void)window_id;
   (void)json;
+#endif
+  return Undefined(env);
+}
+
+// Geometry for the appservice selector-query APIs.  The runtime keeps a
+// mutex-protected snapshot published by the UI thread, so this synchronous
+// NAPI call is safe from the JS thread.
+napi_value GetNodeRect(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 2) return Undefined(env);
+  const double node_id = ReadNumber(env, argv[1]);
+  float rect[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+#ifdef SKYLINE_HAVE_ENGINE
+  if (!SkylineGetNodeRect(static_cast<uint32_t>(node_id), rect)) {
+    return Undefined(env);
+  }
+#else
+  (void)node_id;
+  return Undefined(env);
+#endif
+  napi_value object = nullptr;
+  napi_create_object(env, &object);
+  const double values[6] = {rect[0], rect[1], rect[0] + rect[2],
+                            rect[1] + rect[3], rect[2], rect[3]};
+  static const char* const keys[6] = {"left", "top", "right",
+                                      "bottom", "width", "height"};
+  for (int i = 0; i < 6; i++) {
+    napi_value value = nullptr;
+    napi_create_double(env, values[i], &value);
+    napi_set_named_property(env, object, keys[i], value);
+  }
+  return object;
+}
+
+// scroll-into-view bridge: the appservice scroll-view component keeps the
+// target id; the runtime scrolls the materialized Flutter widget.
+napi_value ScrollNodeTo(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 3) return Undefined(env);
+  const double node_id = ReadNumber(env, argv[1]);
+  const double top = ReadNumber(env, argv[2]);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineScrollNodeTo(static_cast<uint32_t>(node_id), top);
+#else
+  (void)node_id;
+  (void)top;
 #endif
   return Undefined(env);
 }
@@ -366,6 +419,10 @@ napi_value DispatchTouch(napi_env env, napi_callback_info info) {
   } else if (kind == "cancel") {
     phase = skyline::Engine::PointerPhase::kCancel;
   }
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    AddonLog("dispatchTouch kind=%s window=%g x=%g y=%g", kind.c_str(),
+             window_id, x, y);
+  }
   state->engine->DispatchPointer(window_id, phase, x, y);
   return Undefined(env);
 }
@@ -381,6 +438,10 @@ napi_value DispatchWheel(napi_env env, napi_callback_info info) {
   const double y = ReadNumber(env, argv[2]);
   const double delta_x = ReadNumber(env, argv[3]);
   const double delta_y = ReadNumber(env, argv[4]);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    AddonLog("dispatchWheel window=%g x=%g y=%g dx=%g dy=%g", window_id, x, y,
+             delta_x, delta_y);
+  }
   state->engine->DispatchWheel(window_id, x, y, delta_x, delta_y);
   return Undefined(env);
 }
@@ -574,6 +635,8 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "createWindow", CreateWindow);
   Define(env, bridge, "destroyWindow", DestroyWindow);
   Define(env, bridge, "applyPageOps", ApplyPageOps);
+  Define(env, bridge, "getNodeRect", GetNodeRect);
+  Define(env, bridge, "scrollNodeTo", ScrollNodeTo);
   Define(env, bridge, "dispatchTouch", DispatchTouch);
   Define(env, bridge, "dispatchWheel", DispatchWheel);
   Define(env, bridge, "onWindowRasterized", OnWindowRasterized);

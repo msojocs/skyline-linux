@@ -123,6 +123,38 @@ else:
     else:
         print(f"native-view hit test already patched in {path}")
 
+# Connector-backed YGNodes: the shadow-node hit test above is authoritative.
+# Without this guard the raw RenderBox fallback (YGConnectorRenderObject.hitTest
+# == size.contains) makes every full-viewport fixed/portal overlay swallow all
+# pointers, so scroll views behind them never receive gestures (the address-book
+# root-portal A-Z index blocked the whole page).
+if "concreteWidgetType != WidgetType.kYGConnector" not in text:
+    old = (
+        "    if (hitTestYGNode(result, position)) {\n"
+        "      result.add(BoxHitTestEntry(this, position));\n"
+        "      return true;\n"
+        "    }\n"
+    )
+    new = (
+        "    // Connector-backed nodes already ran the authoritative shadow-node hit\n"
+        "    // test above.  YGConnectorRenderObject.hitTest only checks the whole box,\n"
+        "    // so falling back to it would make a full-viewport fixed/portal overlay\n"
+        "    // swallow pointers even when no child contains the point (blocking the\n"
+        "    // scroll view behind the address-book A-Z index).\n"
+        "    if (concreteWidgetType != WidgetType.kYGConnector &&\n"
+        "        hitTestYGNode(result, position)) {\n"
+        "      result.add(BoxHitTestEntry(this, position));\n"
+        "      return true;\n"
+        "    }\n"
+    )
+    if old not in text:
+        raise SystemExit(f"cannot find hitTestWithPaintTransform anchor in {path}")
+    text = text.replace(old, new, 1)
+    path.write_text(text, encoding="utf-8")
+    print(f"patched connector hit test in {path}")
+else:
+    print(f"connector hit test already patched in {path}")
+
 # Headless Linux native-view fallback.  The public engine has no platform-view
 # registry, so `SkylineTextureView` uses a synthetic texture id and a
 # pointer-listening placeholder.  Pointer events still flow through

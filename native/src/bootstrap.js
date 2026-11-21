@@ -190,13 +190,30 @@
   }
 
   // Touch events are forwarded to the Flutter engine as pointer events so the
-  // simulator's scroll views and tap gestures work.
+  // simulator's scroll views and tap gestures work.  They are also dispatched
+  // to the appservice's glass-easel tree (bindtap / catch:touchstart handlers)
+  // through the touch callback registered by Skyline RuntimeCore.
+  const TOUCH_EVENT_TYPES = {
+    start: 'touchstart', move: 'touchmove', end: 'touchend', cancel: 'touchcancel',
+  };
   function dispatchTouch(name, kind, arity) {
     return function (...args) {
       if (args.length !== arity) throw new Error(`${name} expects ${arity} arguments`);
+      const windowId = args.length > 0 ? args[0] : 0;
       const x = args.length > 1 ? args[1] : 0;
       const y = args.length > 2 ? args[2] : 0;
-      return native.dispatchTouch(kind, args[0], x, y);
+      const result = native.dispatchTouch(kind, windowId, x, y);
+      const domType = TOUCH_EVENT_TYPES[kind];
+      if (domType) {
+        try {
+          dispatchDomTouchEvent(windowId, domType, x, y);
+        } catch (error) {
+          if (typeof native.log === 'function') {
+            native.log(`dom touch dispatch failed: ${error && error.message}`);
+          }
+        }
+      }
+      return result;
     };
   }
 
@@ -297,6 +314,10 @@
       installCreateWindowResponseGate();
       const created = native.createWindow(args);
       const windowId = args[0];
+      if (Number.isFinite(args[2]) && Number.isFinite(args[3]) &&
+          args[2] > 0 && args[3] > 0) {
+        windowSizes.set(windowId, { width: args[2], height: args[3] });
+      }
       // Resolve the extension's createWindow promise immediately so it emits
       // requireRenderContext; the response gate holds CREATE_WINDOW_RESPONSE
       // until the app_sub_render frame is ready.
@@ -433,6 +454,34 @@
   // return text.
   const compiledStyleSheets = new Map();
   let nextStyleSheetId = 0;
+  // Logical window size per window id, captured from createWindow.  Selector
+  // queries resolve the viewport rect from the backend context's
+  // clientWidth/clientHeight.
+  const windowSizes = new Map();
+  // PageContexts whose initial render finished; incremental DOM mutations
+  // (setData -> class/style/attribute updates) are flushed on the next tick.
+  const liveContexts = new Set();
+
+  function windowSize(windowId) {
+    return windowSizes.get(windowId === undefined ? 0 : windowId) || null;
+  }
+
+  function zeroRect() {
+    return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+  }
+
+  // Returns the node's viewport rect, or null when the layout snapshot has not
+  // been published yet (the page build runs on the engine UI thread, so an
+  // `attached()` selector query can race it).
+  function nodeRect(windowId, viewTag) {
+    if (typeof native.getNodeRect !== 'function') return null;
+    try {
+      const rect = native.getNodeRect(windowId, viewTag);
+      return rect && typeof rect.width === 'number' ? rect : null;
+    } catch (_error) {
+      return null;
+    }
+  }
 
   function bridgeOps(windowId) {
     const key = windowId === undefined || windowId === null ? 0 : windowId;
@@ -592,26 +641,52 @@
   // expecting the wrapper to return a callable.  A plain autoStub returns a
   // number there, which breaks component creation before the page tree is
   // built.  Returning the input function keeps the JS-side worklet callable.
+  // `wx.worklet.shared(initial)` goes through makeMutable and the component
+  // reads/writes `.value` (address-book's property observer does this), so the
+  // mutable stub has to behave like the JS-thread fallback: a value holder.
+  function workletMutable(initial) {
+    let current = initial;
+    return {
+      get value() { return current; },
+      set value(next) { current = next; },
+      addListener() {},
+      removeListener() {},
+    };
+  }
+
   function workletStub() {
     const target = Object.create(null);
+    const passthrough = function (value) {
+      return typeof value === 'function' ? value : undefined;
+    };
+    target.installCoreFunctions = function (setter) { return setter; };
+    target.makeShareable = function (value) { return value; };
+    target.makeMutable = workletMutable;
+    target.makeRemote = function (value) { return value; };
+    target.startMapper = function () { return 0; };
+    target.stopMapper = function () {};
+    target.stopMappers = function () {};
+    target.enableMapper = function () {};
+    target.disableMapper = function () {};
+    target.pushFrame = function () {};
+    target.requestFrame = function () {};
+    target.getCurrentTime = function () { return Date.now(); };
     return new Proxy(target, {
       get(object, property) {
         if (property in object) return object[property];
         if (typeof property !== 'string') return undefined;
-        const fn = function (value) {
-          return typeof value === 'function' ? value : undefined;
-        };
-        object[property] = fn;
-        return fn;
+        object[property] = passthrough;
+        return passthrough;
       },
     });
   }
 
   class BridgeElement {
-    constructor(tag, name, ops) {
+    constructor(tag, name, ops, windowId) {
       this.ops = ops || [];
       this.tag = tag;
       this.name = name;
+      this.windowId = windowId;
       this.attrs = {};
       this.children = [];
       this.parent = null;
@@ -688,12 +763,58 @@
       return this;
     }
     forceDetached() {}
-    getBoundingClientRect() {
-      return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
+    // Native backend mode passes a callback (Domlike mode reads the return
+    // value directly).  The renderer answers queries only after pending
+    // mutations have been laid out; our snapshot is published at the end of
+    // the engine-side build, so wait for it instead of reporting a stale 0x0
+    // rect (which breaks `attached()` measurements such as the A-Z index).
+    getBoundingClientRect(callback) {
+      const rect = nodeRect(this.windowId, this.viewTag);
+      if (typeof callback !== 'function') return rect || zeroRect();
+      if (rect) {
+        setTimeout(() => callback(rect), 0);
+        return undefined;
+      }
+      // A partially built tree can publish a 0x0 rect before the final
+      // layout; wait for a non-empty box (a genuinely empty node falls back to
+      // the latest rect at the deadline).
+      const deadline = Date.now() + 1500;
+      let last = rect;
+      const poll = () => {
+        const next = nodeRect(this.windowId, this.viewTag);
+        if (next) {
+          last = next;
+          if (next.width > 0 || next.height > 0) {
+            setTimeout(() => callback(next), 0);
+            return;
+          }
+        }
+        if (Date.now() >= deadline) {
+          callback(last || zeroRect());
+        } else {
+          setTimeout(poll, 16);
+        }
+      };
+      setTimeout(poll, 16);
+      return undefined;
+    }
+    getScrollOffset(callback) {
+      const rect = nodeRect(this.windowId, this.viewTag);
+      const offset = {
+        scrollLeft: 0,
+        scrollTop: 0,
+        scrollWidth: rect ? rect.width : 0,
+        scrollHeight: rect ? rect.height : 0,
+      };
+      if (typeof callback === 'function') {
+        setTimeout(() => callback(offset), 0);
+        return undefined;
+      }
+      return offset;
     }
     getAttribute(name) { return this.attrs[name]; }
     cloneNode() {
-      const clone = new BridgeElement(this.tag, this.name, this.ops);
+      const clone = new BridgeElement(this.tag, this.name, this.ops, this.windowId);
       clone.attrs = Object.assign({}, this.attrs);
       clone.text = this.text;
       clone._style = this._style;
@@ -811,12 +932,36 @@
     // node, so glass-easel calls these before any child is created; unknown
     // scroll behaviours are inert until the native scroll pipeline needs them.
     setRefresherHeader() {}
-    scrollIntoView() {}
-    scrollIntoViewWithinExtent() {}
-    scrollIntoViewAlignment() {}
-    scrollIntoViewOffset() {}
-    scrollWithAnimation() {}
-    holdPosition() {}
+    scrollIntoView(...args) {
+      if (typeof native.log === 'function') {
+        native.log(`scrollIntoView id=${this.viewTag} args=${JSON.stringify(args)}`);
+      }
+    }
+    scrollIntoViewWithinExtent(...args) {
+      if (typeof native.log === 'function') {
+        native.log(`scrollIntoViewWithinExtent id=${this.viewTag} args=${JSON.stringify(args)}`);
+      }
+    }
+    scrollIntoViewAlignment(...args) {
+      if (typeof native.log === 'function') {
+        native.log(`scrollIntoViewAlignment id=${this.viewTag} args=${JSON.stringify(args)}`);
+      }
+    }
+    scrollIntoViewOffset(...args) {
+      if (typeof native.log === 'function') {
+        native.log(`scrollIntoViewOffset id=${this.viewTag} args=${JSON.stringify(args)}`);
+      }
+    }
+    scrollWithAnimation(...args) {
+      if (typeof native.log === 'function') {
+        native.log(`scrollWithAnimation id=${this.viewTag} args=${JSON.stringify(args)}`);
+      }
+    }
+    holdPosition(...args) {
+      if (typeof native.log === 'function') {
+        native.log(`holdPosition id=${this.viewTag} args=${JSON.stringify(args)}`);
+      }
+    }
     requestRefresherRefresh() {}
     requestRefresherTwoLevel() {}
     getScrollPosition() { return 0; }
@@ -845,24 +990,45 @@
       this.flushing = false;
       this.flushTimer = null;
       this.rootNode = null;
+      this.rendered = false;
       this.frameworkType = 'glass-easel';
-      this.clientWidth = 0;
-      this.clientHeight = 0;
+      liveContexts.add(this);
+      // Selector-query viewport rect reads these (see WASubContext's
+      // SelectorQuery for `selectViewport()`).
+      const size = windowSize(windowId);
+      this.clientWidth = size ? size.width : 0;
+      this.clientHeight = size ? size.height : 0;
       this.ops.push({ op: 'createContext', id, windowId });
       if (typeof native.log === 'function') {
         native.log(`PageContext(${id}) window=${windowId}`);
       }
     }
     createElement(tag, name) {
-      return new BridgeElement(tag, name, this.ops);
+      const node = new BridgeElement(tag, name, this.ops, this.windowId);
+      // The root-portal adapter creates a detached overlay root that the native
+      // runtime hoists to the page root; the JS hit test must visit it too.
+      if (name === 'root-portal-content' || name === 'rootportalcontent') {
+        let portals = detachedPortals.get(this.windowId);
+        if (!portals) {
+          portals = [];
+          detachedPortals.set(this.windowId, portals);
+        }
+        portals.push(node);
+        if (typeof native.log === 'function') {
+          native.log(`tracked detached portal ${name} window=${this.windowId} ` +
+            `id=${node.viewTag} count=${portals.length}`);
+        }
+      }
+      return node;
     }
     createTextNode(text) {
-      const node = new BridgeElement('text', '', this.ops);
+      const node = new BridgeElement('text', '', this.ops, this.windowId);
       node.setText(text);
       return node;
     }
     createFragment(name) {
-      return new BridgeElement('fragment', name === undefined ? 'fragment' : name, this.ops);
+      return new BridgeElement('fragment', name === undefined ? 'fragment' : name,
+                               this.ops, this.windowId);
     }
     appendStyleSheet(css, index) {
       this.ops.push({ op: 'appendStyleSheet', index, css: String(css) });
@@ -904,7 +1070,7 @@
     createStyleSheetIndexGroup() { return 0; }
     getRootNode() {
       if (this.rootNode === null) {
-        this.rootNode = new BridgeElement('empty', 'root', this.ops);
+        this.rootNode = new BridgeElement('empty', 'root', this.ops, this.windowId);
       }
       return this.rootNode;
     }
@@ -914,6 +1080,9 @@
     getWindowId() { return this.windowId; }
     attach(root, host) {
       this.ops.push({ op: 'attach', root: bridgeId(root), host: bridgeId(host) });
+      if (root && typeof root === 'object') {
+        attachedRoots.set(this.windowId, root);
+      }
       // `startRender` marks the tree as complete and flushes synchronously.
       // Keep a long fallback for bundles that only call attach; a short timer
       // here flushes before the glass-easel tree has finished building.
@@ -926,6 +1095,7 @@
     }
     startRender(callback) {
       this.ops.push({ op: 'startRender' });
+      this.rendered = true;
       this.flush();
       if (typeof callback === 'function') setTimeout(callback, 0);
     }
@@ -934,7 +1104,7 @@
     }
     // Remaining PageContext surface used by the mini program SDK/Dart engine.
     render() { this.flush(); }
-    release() {}
+    release() { liveContexts.delete(this); }
     recalcStyle() {}
     updateRouteConfig() {}
     setNavigateBackInterception() {}
@@ -992,6 +1162,281 @@
     }
   }
 
+  // -- appservice DOM touch dispatch -----------------------------------------
+  // Skyline RuntimeCore calls runtime.registerTouchCallback(cb) and expects the
+  // native runtime to feed it native hit-test results.  The element tree and
+  // viewport geometry are mirrored on this side, so hit-test the tree and
+  // invoke the callback with the glass-easel element (`__wxElement`).
+  const runtimeTouchCallbacks = [];
+  const runtimeMouseCallbacks = [];
+  const runtimeTransitionCallbacks = [];
+  const runtimeTriggerEventCallbacks = [];
+  const attachedRoots = new Map();
+  const detachedPortals = new Map();
+  const lastTouchPoint = new Map();
+  // Debug handle for CDP inspection of the mirrored element tree.
+  globalThis.__skylineDebug = {
+    attachedRoots, detachedPortals, lastTouchPoint,
+    touchCallbacks: runtimeTouchCallbacks,
+    rect: nodeRect,
+    hit: hitTestElement,
+    scrollTo(windowId, nodeId, top) {
+      if (typeof native.log === 'function') {
+        native.log(`scroll-into-view node=${nodeId} top=${top}`);
+      }
+      if (typeof native.scrollNodeTo === 'function') {
+        native.scrollNodeTo(windowId, nodeId, top);
+      }
+    },
+    log(message) {
+      if (typeof native.log === 'function') native.log(String(message));
+    },
+  };
+
+  function pointInRect(rect, x, y) {
+    return !!rect && rect.width >= 0 && rect.height >= 0 &&
+      x >= rect.left && x < rect.left + rect.width &&
+      y >= rect.top && y < rect.top + rect.height;
+  }
+
+  function hitTestElement(windowId, node, x, y) {
+    if (!node || node.released) return null;
+    // The component host only carries the detached overlay; it is not a touch
+    // target of its own (pointer-events: none semantics).
+    if (node.name === 'root-portal' || node.name === 'rootportal') return null;
+    if (typeof node._style === 'string' && node._style.indexOf('display:none') >= 0) {
+      return null;
+    }
+    for (let i = node.children.length - 1; i >= 0; i -= 1) {
+      const child = node.children[i];
+      if (!child) continue;
+      if (child.name === 'root-portal' || child.name === 'rootportal') continue;
+      if (!pointInRect(nodeRect(windowId, child.viewTag), x, y)) continue;
+      const deeper = hitTestElement(windowId, child, x, y);
+      if (deeper) return deeper;
+      // Containers do not swallow touches when none of their children hit;
+      // this mirrors the patched YGConnector shadow hit test.
+      if (!child.children.length) return child;
+    }
+    return null;
+  }
+
+  function touchTargetElement(windowId, x, y) {
+    const roots = [];
+    const portals = detachedPortals.get(windowId);
+    if (portals) {
+      for (let i = portals.length - 1; i >= 0; i -= 1) roots.push(portals[i]);
+    }
+    const attached = attachedRoots.get(windowId);
+    if (attached) roots.push(attached);
+    for (const root of roots) {
+      let node = hitTestElement(windowId, root, x, y);
+      // Text backend nodes may not carry the exparser back-reference; dispatch
+      // to the nearest ancestor element instead.
+      while (node && !node.__wxElement) node = node.parent;
+      if (node && node.__wxElement) return node.__wxElement;
+    }
+    return null;
+  }
+
+  function makeTouch(target, x, y) {
+    return {
+      identifier: 0, target,
+      pageX: x, pageY: y, clientX: x, clientY: y,
+      screenX: x, screenY: y, x, y,
+      radiusX: 1, radiusY: 1,
+      rotationAngle: 0, force: 1,
+    };
+  }
+
+  // -- scroll-into-view ------------------------------------------------------
+  // The WXML `scroll-into-view` property is consumed by the appservice
+  // scroll-view component (it briefly sets the component property, then resets
+  // it) but the DevTools has no renderer-side handler that turns it into a
+  // native scroll.  The component tree lives in the app_sub_render realm, so
+  // install a small monitor there that watches the owning component's
+  // `intoView` data and drives the materialized widget through the addon.
+  let scrollMonitorInstalled = false;
+
+  const SCROLL_MONITOR_SCRIPT = `(function(){
+    const parentWindow = window.parent;
+
+    function backendOf(element) {
+      return element && (element._$backendElement || element.__domElement || null);
+    }
+
+    function composedWalk(element, visit) {
+      if (!element) return;
+      visit(element);
+      let children = null;
+      try {
+        const shadow = element.getShadowRoot ? element.getShadowRoot() : null;
+        children = (shadow && shadow.childNodes) || element.childNodes || null;
+      } catch (error) {
+        children = null;
+      }
+      if (!children) return;
+      for (const child of children) {
+        if (child && child.childNodes) composedWalk(child, visit);
+      }
+    }
+
+    function findComponentWithIntoView(rootElement) {
+      let found = null;
+      composedWalk(rootElement, function(element) {
+        if (found || !element.getMethodCaller) return;
+        if (typeof element.is !== 'string' || element.is.indexOf('/') < 0) return;
+        try {
+          const caller = element.getMethodCaller();
+          const data = caller && caller.data;
+          if (data && typeof data.intoView === 'string') {
+            found = { element, intoView: data.intoView };
+          }
+        } catch (error) {}
+      });
+      return found;
+    }
+
+    // The scroll content (sticky headers, list slivers) lives in the mirrored
+    // backend tree, not in the composed shadow tree exposed by the scroll-view
+    // native component.
+    function findScrollBackend(root) {
+      if (!root) return null;
+      // Prefer the adapter scrollview node: it owns the materialized Flutter
+      // scroll widget, while the wx-x scroll-view node is its plain wrapper.
+      if (root.name === 'scrollview') return root;
+      for (const child of root.children) {
+        const found = findScrollBackend(child);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function findTargetBackend(root, id) {
+      if (!root) return null;
+      const nodeId = root._id || '';
+      if (nodeId === id || nodeId.endsWith('--' + id)) return root;
+      for (const child of root.children) {
+        const found = findTargetBackend(child, id);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    const seen = new Map();
+    setInterval(function() {
+      try {
+        const debug = parentWindow.__skylineDebug;
+        if (!debug || !debug.attachedRoots || !debug.rect || !debug.scrollTo) return;
+        for (const entry of debug.attachedRoots) {
+          const windowId = entry[0];
+          const root = entry[1];
+          const rootElement = root && root.__wxElement;
+          if (!rootElement) continue;
+          const component = findComponentWithIntoView(rootElement);
+          if (!component || !component.intoView) continue;
+          const key = windowId + ':' + (backendOf(component.element)
+            ? backendOf(component.element).viewTag : component.element.is);
+          if (seen.get(key) === component.intoView) continue;
+          seen.set(key, component.intoView);
+          const scrollBackend = findScrollBackend(root);
+          const targetBackend = findTargetBackend(root, component.intoView);
+          if (!scrollBackend || !targetBackend) continue;
+          const scrollRect = debug.rect(windowId, scrollBackend.viewTag);
+          const targetRect = debug.rect(windowId, targetBackend.viewTag);
+          if (!scrollRect || !targetRect) continue;
+          debug.scrollTo(windowId, scrollBackend.viewTag,
+                         Math.max(0, targetRect.top - scrollRect.top));
+        }
+      } catch (error) {}
+    }, 16);
+  })();`;
+
+  function installRenderScrollMonitor() {
+    try {
+      const maps = typeof window !== 'undefined' && window.__global &&
+        window.__global.contextFrameMaps;
+      if (!maps || typeof maps.forEach !== 'function') return false;
+      let renderWindow = null;
+      maps.forEach((frame) => {
+        if (frame && frame.name === 'app_sub_render' && frame.iframe) {
+          try {
+            if (frame.iframe.contentWindow) renderWindow = frame.iframe.contentWindow;
+          } catch (_error) {}
+        }
+      });
+      if (!renderWindow) return false;
+      if (renderWindow.__skylineScrollMonitor) return true;
+      renderWindow.eval(SCROLL_MONITOR_SCRIPT);
+      renderWindow.__skylineScrollMonitor = true;
+      if (typeof native.log === 'function') {
+        native.log('scroll-into-view monitor installed');
+      }
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function emitRuntimeTouch(event) {
+    for (const callback of runtimeTouchCallbacks) {
+      try {
+        callback(event);
+      } catch (error) {
+        if (typeof native.log === 'function') {
+          native.log(`touch callback failed: ${error && error.message}`);
+        }
+      }
+    }
+  }
+
+  function dispatchDomTouchEvent(windowId, type, x, y) {
+    if (!runtimeTouchCallbacks.length) return;
+    if (type === 'touchcancel') {
+      const previous = lastTouchPoint.get(windowId);
+      if (previous) { x = previous.x; y = previous.y; }
+    }
+    if (type === 'touchstart') {
+      const target = touchTargetElement(windowId, x, y);
+      const started = { x, y, target, time: Date.now(), moved: false };
+      lastTouchPoint.set(windowId, started);
+      if (!target) return;
+      const touch = makeTouch(target, x, y);
+      emitRuntimeTouch({
+        type: 'touchstart', target, touches: [touch], changedTouches: [touch],
+        timeStamp: Date.now(), bubbles: true, cancelable: true,
+      });
+      return;
+    }
+    const state = lastTouchPoint.get(windowId);
+    if (!state || !state.target) return;
+    if (type === 'touchmove') {
+      if (Math.abs(x - state.x) > 10 || Math.abs(y - state.y) > 10) state.moved = true;
+      const touch = makeTouch(state.target, x, y);
+      emitRuntimeTouch({
+        type: 'touchmove', target: state.target, touches: [touch],
+        changedTouches: [touch], timeStamp: Date.now(), bubbles: true,
+        cancelable: true,
+      });
+      return;
+    }
+    const touch = makeTouch(state.target, x, y);
+    emitRuntimeTouch({
+      type, target: state.target, touches: [], changedTouches: [touch],
+      timeStamp: Date.now(), bubbles: true, cancelable: true,
+    });
+    const isTap = type === 'touchend' && !state.moved &&
+      Date.now() - state.time < 700;
+    lastTouchPoint.delete(windowId);
+    if (isTap) {
+      emitRuntimeTouch({
+        type: 'tap', target: state.target, touches: [],
+        changedTouches: [touch], timeStamp: Date.now(), bubbles: true,
+        cancelable: true,
+      });
+    }
+  }
+
   const bridgeRuntime = autoStub({
     registerJsValue(value) {
       const id = ++nextJsValueId;
@@ -1027,12 +1472,23 @@
       }
       return id;
     },
-    registerEventCallback() {},
+    registerEventCallback(callback) {
+      if (typeof callback === 'function') runtimeTriggerEventCallbacks.push(callback);
+    },
+    registerTriggerEventCallback(callback) {
+      if (typeof callback === 'function') runtimeTriggerEventCallbacks.push(callback);
+    },
     registerAnimationCallback() {},
-    registerTouchCallback() {},
+    registerTouchCallback(callback) {
+      if (typeof callback === 'function') runtimeTouchCallbacks.push(callback);
+    },
     registerKeyCallback() {},
-    registerMouseCallback() {},
-    registerTransitionCallback() {},
+    registerMouseCallback(callback) {
+      if (typeof callback === 'function') runtimeMouseCallbacks.push(callback);
+    },
+    registerTransitionCallback(callback) {
+      if (typeof callback === 'function') runtimeTransitionCallbacks.push(callback);
+    },
   });
   const bridgeNavigator = autoStub({
     notifyNavigateTo(...args) { bridgeOps(0).push({ op: 'notifyNavigateTo', args }); },
@@ -1075,6 +1531,25 @@
       `pageGlobal=${pageGlobal} globalGlobal=${globalGlobal} ` +
       `contextMaps=${contextMaps} wjb=${typeof WeixinJSBridge !== 'undefined' ? 'yes' : 'no'}`);
   }
+  // The official PageContext applies each mutation immediately; our bridge
+  // batches ops until an explicit flush.  The miniprogram SDK does not call
+  // render()/flush() for ordinary setData updates, so coalesce them here.
+  const liveFlushTimer = setInterval(() => {
+    for (const context of liveContexts) {
+      if (context.rendered && context.ops.length > 0) {
+        try {
+          context.flush();
+        } catch (_error) {}
+      }
+    }
+    if (!scrollMonitorInstalled) {
+      scrollMonitorInstalled = installRenderScrollMonitor();
+    }
+  }, 16);
+  if (liveFlushTimer && typeof liveFlushTimer.unref === 'function') {
+    liveFlushTimer.unref();
+  }
+
   const gateInstalled = installCreateWindowResponseGate();
   if (typeof native.log === 'function') {
     native.log(`createWindow response gate installed=${gateInstalled}`);

@@ -113,6 +113,10 @@ names = sorted(entry["name"] for entry in spec["ffi"]["lookupSymbols"])
 names.append("DispatchSkylineKeyEvent")
 # Linux live DevTools bridge (addon -> embedded runtime page ops).
 names.append("SkylineApplyLiveOps")
+# Layout geometry for the appservice selector-query APIs.
+names.append("SkylineGetNodeRect")
+# Scroll-into-view bridge (`scroll-into-view` WXML property).
+names.append("SkylineScrollNodeTo")
 missing = [name for name in names if f"    {name};" not in exports]
 if missing:
     anchor = "    kInternalFlutterGpu*;\n"

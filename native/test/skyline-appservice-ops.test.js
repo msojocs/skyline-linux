@@ -689,6 +689,63 @@ test('host pointer script reaches the Skyline hit test path', {
   }
 });
 
+test('appservice ops: fixed full-viewport overlay does not steal touches', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // A fixed overlay (e.g. root-portal content for an A-Z index) covers the
+  // page, but the pointer is outside its only child.  The connector-backed
+  // YGNode must not fall back to the whole-box RenderBox hit test, otherwise
+  // the overlay swallows every touch and the scroll view behind it never
+  // receives the drag.
+  const fixture = path.join(repoRoot, 'test', 'fixtures',
+    'appservice-fixed-overlay-scroll.ops.json');
+  const script = path.join(os.tmpdir(), `skyline-overlay-${process.pid}.txt`);
+  fs.writeFileSync(script, [
+    '1200 add 160 100 1',
+    '1300 down 160 100 1',
+    '1400 move 160 80 1',
+    '1500 move 160 60 1',
+    '1600 move 160 40 1',
+    '1700 up 160 40 1',
+    '',
+  ].join('\n'));
+  try {
+    const { result, logs, pixels } = runHost(fixture, {
+      timeoutMs: 2500,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+      args: ['--pointer-script', script],
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /scroll: top=[1-9]\d*(\.\d+)? /);
+    assert.ok(pixels, 'no frame was captured');
+
+    let firstGreen = height;
+    for (let y = 0; y < height; y++) {
+      const [r, g] = pixelAt(pixels, 160, y);
+      if (g > 200 && r < 100) {
+        firstGreen = y;
+        break;
+      }
+    }
+    assert.ok(firstGreen < 100,
+      `expected the drag to scroll the list under the overlay, green at y=${firstGreen}`);
+  } finally {
+    try {
+      fs.unlinkSync(script);
+    } catch {
+      // Best effort.
+    }
+  }
+});
+
 test('appservice ops: list-view renders a virtualized sliver', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
