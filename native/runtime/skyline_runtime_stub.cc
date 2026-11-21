@@ -4612,51 +4612,179 @@ std::vector<std::pair<std::string, std::string>> ParseDeclarations(
 
 // -- CSS ---------------------------------------------------------------------
 
-struct Selector {
+// A single compound selector (`.anchor-item.selected`) without combinators.
+struct CompoundSelector {
   std::string element;
   std::vector<std::string> classes;
   std::string id;
 };
 
-Selector ParseSelector(const std::string& raw) {
-  Selector selector;
+// A full selector: compounds joined left-to-right by combinators.  `' '` is a
+// descendant combinator, `'>'` a child combinator and `'+'`/`'~'` sibling
+// combinators.  WXSS pages rely on this: `.anchor-item.selected
+// .anchor-item__inner` must only style the child of the *selected* anchor, so
+// matching the last compound alone turns every letter green.
+struct Selector {
+  std::vector<CompoundSelector> compounds;
+  // combinators[i] joins compounds[i] and compounds[i + 1].
+  std::vector<char> combinators;
+};
+
+CompoundSelector ParseCompoundSelector(const std::string& text) {
+  CompoundSelector compound;
   std::string token;
   auto flush = [&]() {
     if (token.empty()) return;
     if (token[0] == '.') {
-      selector.classes.push_back(token.substr(1));
+      if (token.size() > 1) compound.classes.push_back(token.substr(1));
     } else if (token[0] == '#') {
-      selector.id = token.substr(1);
+      if (token.size() > 1) compound.id = token.substr(1);
     } else if (token != "*") {
-      selector.element = token;
+      compound.element = token;
     }
     token.clear();
   };
-  // Descendant combinators are not needed by the recorded pages; matching the
-  // last compound selector is a reasonable approximation.
-  std::string last;
-  std::vector<std::string> compounds = SplitWhitespace(raw);
-  last = compounds.empty() ? raw : compounds.back();
-  for (char c : last) {
-    if (c == '.' || c == '#' || c == ':' || c == '*' || c == '[' || c == ']') {
+  for (size_t i = 0; i < text.size(); i++) {
+    const char c = text[i];
+    if (c == '.') {
       flush();
-      if (c == '.') token = ".";
-      else if (c == '#') token = "#";
-      else {
-        // Pseudo-classes and attribute selectors are ignored.
-        token.clear();
+      token = ".";
+    } else if (c == '#') {
+      flush();
+      token = "#";
+    } else if (c == '*') {
+      flush();
+    } else if (c == '[') {
+      // Attribute selectors are ignored, but their contents (spaces, quotes,
+      // `~=`/`|=`) must not be parsed as element names or combinators.
+      flush();
+      int depth = 1;
+      char quote = '\0';
+      for (i++; i < text.size() && depth > 0; i++) {
+        const char inner = text[i];
+        if (quote != '\0') {
+          if (inner == quote) quote = '\0';
+        } else if (inner == '"' || inner == '\'') {
+          quote = inner;
+        } else if (inner == '[') {
+          depth++;
+        } else if (inner == ']') {
+          depth--;
+        }
+      }
+      if (i > 0) i--;  // the for-loop increments past the closing bracket
+    } else if (c == ':') {
+      flush();
+      // Skip the pseudo-class name.
+      while (i + 1 < text.size() &&
+             (std::isalnum(static_cast<unsigned char>(text[i + 1])) ||
+              text[i + 1] == '-' || text[i + 1] == '_')) {
+        i++;
+      }
+      // Skip a functional pseudo-class argument, e.g. `:not(.a)`.
+      if (i + 1 < text.size() && text[i + 1] == '(') {
+        int depth = 0;
+        char quote = '\0';
+        for (i++; i < text.size(); i++) {
+          const char inner = text[i];
+          if (quote != '\0') {
+            if (inner == quote) quote = '\0';
+          } else if (inner == '"' || inner == '\'') {
+            quote = inner;
+          } else if (inner == '(') {
+            depth++;
+          } else if (inner == ')') {
+            depth--;
+            if (depth == 0) break;
+          }
+        }
       }
     } else {
       token.push_back(c);
     }
   }
   flush();
+  return compound;
+}
+
+Selector ParseSelector(const std::string& raw) {
+  Selector selector;
+  std::string compound;
+  // Pending combinator for the next compound; '\0' means none (and a
+  // whitespace-separated compound defaults to the descendant combinator).
+  char combinator = '\0';
+  bool have_left = false;
+  char quote = '\0';
+  int bracket_depth = 0;
+  int paren_depth = 0;
+  auto finish_compound = [&]() {
+    if (compound.empty()) return;
+    if (have_left) {
+      selector.combinators.push_back(combinator == '\0' ? ' ' : combinator);
+    }
+    selector.compounds.push_back(ParseCompoundSelector(compound));
+    have_left = true;
+    compound.clear();
+    combinator = '\0';
+  };
+  for (const char c : raw) {
+    if (quote != '\0') {
+      compound.push_back(c);
+      if (c == quote) quote = '\0';
+      continue;
+    }
+    if (c == '"' || c == '\'') {
+      quote = c;
+      compound.push_back(c);
+      continue;
+    }
+    if (c == '[') {
+      bracket_depth++;
+      compound.push_back(c);
+      continue;
+    }
+    if (c == ']') {
+      if (bracket_depth > 0) bracket_depth--;
+      compound.push_back(c);
+      continue;
+    }
+    if (c == '(') {
+      paren_depth++;
+      compound.push_back(c);
+      continue;
+    }
+    if (c == ')') {
+      if (paren_depth > 0) paren_depth--;
+      compound.push_back(c);
+      continue;
+    }
+    if (bracket_depth > 0 || paren_depth > 0) {
+      compound.push_back(c);
+      continue;
+    }
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') {
+      finish_compound();
+      continue;
+    }
+    if (c == '>' || c == '+' || c == '~') {
+      finish_compound();
+      combinator = c;
+      continue;
+    }
+    compound.push_back(c);
+  }
+  finish_compound();
   return selector;
 }
 
 int SelectorSpecificity(const Selector& selector) {
-  return static_cast<int>(selector.classes.size()) * 10 +
-         (selector.element.empty() ? 0 : 1) + (selector.id.empty() ? 0 : 100);
+  int specificity = 0;
+  for (const CompoundSelector& compound : selector.compounds) {
+    specificity += static_cast<int>(compound.classes.size()) * 10 +
+                   (compound.element.empty() ? 0 : 1) +
+                   (compound.id.empty() ? 0 : 100);
+  }
+  return specificity;
 }
 
 bool NodeHasClass(const AppNode* node, const std::string& name) {
@@ -4680,7 +4808,9 @@ std::string NormalizeElementName(const std::string& name) {
   return out;
 }
 
-bool SelectorMatches(const Selector& selector, const AppNode* node) {
+bool CompoundSelectorMatches(const CompoundSelector& selector,
+                             const AppNode* node) {
+  if (node == nullptr) return false;
   if (!selector.element.empty() && selector.element != node->tag &&
       selector.element != node->name) {
     const std::string wanted = NormalizeElementName(selector.element);
@@ -4695,6 +4825,60 @@ bool SelectorMatches(const Selector& selector, const AppNode* node) {
   }
   for (const std::string& klass : selector.classes) {
     if (!NodeHasClass(node, klass)) return false;
+  }
+  return true;
+}
+
+bool SelectorMatches(const Selector& selector, const AppNode* node) {
+  if (selector.compounds.empty() || node == nullptr) return false;
+  size_t index = selector.compounds.size() - 1;
+  const AppNode* current = node;
+  if (!CompoundSelectorMatches(selector.compounds[index], current)) {
+    return false;
+  }
+  while (index > 0) {
+    const char combinator =
+        index - 1 < selector.combinators.size()
+            ? selector.combinators[index - 1]
+            : ' ';
+    const CompoundSelector& wanted = selector.compounds[index - 1];
+    if (combinator == '>') {
+      current = current->parent;
+      if (!CompoundSelectorMatches(wanted, current)) return false;
+    } else if (combinator == '+' || combinator == '~') {
+      const AppNode* parent = current->parent;
+      if (parent == nullptr) return false;
+      const auto found =
+          std::find(parent->children.begin(), parent->children.end(), current);
+      if (found == parent->children.end()) return false;
+      const size_t position =
+          static_cast<size_t>(found - parent->children.begin());
+      bool matched = false;
+      if (combinator == '+') {
+        if (position > 0) {
+          current = parent->children[position - 1];
+          matched = CompoundSelectorMatches(wanted, current);
+        }
+      } else {
+        for (size_t i = position; i-- > 0;) {
+          if (CompoundSelectorMatches(wanted, parent->children[i])) {
+            current = parent->children[i];
+            matched = true;
+            break;
+          }
+        }
+      }
+      if (!matched) return false;
+    } else {
+      const AppNode* ancestor = current->parent;
+      while (ancestor != nullptr &&
+             !CompoundSelectorMatches(wanted, ancestor)) {
+        ancestor = ancestor->parent;
+      }
+      if (ancestor == nullptr) return false;
+      current = ancestor;
+    }
+    index--;
   }
   return true;
 }
@@ -10810,6 +10994,12 @@ void ScrollNodeTo(uint32_t node_id, double top) {
   auto* update = reinterpret_cast<ScrollViewUpdateScrollTopFn>(FindCallback(
       g_page->holder->ffi_table, kScrollViewUpdateScrollTopHash));
   if (update == nullptr) return;
+  // Persist the requested offset: a following rebuild recreates the scroll
+  // widget from `scrollTop`, and without this the page snapped back to the
+  // top whenever the appservice batched a class/style update after the jump.
+  char buffer[64];
+  std::snprintf(buffer, sizeof(buffer), "%g", top);
+  node->attrs["scrollTop"] = buffer;
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
     std::fprintf(stderr, "[skyline-runtime] scrollNodeTo #%u -> %g\n", node_id,
                  top);

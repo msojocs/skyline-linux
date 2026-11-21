@@ -272,6 +272,58 @@ test('appservice ops: committed stripe fixture replays through the runtime', {
   );
 });
 
+test('appservice ops: descendant selectors respect their ancestor compound', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-descendant-'));
+  const ops = path.join(dir, 'descendant.ops.json');
+  // Two identical rows, only the first one carries `.selected`.  The rule
+  // `.item.selected .inner` must only style the first row's child; matching
+  // just the last compound turns both children green.
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1,
+        css: '.inner { background: #FF0000; } ' +
+          '.item.selected .inner { background: #00FF00; }' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3, value: 'width:320px;height:100px;' },
+      { op: 'addClass', id: 3, prefix: 'item', name: 1 },
+      { op: 'addClass', id: 3, prefix: 'selected', name: 1 },
+      { op: 'createElement', id: 4, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 4, value: 'width:320px;height:100px;' },
+      { op: 'addClass', id: 4, prefix: 'inner', name: 1 },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 5, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 5, value: 'width:320px;height:100px;' },
+      { op: 'addClass', id: 5, prefix: 'item', name: 1 },
+      { op: 'createElement', id: 6, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 6, value: 'width:320px;height:100px;' },
+      { op: 'addClass', id: 6, prefix: 'inner', name: 1 },
+      { op: 'appendChild', id: 5, child: 6 },
+      { op: 'appendChild', id: 2, child: 5 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops);
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    assert.deepEqual(pixelAt(pixels, 160, 50), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 160, 150), [255, 0, 0, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('appservice ops: post-attach updates rebuild through the runtime', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

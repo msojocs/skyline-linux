@@ -557,6 +557,26 @@
     });
   }
 
+  // ShadowNode arguments (parent/children links) are cyclic, so logging them
+  // with a plain JSON.stringify throws inside the miniprogram SDK.  Collapse
+  // nodes to their viewTag and drop leftover cycles.
+  function debugArgs(args) {
+    const seen = new WeakSet();
+    try {
+      return JSON.stringify(args, (key, value) => {
+        if (value === null || typeof value !== 'object') return value;
+        if (typeof value.viewTag === 'number' && Array.isArray(value.ops)) {
+          return `#${value.viewTag}`;
+        }
+        if (seen.has(value)) return '[circular]';
+        seen.add(value);
+        return value;
+      });
+    } catch (_error) {
+      return '[unserializable]';
+    }
+  }
+
   function toText(data) {
     if (data === null || data === undefined) return null;
     if (typeof data === 'string') return data;
@@ -934,32 +954,32 @@
     setRefresherHeader() {}
     scrollIntoView(...args) {
       if (typeof native.log === 'function') {
-        native.log(`scrollIntoView id=${this.viewTag} args=${JSON.stringify(args)}`);
+        native.log(`scrollIntoView id=${this.viewTag} args=${debugArgs(args)}`);
       }
     }
     scrollIntoViewWithinExtent(...args) {
       if (typeof native.log === 'function') {
-        native.log(`scrollIntoViewWithinExtent id=${this.viewTag} args=${JSON.stringify(args)}`);
+        native.log(`scrollIntoViewWithinExtent id=${this.viewTag} args=${debugArgs(args)}`);
       }
     }
     scrollIntoViewAlignment(...args) {
       if (typeof native.log === 'function') {
-        native.log(`scrollIntoViewAlignment id=${this.viewTag} args=${JSON.stringify(args)}`);
+        native.log(`scrollIntoViewAlignment id=${this.viewTag} args=${debugArgs(args)}`);
       }
     }
     scrollIntoViewOffset(...args) {
       if (typeof native.log === 'function') {
-        native.log(`scrollIntoViewOffset id=${this.viewTag} args=${JSON.stringify(args)}`);
+        native.log(`scrollIntoViewOffset id=${this.viewTag} args=${debugArgs(args)}`);
       }
     }
     scrollWithAnimation(...args) {
       if (typeof native.log === 'function') {
-        native.log(`scrollWithAnimation id=${this.viewTag} args=${JSON.stringify(args)}`);
+        native.log(`scrollWithAnimation id=${this.viewTag} args=${debugArgs(args)}`);
       }
     }
     holdPosition(...args) {
       if (typeof native.log === 'function') {
-        native.log(`holdPosition id=${this.viewTag} args=${JSON.stringify(args)}`);
+        native.log(`holdPosition id=${this.viewTag} args=${debugArgs(args)}`);
       }
     }
     requestRefresherRefresh() {}
