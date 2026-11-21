@@ -29,6 +29,7 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -295,6 +296,9 @@ void CreateAppServiceOpsPage(RuntimeHolder* holder, const char* descriptor);
 void ScheduleCreateDemoPage(RuntimeHolder* holder);
 #endif
 
+// Defined with the live DevTools page bridge at the end of this file.
+void ApplyPendingLiveOpsOnUi();
+
 // The official runtime schedules `RunApplication` on the UI task runner.  The
 // stub calls the callback synchronously; NotifyFlutterReady is invoked from
 // Dart, so the FFI callback trampoline is already on the isolate thread.
@@ -306,6 +310,7 @@ SKYLINE_EXPORT extern "C" void NotifyFlutterReady(void* holder_ptr) {
     reinterpret_cast<void (*)()>(callback)();
 #ifdef SKYLINE_EMBEDDED
     ScheduleCreateDemoPage(holder);
+    ApplyPendingLiveOpsOnUi();
 #endif
   } else {
     std::fprintf(stderr, "[skyline-runtime] NotifyFlutterReady: RunApplication not registered\n");
@@ -10245,6 +10250,82 @@ void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
 }
 
 }  // namespace appservice
+
+// Live DevTools bridge: apply the page tree captured by the addon's
+// SkylineGlobal.PageContext on the UI task runner.  `ApplyOpsPage` consumes the
+// same JSON schema as the recorded appservice fixtures.
+
+// Pending live page ops.  The addon may call SkylineApplyLiveOps from the
+// Electron renderer thread before the Dart app has registered its UI task
+// runner, so the payload is parked here until NotifyFlutterReady runs on the
+// engine UI thread.
+std::mutex g_live_ops_mutex;
+std::string g_pending_live_ops;
+bool g_live_ready = false;
+fml::RefPtr<fml::TaskRunner> g_live_ui_runner;
+
+void ScheduleLiveOps(std::string payload, int attempt) {
+  auto runner = UiTaskRunner();
+  if (!runner) return;
+  runner->PostDelayedTask(
+      [payload, attempt]() {
+        DemoPageApiScope scope;
+        if (appservice::g_page != nullptr) {
+          std::fprintf(stderr,
+                       "[skyline-runtime] live page ignored: a page is already "
+                       "attached\n");
+          return;
+        }
+        if (g_isolate == nullptr || g_fallback_holder.ffi_table == nullptr) {
+          if (attempt < 20) {
+            ScheduleLiveOps(payload, attempt + 1);
+          } else {
+            std::fprintf(stderr,
+                         "[skyline-runtime] live page: Dart app not ready\n");
+          }
+          return;
+        }
+        appservice::ApplyOpsPage(&g_fallback_holder, payload.c_str());
+      },
+      fml::TimeDelta::FromMilliseconds(500));
+}
+
+// UI thread: remember the engine task runner and flush any page ops that were
+// queued before the Dart app was ready.
+void ApplyPendingLiveOpsOnUi() {
+  std::string payload;
+  {
+    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
+    g_live_ready = true;
+    g_live_ui_runner = UiTaskRunner();
+    if (g_pending_live_ops.empty()) return;
+    payload = std::move(g_pending_live_ops);
+    g_pending_live_ops.clear();
+  }
+  ScheduleLiveOps(std::move(payload), 0);
+}
+
+SKYLINE_EXPORT extern "C" void SkylineApplyLiveOps(const char* json,
+                                                   double /*window_id*/) {
+  std::string payload(json != nullptr ? json : "");
+  if (payload.empty()) return;
+  fml::RefPtr<fml::TaskRunner> runner;
+  {
+    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
+    if (!g_live_ready) {
+      g_pending_live_ops = std::move(payload);
+      return;
+    }
+    runner = g_live_ui_runner;
+  }
+  if (!runner) return;
+  // Called from the Electron renderer thread: hop onto the engine UI thread
+  // before touching the fml message loop or the Dart isolate.
+  runner->PostTask([payload = std::move(payload)]() mutable {
+    DemoPageApiScope scope;
+    ScheduleLiveOps(std::move(payload), 0);
+  });
+}
 
 SKYLINE_EXPORT extern "C" void DispatchSkylineKeyEvent(int32_t kind,
                                                        uint32_t logical,

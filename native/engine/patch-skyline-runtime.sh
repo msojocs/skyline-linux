@@ -111,6 +111,8 @@ spec = json.loads(spec_path.read_text(encoding="utf-8"))
 names = sorted(entry["name"] for entry in spec["ffi"]["lookupSymbols"])
 # Host-injected keyboard channel (not part of the captured FFI table).
 names.append("DispatchSkylineKeyEvent")
+# Linux live DevTools bridge (addon -> embedded runtime page ops).
+names.append("SkylineApplyLiveOps")
 missing = [name for name in names if f"    {name};" not in exports]
 if missing:
     anchor = "    kInternalFlutterGpu*;\n"

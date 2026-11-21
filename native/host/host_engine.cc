@@ -222,6 +222,32 @@ class WindowHost {
     project.command_line_argc = 2;
     project.command_line_argv = command_line;
 
+    // The DevTools' Skyline Dart entrypoint (`package:sample/devtools.dart
+    // main`) expects [window id, runtime holder, width, height, createRuntime,
+    // addon path].  Plain test apps use a zero-argument main, so only pass
+    // these when the DevTools integration requests it.
+    std::vector<std::string> dart_args;
+    if (std::getenv("SKYLINE_DEVTOOLS") != nullptr) {
+      dart_args.push_back(
+          std::to_string(static_cast<long long>(args_.window_id)));
+      dart_args.push_back("1");
+      dart_args.push_back(std::to_string(args_.width));
+      dart_args.push_back(std::to_string(args_.height));
+      dart_args.push_back("1");
+      dart_args.push_back(args_.skyline_addon_path.empty()
+                              ? "stub"
+                              : args_.skyline_addon_path);
+    }
+    std::vector<const char*> dart_argv;
+    dart_argv.reserve(dart_args.size());
+    for (const std::string& value : dart_args) {
+      dart_argv.push_back(value.c_str());
+    }
+    if (!dart_argv.empty()) {
+      project.dart_entrypoint_argc = static_cast<int>(dart_argv.size());
+      project.dart_entrypoint_argv = dart_argv.data();
+    }
+
     FlutterEngine engine = nullptr;
     const FlutterEngineResult run_result = FlutterEngineRun(
         FLUTTER_ENGINE_VERSION, &renderer, &project, this, &engine);

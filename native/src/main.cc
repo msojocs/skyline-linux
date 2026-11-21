@@ -1,6 +1,9 @@
 #include <node_api.h>
 
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
@@ -9,6 +12,8 @@
 #include "engine.hh"
 #ifdef SKYLINE_HAVE_ENGINE
 #include "host_engine.hh"
+// Defined by the embedded Skyline runtime in libflutter_engine.so.
+extern "C" void SkylineApplyLiveOps(const char* json, double window_id);
 #endif
 
 namespace {
@@ -246,11 +251,18 @@ skyline::CreateWindowArgs ParseCreateWindow(napi_env env, napi_value array) {
       args.frame_buffer_size = length;
     }
   }
-  // 9th argument: official Windows 16-byte shared-memory descriptor.
+  // 9th argument: Windows 16-byte descriptor, or the live Linux ArrayBuffer
+  // that the DevTools' sharedMemory.setMemory() returns.  A descriptor that
+  // does not decode is ignored; a live view is only used when the 6th argument
+  // did not already provide the frame buffer.
   if (napi_get_element(env, array, 8, &value) == napi_ok && value != nullptr) {
     void* data = nullptr;
     size_t length = 0;
     if (ReadSharedMemoryHandle(env, value, &data, &length)) {
+      args.frame_buffer = data;
+      args.frame_buffer_size = length;
+    } else if (args.frame_buffer == nullptr &&
+               ReadBufferView(env, value, &data, &length)) {
       args.frame_buffer = data;
       args.frame_buffer_size = length;
     }
@@ -270,15 +282,51 @@ napi_value CreateWindow(napi_env env, napi_callback_info info) {
     return Throw(env, napi_generic_failure, "Skyline engine is unavailable");
   }
   try {
-    state->engine->CreateWindow(ParseCreateWindow(env, argv[0]));
+    const skyline::CreateWindowArgs args = ParseCreateWindow(env, argv[0]);
+    state->engine->CreateWindow(args);
+#ifdef SKYLINE_HAVE_ENGINE
+    // DevTools integration demo: render a static page while the private
+    // appservice JS bridge is unavailable.  The page ops use the same schema as
+    // the recorded fixtures.
+    if (const char* demo = std::getenv("SKYLINE_DEVTOOLS_DEMO_OPS")) {
+      if (demo[0] != '\0') {
+        std::ifstream file(demo);
+        if (file) {
+          const std::string json(
+              (std::istreambuf_iterator<char>(file)),
+              std::istreambuf_iterator<char>());
+          if (!json.empty()) {
+            SkylineApplyLiveOps(json.c_str(), args.window_id);
+          }
+        }
+      }
+    }
+#endif
   } catch (const std::exception& error) {
     return Throw(env, napi_generic_failure, error.what());
   }
   return Undefined(env);
 }
 
-napi_value DestroyWindow(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
+napi_value ApplyPageOps(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 2 || !IsType(env, argv[1], napi_string)) {
+    return Throw(env, napi_invalid_arg, "applyPageOps expects (windowId, json)");
+  }
+  const double window_id = ReadNumber(env, argv[0]);
+  const std::string json = ReadString(env, argv[1]);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineApplyLiveOps(json.c_str(), window_id);
+#else
+  (void)window_id;
+  (void)json;
+#endif
+  return Undefined(env);
+}
+
+napi_value DestroyWindow(napi_env env, napi_callback_info info) {  size_t argc = 1;
   napi_value argv[1] = {nullptr};
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   auto* state = State(env);
@@ -296,13 +344,33 @@ napi_value DestroyWindow(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
-void CallFrameCallback(napi_env env, napi_value js_callback, void* /*context*/,
+struct FrameCallbackContext {
+  double window_id = 0.0;
+};
+
+void FinalizeFrameCallbackContext(napi_env /*env*/, void* data,
+                                  void* /*hint*/) {
+  delete static_cast<FrameCallbackContext*>(data);
+}
+
+void CallFrameCallback(napi_env env, napi_value js_callback, void* context,
                        void* /*data*/) {
   if (env == nullptr || js_callback == nullptr) return;
+  auto* callback_context = static_cast<FrameCallbackContext*>(context);
+  // The DevTools waits for `{window_id}` to forward
+  // SKYLINE_WINDOW_RASTERIZED to the pageframe; a bare callback invocation
+  // makes `e.window_id` throw and the pageframe never pulls the new frame.
+  napi_value event = nullptr;
+  napi_create_object(env, &event);
+  napi_value window_id = nullptr;
+  napi_create_double(
+      env, callback_context != nullptr ? callback_context->window_id : 0.0,
+      &window_id);
+  napi_set_named_property(env, event, "window_id", window_id);
   napi_value undefined = nullptr;
   napi_get_undefined(env, &undefined);
   napi_value result = nullptr;
-  napi_call_function(env, undefined, js_callback, 0, nullptr, &result);
+  napi_call_function(env, undefined, js_callback, 1, &event, &result);
 }
 
 napi_value OnWindowRasterized(napi_env env, napi_callback_info info) {
@@ -330,9 +398,12 @@ napi_value OnWindowRasterized(napi_env env, napi_callback_info info) {
                             &resource_name);
     // max_queue_size=1: frame callbacks are wake-ups, not data; coalesce
     // bursts while the Node event loop is busy.
+    auto* callback_context = new FrameCallbackContext{window_id};
     if (napi_create_threadsafe_function(
-            env, argv[1], nullptr, resource_name, 1, 1, nullptr, nullptr,
-            nullptr, &CallFrameCallback, &tsfn) != napi_ok) {
+            env, argv[1], nullptr, resource_name, 1, 1, callback_context,
+            &FinalizeFrameCallbackContext, callback_context,
+            &CallFrameCallback, &tsfn) != napi_ok) {
+      delete callback_context;
       return Throw(env, napi_generic_failure,
                    "Unable to create frame callback");
     }
@@ -401,6 +472,7 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "setCallback", SetCallback);
   Define(env, bridge, "createWindow", CreateWindow);
   Define(env, bridge, "destroyWindow", DestroyWindow);
+  Define(env, bridge, "applyPageOps", ApplyPageOps);
   Define(env, bridge, "onWindowRasterized", OnWindowRasterized);
   Define(env, bridge, "setSafeArea", Noop);
   Define(env, bridge, "dispatch", Noop);
