@@ -189,6 +189,17 @@
     };
   }
 
+  // Touch events are forwarded to the Flutter engine as pointer events so the
+  // simulator's scroll views and tap gestures work.
+  function dispatchTouch(name, kind, arity) {
+    return function (...args) {
+      if (args.length !== arity) throw new Error(`${name} expects ${arity} arguments`);
+      const x = args.length > 1 ? args[1] : 0;
+      const y = args.length > 2 ? args[2] : 0;
+      return native.dispatchTouch(kind, args[0], x, y);
+    };
+  }
+
   // The DevTools' RouteController matches SKYLINE_NOTIFY_ROUTE_DONE by the
   // `taskId` it put into the route request.  `appLaunch`/`reLaunch`/`switchTab`
   // use 0; navigateTo/redirectTo pass it as the third argument and navigateBack
@@ -318,12 +329,15 @@
     }],
     ['notifyResourceLoad', function (...args) { return native.notify('notifyResourceLoad', args); }],
     ['notifyHttpRequestComplete', function (...args) { return native.notify('notifyHttpRequestComplete', args); }],
-    ['dispatchTouchStartEvent', dispatch('dispatchTouchStartEvent', 3)],
-    ['dispatchTouchMoveEvent', dispatch('dispatchTouchMoveEvent', 3)],
-    ['dispatchTouchEndEvent', dispatch('dispatchTouchEndEvent', 3)],
-    ['dispatchTouchOverEvent', dispatch('dispatchTouchOverEvent', 3)],
-    ['dispatchTouchCancelEvent', dispatch('dispatchTouchCancelEvent', 1)],
-    ['dispatchWheelEvent', dispatch('dispatchWheelEvent', 5)],
+    ['dispatchTouchStartEvent', dispatchTouch('dispatchTouchStartEvent', 'start', 3)],
+    ['dispatchTouchMoveEvent', dispatchTouch('dispatchTouchMoveEvent', 'move', 3)],
+    ['dispatchTouchEndEvent', dispatchTouch('dispatchTouchEndEvent', 'end', 3)],
+    ['dispatchTouchOverEvent', dispatchTouch('dispatchTouchOverEvent', 'over', 3)],
+    ['dispatchTouchCancelEvent', dispatchTouch('dispatchTouchCancelEvent', 'cancel', 1)],
+    ['dispatchWheelEvent', function (...args) {
+      if (args.length !== 5) throw new Error('dispatchWheelEvent expects 5 arguments');
+      return native.dispatchWheel(args[0], args[1], args[2], args[3], args[4]);
+    }],
     ['dispatchCharEvent', dispatch('dispatchCharEvent', 2)],
     ['dispatchKeyboardEvent', dispatch('dispatchKeyboardEvent', 5)],
     ['notifyNavigateTo', function (...args) {

@@ -346,6 +346,45 @@ napi_value ApplyPageOps(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
+napi_value DispatchTouch(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  auto* state = State(env);
+  if (!state || !state->engine || argc < 4) return Undefined(env);
+  const std::string kind = ReadString(env, argv[0]);
+  const double window_id = ReadNumber(env, argv[1]);
+  const double x = ReadNumber(env, argv[2]);
+  const double y = ReadNumber(env, argv[3]);
+  skyline::Engine::PointerPhase phase = skyline::Engine::PointerPhase::kHover;
+  if (kind == "start" || kind == "down") {
+    phase = skyline::Engine::PointerPhase::kDown;
+  } else if (kind == "move") {
+    phase = skyline::Engine::PointerPhase::kMove;
+  } else if (kind == "end" || kind == "up") {
+    phase = skyline::Engine::PointerPhase::kUp;
+  } else if (kind == "cancel") {
+    phase = skyline::Engine::PointerPhase::kCancel;
+  }
+  state->engine->DispatchPointer(window_id, phase, x, y);
+  return Undefined(env);
+}
+
+napi_value DispatchWheel(napi_env env, napi_callback_info info) {
+  size_t argc = 5;
+  napi_value argv[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  auto* state = State(env);
+  if (!state || !state->engine || argc < 5) return Undefined(env);
+  const double window_id = ReadNumber(env, argv[0]);
+  const double x = ReadNumber(env, argv[1]);
+  const double y = ReadNumber(env, argv[2]);
+  const double delta_x = ReadNumber(env, argv[3]);
+  const double delta_y = ReadNumber(env, argv[4]);
+  state->engine->DispatchWheel(window_id, x, y, delta_x, delta_y);
+  return Undefined(env);
+}
+
 napi_value DestroyWindow(napi_env env, napi_callback_info info) {  size_t argc = 1;
   napi_value argv[1] = {nullptr};
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
@@ -535,6 +574,8 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "createWindow", CreateWindow);
   Define(env, bridge, "destroyWindow", DestroyWindow);
   Define(env, bridge, "applyPageOps", ApplyPageOps);
+  Define(env, bridge, "dispatchTouch", DispatchTouch);
+  Define(env, bridge, "dispatchWheel", DispatchWheel);
   Define(env, bridge, "onWindowRasterized", OnWindowRasterized);
   Define(env, bridge, "setSafeArea", Noop);
   Define(env, bridge, "dispatch", Noop);

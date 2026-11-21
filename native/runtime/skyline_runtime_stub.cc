@@ -7547,11 +7547,20 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
           std::fprintf(stderr,
                        "[ops-debug] scrollview #%u scrollX=%d scrollY=%d "
-                       "scrollEnabled=%d type=%u (slivers=%d sticky=%d)\n",
+                       "scrollEnabled=%d type=%u (slivers=%d sticky=%d) "
+                       "children=%zu top=%g\n",
                        node->id, scroll_x_attr ? 1 : 0, scroll_y_attr ? 1 : 0,
                        AttrBool(node, "scrollEnabled", true) ? 1 : 0,
                        static_cast<unsigned>(scroll_type),
-                       has_sliver_child ? 1 : 0, has_sticky_child ? 1 : 0);
+                       has_sliver_child ? 1 : 0, has_sticky_child ? 1 : 0,
+                       child_widgets.size(),
+                       AttrNumber(node, "scrollTop", 0.0));
+          for (size_t i = 0; i < child_nodes.size() && i < 8; i++) {
+            AppNode* child = child_nodes[i];
+            std::fprintf(stderr, "[ops-debug]   child[%zu]=%s/%s\n", i,
+                         child != nullptr ? child->tag.c_str() : "?",
+                         child != nullptr ? child->name.c_str() : "?");
+          }
         }
         Dart_Handle scroll = newScrollView(
             node->address, node->id, scroll_type, scroll_x_attr ? 1 : 0,

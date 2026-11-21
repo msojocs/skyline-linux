@@ -190,6 +190,74 @@ class WindowHost {
     frame_buffer_size_ = size;
   }
 
+  // DevTools simulator input.  The caller passes logical (CSS) pixels; Flutter
+  // expects physical pixels for the implicit view.
+  void SendPointer(Engine::PointerPhase phase, double x, double y) {
+    FlutterEngine engine = nullptr;
+    double dpr = 1.0;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      engine = engine_;
+      dpr = pixel_ratio_;
+    }
+    if (engine == nullptr) return;
+    FlutterPointerEvent event = {};
+    event.struct_size = sizeof(event);
+    event.timestamp = FlutterEngineGetCurrentTime();
+    event.x = x * dpr;
+    event.y = y * dpr;
+    event.device = 1;
+    event.view_id = 0;
+    event.signal_kind = kFlutterPointerSignalKindNone;
+    switch (phase) {
+      case Engine::PointerPhase::kDown:
+        event.phase = kDown;
+        event.device_kind = kFlutterPointerDeviceKindTouch;
+        break;
+      case Engine::PointerPhase::kMove:
+        event.phase = kMove;
+        event.device_kind = kFlutterPointerDeviceKindTouch;
+        break;
+      case Engine::PointerPhase::kUp:
+        event.phase = kUp;
+        event.device_kind = kFlutterPointerDeviceKindTouch;
+        break;
+      case Engine::PointerPhase::kCancel:
+        event.phase = kCancel;
+        event.device_kind = kFlutterPointerDeviceKindTouch;
+        break;
+      case Engine::PointerPhase::kHover:
+        event.phase = kHover;
+        event.device_kind = kFlutterPointerDeviceKindMouse;
+        break;
+    }
+    FlutterEngineSendPointerEvent(engine, &event, 1);
+  }
+
+  void SendWheel(double x, double y, double delta_x, double delta_y) {
+    FlutterEngine engine = nullptr;
+    double dpr = 1.0;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      engine = engine_;
+      dpr = pixel_ratio_;
+    }
+    if (engine == nullptr) return;
+    FlutterPointerEvent event = {};
+    event.struct_size = sizeof(event);
+    event.phase = kMove;
+    event.timestamp = FlutterEngineGetCurrentTime();
+    event.x = x * dpr;
+    event.y = y * dpr;
+    event.device = 2;
+    event.view_id = 0;
+    event.device_kind = kFlutterPointerDeviceKindMouse;
+    event.signal_kind = kFlutterPointerSignalKindScroll;
+    event.scroll_delta_x = delta_x;
+    event.scroll_delta_y = delta_y;
+    FlutterEngineSendPointerEvent(engine, &event, 1);
+  }
+
  private:
   void Run() {
     FlutterRendererConfig renderer = {};
@@ -495,6 +563,22 @@ class HostEngine final : public Engine {
                                " not found");
     }
     found->second->SetRasterizedCallback(std::move(callback));
+  }
+
+  void DispatchPointer(double window_id, PointerPhase phase, double x,
+                       double y) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto found = windows_.find(window_id);
+    if (found != windows_.end()) found->second->SendPointer(phase, x, y);
+  }
+
+  void DispatchWheel(double window_id, double x, double y, double delta_x,
+                     double delta_y) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto found = windows_.find(window_id);
+    if (found != windows_.end()) {
+      found->second->SendWheel(x, y, delta_x, delta_y);
+    }
   }
 
  private:
