@@ -806,6 +806,64 @@
     });
   }
 
+  // The miniprogram SDK's worklet code references the native-provided
+  // `workletUIModule` as a bare global (`setGlobalConsole`,
+  // `getBoundingClientRect`, `scrollTo`, ...).  The DevTools appservice never
+  // installs it, so the first worklet run throws
+  // `ReferenceError: workletUIModule is not defined` at launch.  Provide the
+  // methods the SDK probes for; the widget helpers fall back to the SDK's own
+  // zero-rect/no-op behaviour.
+  function createWorkletUIModule() {
+    return {
+      setGlobalConsole() {},
+      getBoundingClientRect() {
+        return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+      },
+      getCurrentTime() { return Date.now(); },
+      navigatorPop() {},
+      requestFrame() {},
+      scrollTo() {},
+      snapshotChangeMode() {},
+      startUserGesture() {},
+      stopUserGesture() {},
+      updateNodeStyle() {},
+    };
+  }
+
+  function installWorkletUIModule(win) {
+    if (!win) return;
+    try {
+      if (!win.workletUIModule) win.workletUIModule = createWorkletUIModule();
+    } catch (_error) {}
+  }
+
+  function installWorkletUIModules() {
+    if (typeof window !== 'undefined') installWorkletUIModule(window);
+    if (typeof globalThis !== 'undefined' &&
+        (typeof window === 'undefined' || globalThis !== window)) {
+      installWorkletUIModule(globalThis);
+    }
+    try {
+      const pageGlobal = typeof window !== 'undefined'
+        ? (window.__global || window.__global__)
+        : null;
+      const maps = pageGlobal && pageGlobal.contextFrameMaps;
+      if (maps && typeof maps.forEach === 'function') {
+        maps.forEach((frame) => {
+          try {
+            const win = frame && frame.iframe && frame.iframe.contentWindow;
+            if (win) installWorkletUIModule(win);
+          } catch (_error) {}
+        });
+      }
+      if (pageGlobal && typeof pageGlobal.getInstanceWindow === 'function') {
+        Promise.resolve(pageGlobal.getInstanceWindow()).then((win) => {
+          installWorkletUIModule(win);
+        }).catch(() => {});
+      }
+    } catch (_error) {}
+  }
+
   class BridgeElement {
     constructor(tag, name, ops, windowId) {
       this.ops = ops || [];
@@ -1674,6 +1732,13 @@
   if (liveFlushTimer && typeof liveFlushTimer.unref === 'function') {
     liveFlushTimer.unref();
   }
+
+  installWorkletUIModules();
+  const workletModuleTimer = setInterval(installWorkletUIModules, 100);
+  setTimeout(() => {
+    clearInterval(workletModuleTimer);
+    installWorkletUIModules();
+  }, 20000);
 
   const gateInstalled = installCreateWindowResponseGate();
   if (typeof native.log === 'function') {
