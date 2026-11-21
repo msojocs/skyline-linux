@@ -5,8 +5,8 @@
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
 > 核心验收：**22 / 22（100%）**
-> 长尾/外部阻塞：**10 / 12**
-> 全部任务：**32 / 34（94.1%）**
+> 长尾/外部阻塞：**11 / 12**
+> 全部任务：**33 / 34（97.1%）**
 >
 > 勾选项表示已在 Linux 回放运行时上实现并通过测试；标有 `blocked` 的任务
 > 依赖外部环境或私有引擎能力。
@@ -17,8 +17,8 @@
 | --- | ---: | ---: | ---: |
 | A. 原始阶段 3 验收项 | 8 | 8 | 100% |
 | B. 后续运行时增量 | 14 | 14 | 100% |
-| C. 长尾 / 外部阻塞 | 10 | 12 | 83.3% |
-| **合计** | **32** | **34** | **94.1%** |
+| C. 长尾 / 外部阻塞 | 11 | 12 | 91.7% |
+| **合计** | **33** | **34** | **97.1%** |
 
 ## A. 原始阶段 3 验收项（8 / 8）
 
@@ -64,17 +64,18 @@
 - [x] **B13** 资源路径缓存（`LoadResourceSync`/`Async`，≤4 MB）
 - [x] **B14** L5 夹具扩展（transform-origin/fixed-scroll/align-gap/flex-wrap/order/overflow）
 
-## C. 长尾 / 外部阻塞（10 / 12）
+## C. 长尾 / 外部阻塞（11 / 12）
 
 - [x] **C1** 官方 Windows appservice guest 的真实 L5 采集与像素对比
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
     `skyline.node`，窗口就绪后经 `notifyAppLaunch` + `PageContext` 回放夹具操作，
     从共享内存读取 640x480 帧。原始 Windows 帧为 BGRA，工具统一转为 RGBA。
-  - `spec/l5-baseline.win32.json` 保存 19 个夹具的 zlib 压缩帧、样本点与容差；
+  - `spec/l5-baseline.win32.json` 保存 20 个夹具的 zlib 压缩帧、样本点与容差；
     `npm run test:l5` 在 Linux 以 dpr=2 重放同一夹具并逐像素比较。
   - 结果：12 个夹具逐像素完全一致，`shadow`/`radial-conic`/`background-size`
     最大差 1；`overflow`
     失配率 < 0.2%（裁剪边缘），`fixed-scroll` 已完全一致；`transform3d` 存在 3D 变换保真差异；
+    `transform-origin-z` 因官方引擎忽略 origin z 分量而失配率约 10%（已知差异）；
     `gridview`/`listview` 的合成 op 流无法触发官方 native builder 回调，标记为
     不可比。详见 `docs/feasibility.md` §3.1。
   - 采集命令：`npm run l5:windows`；复用已采集帧：`npm run l5:windows:reuse`。
@@ -183,15 +184,27 @@
     右下锚定）与图片/渐变尺寸原地更新用例（61 / 61）。
   - L5 夹具 `appservice-background-size.ops.json`（px/%/平铺/简写四种线性
     渐变）与官方 Windows 帧比较 maxDelta=1、失配率 0。
-- [ ] **C11** `transform-origin` 的 z 分量 / 3D origin
+- [x] **C11** `transform-origin` 的 z 分量 / 3D origin
+  - `ParseTransformOrigin` 解析可选的第三分量（px，默认 0），写入
+    `AppStyle::transform_origin_z`；重新声明 origin 时 z 归零。
+  - YGNode 的 Dart 侧只承载 2D `Offset` origin，因此原生侧把 z 折叠进矩阵：
+    `T(0,0,z) · M · T(0,0,-z)`；它与 widget 的 2D origin 平移组合后等价于
+    完整的 3D 枢轴，无需修改重建包/FFI 签名。
+  - 首次物化与 `transform`/origin 的 targeted update 均使用折叠后的矩阵；
+    `transform_origin_z` 变化会触发原地更新。
+  - `test:ops` 新增 `perspective(300px) rotateX(40deg)` 下 z=0 与 z=60px 的
+    投影差异用例，以及 z 分量原地更新用例（63 / 63）。
+  - 官方 Windows 引擎忽略 origin z（同一 transform 下 z=0/60 帧完全相同），
+    3D 投影本身也存在既有保真差异；L5 夹具 `appservice-transform-origin-z`
+    记录为已知差异（失配率约 10%）。
 - [ ] **C12** `AddPendingFont` / `RemovePendingFont` 与内存字体状态语义
 
 ## 测试基线（x / y）
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **156 / 180** | 24 skipped，0 fail |
-| `npm run test:ops` | **61 / 61** | appservice 操作流回放 |
+| `npm test` | **158 / 182** | 24 skipped，0 fail |
+| `npm run test:ops` | **63 / 63** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

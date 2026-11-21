@@ -513,6 +513,8 @@ npm run test:ops
   left+right 拉伸三种绝对定位。
 - `CSS transforms`：`translate` 只移动绘制、`scale(0.5)` 绕中心缩放，布局槽位
   保持不变。
+- `transform-origin z`：`perspective(300px) rotateX(40deg)` 下 z=0 与 z=60px
+  的两个盒子投影位置不同（蓝盒下移约 32px）；z 分量更新后原地重绘。
 - `box-shadow`：`10px 10px 0 rgba(0,0,0,.5)` 在节点右/下边缘绘制 50% 黑阴影。
 
 ## 6. 当前边界
@@ -538,7 +540,8 @@ npm run test:ops
   mapper（含 derived value）并采样为 `updates` 时间线。
 - `transform` 已覆盖 `translate/translate3d/scale/scale3d/rotate/rotateX/
   rotateY/skewX/skewY/perspective/matrix/matrix3d`；不改变布局。
-  CSS `transform-origin` 支持 px/%/关键字（默认 50% 50%）。
+  CSS `transform-origin` 支持 px/%/关键字（默认 50% 50%）；可选的第三分量
+  （z，px）会折叠进变换矩阵 `T(0,0,z)·M·T(0,0,-z)` 形成 3D 枢轴。
 - `position: fixed` 在页面构建时提升到根连接器，因此滚动祖先不会移动它；
   insets 按 viewport 解析。
 - builder 已按需 mount，并支持 attach 后的二次变更：
@@ -576,6 +579,8 @@ npm run test:ops
 - L5：Linux 侧确定性帧哈希与 `test/lib/l5.js` 容差比较已就绪
   （`npm run test:l5`）。官方 Windows 引擎帧由 `tools/l5-windows.js` 在
   Wine 渲染进程中以 dpr=2 采集，基线写入 `spec/l5-baseline.win32.json`；
-  Windows 原始帧为 BGRA，采集工具统一转 RGBA。12 个夹具逐像素完全一致（`shadow` 最大差 1），
-  `overflow` 仅有边缘级差异，`transform3d` 与
-  `gridview`/`listview` 的已知差异见 `docs/feasibility.md` §3.1。
+  Windows 原始帧为 BGRA，采集工具统一转 RGBA。12 个夹具逐像素完全一致
+  （`shadow`/`radial-conic`/`background-size` 最大差 1），
+  `overflow` 仅有边缘级差异，`transform3d`、`transform-origin-z`
+  （官方引擎忽略 origin z）与 `gridview`/`listview` 的已知差异见
+  `docs/feasibility.md` §3.1。

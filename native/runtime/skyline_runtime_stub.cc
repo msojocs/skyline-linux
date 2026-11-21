@@ -2160,6 +2160,10 @@ struct AppStyle {
   float transform_origin_y = std::nanf("");
   float transform_origin_x_percent = std::nanf("");
   float transform_origin_y_percent = std::nanf("");
+  // Third transform-origin component (CSS length, default 0px).  Folded into
+  // the matrix as T(0,0,z) * M * T(0,0,-z) because the YGNode widget only
+  // carries the 2D origin.
+  float transform_origin_z = 0.0f;
   // CSS transitions.  `transition_mask` selects the animated properties.
   uint32_t transition_mask = 0;
   double transition_duration = 0.0;  // ms
@@ -3109,10 +3113,12 @@ void ParseBackgroundSize(AppStyle* style, const std::string& raw) {
   style->background_size_height_percent = height_percent;
 }
 
-// Parses CSS `transform-origin` (one to three components; z is ignored).
+// Parses CSS `transform-origin` (one to three components; the optional third
+// component is the z offset).
 void ParseTransformOrigin(AppStyle* style, const std::string& raw) {
   const std::vector<std::string> parts = SplitWhitespace(raw);
   if (parts.empty()) return;
+  style->transform_origin_z = 0.0f;
   bool x_set = false;
   bool y_set = false;
   float x_px = std::nanf("");
@@ -3175,7 +3181,11 @@ void ParseTransformOrigin(AppStyle* style, const std::string& raw) {
         y_set = true;
       }
     } else {
-      break;  // third component is the z offset
+      // Third component is the z offset; only lengths are valid.
+      if (percent < 0.0f && value != "auto") {
+        style->transform_origin_z = px;
+      }
+      break;
     }
   }
   if (x_set && !y_set) set_y_percent(0.5f);
@@ -3615,6 +3625,26 @@ void ResolveTransformOrigin(const AppStyle& style, float width, float height,
   } else {
     *out_y = height * 0.5;
   }
+}
+
+// Applies the CSS transform-origin z offset to the parsed matrix:
+// T(0,0,z) * M * T(0,0,-z).  The YGNode widget applies the 2D origin
+// translation itself, so the two compose into the full 3D pivot.
+void BuildTransformMatrix(const AppStyle& style, double* out) {
+  float matrix[16];
+  std::memcpy(matrix, style.transform, sizeof(matrix));
+  if (std::fabs(style.transform_origin_z) > 0.0001f) {
+    float pre[16];
+    float post[16];
+    float temporary[16];
+    MatrixIdentity(pre);
+    MatrixIdentity(post);
+    pre[14] = style.transform_origin_z;
+    post[14] = -style.transform_origin_z;
+    MatrixMultiply(pre, matrix, temporary);
+    MatrixMultiply(temporary, post, matrix);
+  }
+  for (int i = 0; i < 16; i++) out[i] = static_cast<double>(matrix[i]);
 }
 
 // Whitespace tokenizer that keeps `rgba(0, 0, 0, 0.5)` together.
@@ -7528,9 +7558,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
           data_type == Dart_TypedData_kFloat64 && length == 16 &&
           data != nullptr) {
         auto* values = static_cast<double*>(data);
-        for (int i = 0; i < 16; i++) {
-          values[i] = static_cast<double>(style.transform[i]);
-        }
+        BuildTransformMatrix(style, values);
       }
       Dart_TypedDataReleaseData(matrix);
       setup(yoga_node, matrix);
@@ -9182,7 +9210,8 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
           !SameFloatOrNan(before.transform_origin_x_percent,
                           after.transform_origin_x_percent) ||
           !SameFloatOrNan(before.transform_origin_y_percent,
-                          after.transform_origin_y_percent);
+                          after.transform_origin_y_percent) ||
+          !SameFloatOrNan(before.transform_origin_z, after.transform_origin_z);
       if (transform_changed && node->yoga_node_p != nullptr &&
           g_page != nullptr && g_page->holder != nullptr) {
         auto* setup = reinterpret_cast<YGNodeSetupTransformFn>(FindCallback(
@@ -9200,9 +9229,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
                 data_type == Dart_TypedData_kFloat64 && length == 16 &&
                 data != nullptr) {
               auto* values = static_cast<double*>(data);
-              for (int i = 0; i < 16; i++) {
-                values[i] = static_cast<double>(after.transform[i]);
-              }
+              BuildTransformMatrix(after, values);
             }
             Dart_TypedDataReleaseData(matrix);
             Dart_Handle yoga =

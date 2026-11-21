@@ -58,6 +58,12 @@ const KNOWN_DIVERGENCES = {
     headroom: 0.01,
     samplesInformational: true,
   },
+  'appservice-transform-origin-z': {
+    note: 'official engine ignores the transform-origin z component (3D projection also differs)',
+    compare: true,
+    headroom: 0.15,
+    samplesInformational: true,
+  },
   'appservice-gridview': {
     note: 'official engine requires a grid builder callback; synthetic ops leave the grid empty',
     compare: false,

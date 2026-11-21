@@ -213,7 +213,7 @@ C1 原先按“需要完整官方 DevTools 环境”阻塞。实际验证表明�
 640x480 设备像素；Linux 侧用同一夹具在 `--dpr 2` 下重放，比较时仅排除 Linux debug
 构建右上角的 “DEBUG” 横幅（`ignoreRects`，release Windows 引擎没有该横幅）。
 
-19 个夹具的实测结果（`npm run test:l5`，容差 12/通道）：
+20 个夹具的实测结果（`npm run test:l5`，容差 12/通道）：
 
 | 夹具 | 结果 |
 | --- | --- |
@@ -221,6 +221,7 @@ C1 原先按“需要完整官方 DevTools 环境”阻塞。实际验证表明�
 | shadow/radial-conic/background-size | maxDelta=1 |
 | overflow | maxDelta=109，失配率 0.14%（裁剪边缘） |
 | transform3d | 失配率 18%，Linux 3D 变换保真差异（记录为已知差异） |
+| transform-origin-z | 失配率 10%；官方引擎忽略 transform-origin 的 z 分量（已知差异） |
 | gridview/listview | 合成 op 流不会触发官方 native builder 回调，标记不可比 |
 
 完整官方 DevTools UI 在 Wine 下启动后卡在登录/主线程同步 IPC；这不是 L5 采集的

@@ -290,7 +290,8 @@
   解析；`position: sticky` 经 StickySection/PinnedHeader sliver 实现；
   `radial-gradient`/`conic-gradient` 经 `NewRadialGradient`/`NewConicGradient`
   绘制（支持尺寸关键字、`at` 位置与含角度的硬停止）；显式 `background-size`
-  （1–2 个 `auto`/px/% 值）驱动背景图缩放/平铺与线性渐变 fittingSize。
+  （1–2 个 `auto`/px/% 值）驱动背景图缩放/平铺与线性渐变 fittingSize；
+  `transform-origin` 的 z 分量折叠进变换矩阵形成 3D 枢轴。
 - **下一步**：`transform3d` 保真对齐、native view 真实内容接入（当前 Linux
   为占位 slot），以及继续补全 yoga 属性。
 

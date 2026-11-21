@@ -59,6 +59,7 @@ const FIXTURES = [
   'appservice-sticky.ops.json',
   'appservice-radial-conic.ops.json',
   'appservice-background-size.ops.json',
+  'appservice-transform-origin-z.ops.json',
 ];
 
 function prerequisites() {

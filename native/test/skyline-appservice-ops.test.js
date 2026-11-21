@@ -2615,3 +2615,75 @@ test('appservice ops: background-size updates repaint images and gradients', {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('appservice ops: transform-origin z moves the 3D pivot', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-transform-origin-z.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+    env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // Both boxes share `perspective(300px) rotateX(40deg)`.  The left box pivots
+  // at z=0 (its projection starts around y=118); the right box pivots 60px
+  // toward the viewer, which shifts the same projection about 32px down.
+  assert.deepEqual(pixelAt(pixels, 60, 125), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 230, 125), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 60, 185), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 230, 185), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 230, 210), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 60, 210), [255, 255, 255, 255]);
+});
+
+test('appservice ops: transform-origin z updates repaint in place', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-origin-z-'));
+  const ops = path.join(dir, 'origin-z.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:20px;top:100px;width:100px;height:100px;' +
+          'background:#00AA00;transform:perspective(300px) rotateX(40deg);' +
+          'transform-origin:50% 50% 0px;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 300, ops: [
+        { op: 'setStyle', id: 3, value: 'transform-origin:50% 50% 60px;' },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2600,
+      frames: 0,
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    // After moving the pivot to z=60 the projection drops like the right-hand
+    // box in the committed fixture.
+    assert.deepEqual(pixelAt(pixels, 60, 125), [255, 255, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 60, 185), [0, 170, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 60, 210), [0, 170, 0, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
