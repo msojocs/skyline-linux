@@ -313,6 +313,9 @@
     // broadcast did.  Triggering the sub-contexts directly creates duplicate
     // pages (`appLaunch with an already exist webviewId`).
     return Promise.resolve(pageGlobal.getInstanceWindow()).then((win) => {
+      // The original route may have been delivered while the instance window
+      // promise settled; re-check before replaying to avoid duplicate pages.
+      if (hasLaunchPage()) return false;
       const replayed = triggerBridgeEvent(win, 'onAppRoute', data, pageId);
       if (replayed && typeof native.log === 'function') {
         native.log(`replayed appLaunch route webview=${pageId} ` +
@@ -320,6 +323,30 @@
       }
       return replayed;
     }).catch(() => false);
+  }
+
+  // The first onAppRoute is a race: sometimes the SDK drops it, sometimes it
+  // is delivered just as `notifyAppLaunch` runs.  Wait briefly for the native
+  // route to create the page, and only replay when it is really missing.
+  function ensureLaunchPage(windowId, pageId) {
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const poll = () => {
+        if (hasLaunchPage()) {
+          if (typeof native.log === 'function') {
+            native.log(`launch page ready after ${Date.now() - started}ms`);
+          }
+          resolve(false);
+          return;
+        }
+        if (Date.now() - started >= 500) {
+          replayAppLaunchRoute(windowId, pageId).then(() => resolve(true));
+          return;
+        }
+        setTimeout(poll, 50);
+      };
+      poll();
+    });
   }
 
   // A page engine that already created the launch page must not receive the
@@ -488,17 +515,11 @@
       if (typeof native.log === 'function') {
         native.log(`notifyAppLaunch window=${args[0]} page=${args[1]}`);
       }
-      // The first onAppRoute is dispatched before the SDK subscribes; replay
-      // the launch route now that the route engines are up, then complete the
-      // DevTools handshake so its routeDone finds the created page.  appLaunch
-      // routes always use taskId 0.
-      const replay = hasLaunchPage()
-        ? Promise.resolve(false)
-        : replayAppLaunchRoute(args[0], args[1]);
-      Promise.resolve(replay).then(
-        () => completeRoute(0),
-        () => completeRoute(0),
-      );
+      // The first onAppRoute is dispatched before the SDK subscribes; make
+      // sure the launch page exists (replaying the route only when the
+      // native dispatch was dropped), then complete the DevTools handshake so
+      // its routeDone finds the created page.  appLaunch routes use taskId 0.
+      ensureLaunchPage(args[0], args[1]).then(() => completeRoute(0));
       // Fallback: if the launch route initialised the app but produced no
       // page, replay it once through the SDK after the route has settled.
       setTimeout(() => retryLaunchIfNoPage(0), 1500);
