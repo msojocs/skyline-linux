@@ -4179,9 +4179,10 @@ void ApplyDeclaration(AppStyle* style,
     style->clip = value == "hidden" || value == "clip" || value == "scroll" ||
                   value == "auto";
   } else if (key == "position") {
-    style->position = value == "fixed"     ? 2
+    style->position = value == "fixed"      ? 2
                       : value == "absolute" ? 1
                       : value == "sticky"   ? 3
+                      : value == "relative" ? 4
                                             : 0;
   } else if (key == "top" || key == "right" || key == "bottom" ||
              key == "left") {
@@ -5397,7 +5398,8 @@ std::vector<AppNode*> OrderedFlowChildren(AppNode* node) {
   std::vector<AppNode*> flow;
   for (AppNode* child : node->children) {
     if (child == nullptr || child->released || child->style.display_none ||
-        (child->style.position != 0 && child->style.position != 3)) {
+        (child->style.position != 0 && child->style.position != 3 &&
+         child->style.position != 4)) {
       continue;
     }
     flow.push_back(child);
@@ -5877,9 +5879,16 @@ float EffectiveFlexShrink(const AppStyle& style, bool in_scroll_view) {
 // `abs_x`/`abs_y` are the node's border-box origin relative to the viewport.
 // They let `position: fixed` resolve against the viewport instead of the
 // parent's content box.
+//
+// `cb_*` describe the viewport-space containing block used by absolutely
+// positioned descendants (the padding box of the nearest positioned ancestor,
+// CSS 2.1 §10.1).  A negative width means "not established yet": the starting
+// node becomes the containing block.
 void LayoutNode(AppNode* node, float x, float y, float w, float h,
                 std::vector<NodeMetric>* metrics, float abs_x = 0.0f,
-                float abs_y = 0.0f) {
+                float abs_y = 0.0f, float cb_abs_x = -1.0f,
+                float cb_abs_y = -1.0f, float cb_w = -1.0f,
+                float cb_h = -1.0f) {
   node->abs_x = abs_x;
   node->abs_y = abs_y;
   if (metrics != nullptr) {
@@ -5887,6 +5896,17 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
   }
 
   const AppStyle& style = node->style;
+  // `position: relative` (4) also establishes a containing block for its
+  // absolutely positioned descendants even though it stays in flow.
+  if (style.position != 0 || cb_w < 0.0f) {
+    cb_abs_x = abs_x + EffectiveBorderWidth(style, 3);
+    cb_abs_y = abs_y + EffectiveBorderWidth(style, 0);
+    cb_w = std::max(
+        0.0f, w - EffectiveBorderWidth(style, 3) - EffectiveBorderWidth(style, 1));
+    cb_h = std::max(
+        0.0f, h - EffectiveBorderWidth(style, 0) - EffectiveBorderWidth(style, 2));
+  }
+
   if (node->children.empty()) return;
   // Builders materialize items on demand; the Flutter sliver owns placement.
   if (IsListBuilderName(node->name) || IsGridBuilderName(node->name)) return;
@@ -6126,7 +6146,8 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
           cursor += child.main + child.margin_main_end + main_gap + extra_gap;
         }
         LayoutNode(child.node, child_x, child_y, child.w, child.h, metrics,
-                   abs_x + child_x, abs_y + child_y);
+                   abs_x + child_x, abs_y + child_y, cb_abs_x, cb_abs_y, cb_w,
+                   cb_h);
       }
       line_cross_pos += line.cross + cross_gap;
     }
@@ -6215,29 +6236,31 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       child_y = cursor;
     }
     LayoutNode(child.node, child_x, child_y, child.w, child.h, metrics,
-               abs_x + child_x, abs_y + child_y);
+               abs_x + child_x, abs_y + child_y, cb_abs_x, cb_abs_y, cb_w,
+               cb_h);
     cursor += child.main + child.margin_main_end + MainGap(style) + extra_gap;
   }
   }  // !style.wrap
 
-  // Absolute/fixed children: positioned from the parent's content box (absolute)
-  // or from the viewport (fixed) and excluded from flex sizing above.
+  // Absolute/fixed children: absolute boxes resolve against the nearest
+  // positioned ancestor's padding box (`cb_*`), fixed boxes against the
+  // viewport.  Both are excluded from flex sizing above.
   for (AppNode* child : node->children) {
     if (child->released || child->style.display_none ||
-        child->style.position == 0 || child->style.position == 3) {
+        (child->style.position != 1 && child->style.position != 2)) {
       continue;
     }
     const bool fixed = child->style.position == 2;
     const float inset_w =
         fixed ? (g_viewport_width > 0.0
                      ? static_cast<float>(g_viewport_width)
-                     : content_w)
-              : content_w;
+                     : cb_w)
+              : cb_w;
     const float inset_h =
         fixed ? (g_viewport_height > 0.0
                      ? static_cast<float>(g_viewport_height)
-                     : content_h)
-              : content_h;
+                     : cb_h)
+              : cb_h;
     float left = 0.0f;
     float right = 0.0f;
     float top = 0.0f;
@@ -6290,19 +6313,22 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       child_x = viewport_x - abs_x;
       child_y = viewport_y - abs_y;
     } else {
+      // `cb_abs_*` is the containing block's padding-box origin, so the child's
+      // insets are viewport-relative; convert back to parent-relative.
       if (has_left) {
-        child_x += left;
+        child_x = cb_abs_x + left - abs_x;
       } else if (has_right) {
-        child_x += content_w - right - child_w;
+        child_x = cb_abs_x + cb_w - right - child_w - abs_x;
       }
       if (has_top) {
-        child_y += top;
+        child_y = cb_abs_y + top - abs_y;
       } else if (has_bottom) {
-        child_y += content_h - bottom - child_h;
+        child_y = cb_abs_y + cb_h - bottom - child_h - abs_y;
       }
     }
     LayoutNode(child, child_x, child_y, child_w, child_h, metrics,
-               abs_x + child_x, abs_y + child_y);
+               abs_x + child_x, abs_y + child_y, cb_abs_x, cb_abs_y, cb_w,
+               cb_h);
   }
 }
 
@@ -8100,6 +8126,23 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         // which requires a CustomScrollView (type 3).
         Dart_Handle list = Dart_Null();
         uint8_t scroll_type = has_sliver_child ? 3 : 0;
+        if (!has_sliver_child) {
+          // The WXML `type` attribute selects how SkylineScrollView consumes
+          // its children.  Type `none`/`flex` intentionally renders only the
+          // first child for legacy compatibility, so a multi-child
+          // `<scroll-view type="list">` must be forwarded as list (2) and a
+          // `custom` scroll view as CustomScrollView (3).
+          const std::string scroll_type_attr = AttrText(node, "type", "");
+          if (scroll_type_attr == "list") {
+            scroll_type = 2;
+          } else if (scroll_type_attr == "flex") {
+            scroll_type = 1;
+          } else if (scroll_type_attr == "custom") {
+            scroll_type = 3;
+          } else if (scroll_type_attr == "nested") {
+            scroll_type = 4;
+          }
+        }
         if (has_sticky_child && !has_sticky_section_child) {
           if (scroll_sticky_header != nullptr &&
               scroll_sticky_section != nullptr) {
