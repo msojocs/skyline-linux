@@ -1,5 +1,7 @@
 #include <node_api.h>
 
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -7,6 +9,8 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
+#include <unistd.h>
 
 #include "bootstrap_js.h"
 #include "engine.hh"
@@ -17,6 +21,8 @@ extern "C" void SkylineApplyLiveOps(const char* json, double window_id);
 #endif
 
 namespace {
+
+void AddonLog(const char* format, ...);
 
 napi_value Undefined(napi_env env) {
   napi_value value = nullptr;
@@ -283,6 +289,10 @@ napi_value CreateWindow(napi_env env, napi_callback_info info) {
   }
   try {
     const skyline::CreateWindowArgs args = ParseCreateWindow(env, argv[0]);
+    AddonLog("createWindow id=%g bundle=%s addon=%s buffer=%p size=%zu",
+             args.window_id, args.bundle_path.c_str(),
+             args.skyline_addon_path.c_str(), args.frame_buffer,
+             args.frame_buffer_size);
     state->engine->CreateWindow(args);
 #ifdef SKYLINE_HAVE_ENGINE
     // DevTools integration demo: render a static page while the private
@@ -308,6 +318,15 @@ napi_value CreateWindow(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
+napi_value LogFromJs(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  const std::string message = argc >= 1 ? ReadString(env, argv[0]) : std::string();
+  AddonLog("js: %s", message.c_str());
+  return Undefined(env);
+}
+
 napi_value ApplyPageOps(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
@@ -317,6 +336,7 @@ napi_value ApplyPageOps(napi_env env, napi_callback_info info) {
   }
   const double window_id = ReadNumber(env, argv[0]);
   const std::string json = ReadString(env, argv[1]);
+  AddonLog("applyPageOps window=%g bytes=%zu", window_id, json.size());
 #ifdef SKYLINE_HAVE_ENGINE
   SkylineApplyLiveOps(json.c_str(), window_id);
 #else
@@ -454,9 +474,51 @@ void Define(napi_env env, napi_value target, const char* name, napi_callback cal
   napi_set_named_property(env, target, name, function);
 }
 
+// Module lifecycle diagnostics.  The DevTools' appservice renderer has no
+// accessible console, so a small append-only file makes it possible to tell a
+// failed `require()` apart from a failure later in `createWindow`.
+void AddonLog(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  std::fprintf(stderr, "[skyline-addon] ");
+  std::vfprintf(stderr, format, args);
+  std::fprintf(stderr, "\n");
+  va_end(args);
+
+  std::FILE* file = std::fopen("/tmp/skyline-addon.log", "a");
+  if (file != nullptr) {
+    std::fprintf(file, "[pid %d] ", static_cast<int>(::getpid()));
+    va_start(args, format);
+    std::vfprintf(file, format, args);
+    va_end(args);
+    std::fprintf(file, "\n");
+    std::fclose(file);
+  }
+  std::fflush(stderr);
+}
+
+std::string NapiValueToString(napi_env env, napi_value value) {
+  napi_value string_value = nullptr;
+  if (napi_coerce_to_string(env, value, &string_value) != napi_ok ||
+      string_value == nullptr) {
+    return {};
+  }
+  size_t length = 0;
+  if (napi_get_value_string_utf8(env, string_value, nullptr, 0, &length) !=
+      napi_ok) {
+    return {};
+  }
+  std::vector<char> buffer(length + 1, '\0');
+  size_t copied = 0;
+  napi_get_value_string_utf8(env, string_value, buffer.data(), buffer.size(),
+                             &copied);
+  return std::string(buffer.data(), copied);
+}
+
 }  // namespace
 
 NAPI_MODULE_INIT() {
+  AddonLog("init begin");
   auto* state = new AddonState();
   state->env = env;
 #ifdef SKYLINE_HAVE_ENGINE
@@ -479,6 +541,7 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "notify", Noop);
   Define(env, bridge, "brightness", Noop);
   Define(env, bridge, "debugInfo", DebugInfo);
+  Define(env, bridge, "log", LogFromJs);
 
   napi_value global = nullptr;
   napi_get_global(env, &global);
@@ -494,7 +557,19 @@ NAPI_MODULE_INIT() {
   bool deleted = false;
   napi_delete_property(env, global, key, &deleted);
 
-  if (status != napi_ok) return nullptr;
+  if (status != napi_ok) {
+    napi_value exception = nullptr;
+    const napi_status exception_status =
+        napi_get_and_clear_last_exception(env, &exception);
+    std::string message;
+    if (exception_status == napi_ok && exception != nullptr) {
+      message = NapiValueToString(env, exception);
+    }
+    AddonLog("bootstrap failed: status=%d exception=%s", static_cast<int>(status),
+             message.empty() ? "(none)" : message.c_str());
+    return nullptr;
+  }
+  AddonLog("init ok");
 
   // The official module has no named exports.
   napi_value exports_object = nullptr;

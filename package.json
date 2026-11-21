@@ -47,6 +47,7 @@
     "runtime:embed:check": "bash native/engine/patch-skyline-runtime.sh --check",
     "kernel:skyline": "bash native/engine/build-skyline-kernel.sh",
     "kernel:skyline:check": "bash native/engine/build-skyline-kernel.sh --check",
+    "devtools:stage": "bash native/engine/stage-devtools-addon.sh",
     "test:kernel": "node --test test/kernel-rebuild.test.js",
     "engine:fetch": "bash native/engine/fetch-engine.sh",
     "engine:build": "bash native/engine/build-engine.sh",

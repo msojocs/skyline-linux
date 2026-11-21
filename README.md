@@ -133,6 +133,16 @@ npm run test:ops                     # 含路由栈/builder/objectFit/网络图�
 npm run l5:baseline                  # 生成 Linux L5 帧哈希基线
 npm run l5:windows                   # Wine 官方引擎采集 spec/l5-baseline.win32.json
 npm run test:l5                      # Linux 基线 + Windows 逐像素容差比较
+
+# 1f. 部署到微信开发者工具（复制文件后直接启动，无需环境变量）
+#     需要先完成 npm run native:build / engine:build / kernel:skyline，
+#     并在 ../skyline-shared-memory/build 中构建打过补丁的 sharedMemory.node。
+#     需要 patchelf 在 PATH 中（apt install patchelf 或 pip install patchelf）。
+npm run devtools:stage
+../wechat-web-devtools-linux/bin/wechat-devtools
+# 脚本会写入 skyline.node、libflutter_engine.so、libskyline.so、
+# icudtl.dat、重编译 kernel/assets 和 sharedMemory.node；启动参数中的
+# Dart 入口参数由 addon 根据 skyline-addon 路径自动识别。
 npm run test:l5:windows              # 仅比较已提交的 Windows 基线
 
 # 2. 记录官方 Windows 模块的契约快照（需要 Wine 11 + Windows Electron）

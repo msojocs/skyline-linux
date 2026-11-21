@@ -225,9 +225,15 @@ class WindowHost {
     // The DevTools' Skyline Dart entrypoint (`package:sample/devtools.dart
     // main`) expects [window id, runtime holder, width, height, createRuntime,
     // addon path].  Plain test apps use a zero-argument main, so only pass
-    // these when the DevTools integration requests it.
+    // these for the DevTools packaging.  The DevTools always loads the addon
+    // from its own `node_modules/skyline-addon/` directory, which is enough to
+    // recognize it without requiring environment variables.
+    const bool devtools_entrypoint =
+        std::getenv("SKYLINE_DEVTOOLS") != nullptr ||
+        args_.bundle_path.find("skyline-addon") != std::string::npos ||
+        args_.skyline_addon_path.find("skyline-addon") != std::string::npos;
     std::vector<std::string> dart_args;
-    if (std::getenv("SKYLINE_DEVTOOLS") != nullptr) {
+    if (devtools_entrypoint) {
       dart_args.push_back(
           std::to_string(static_cast<long long>(args_.window_id)));
       dart_args.push_back("1");

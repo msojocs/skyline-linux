@@ -2116,6 +2116,17 @@ namespace appservice {
 
 constexpr float kInf = 1e30f;
 
+// CSS percentages resolve against a definite containing size.  The generated
+// appservice page relies on WXSS for most of its layout; when that stylesheet
+// is unavailable (compiled stylesheets are not replayed yet), a `height: 100%`
+// inside an auto-sized ancestor used to multiply the kInf sentinel and make the
+// whole subtree measure as infinite, so nothing was painted.  Treat a
+// percentage against an unbounded extent as `auto` instead.
+float ResolvePercentExtent(float available, float percent) {
+  if (percent < 0.0f || available <= 0.0f || available >= kInf) return -1.0f;
+  return available * percent;
+}
+
 // CSS transition properties modelled by the replay runtime.  The bit mask is
 // stored on AppStyle so a style change can start the matching animations.
 enum TransitionProperty : uint32_t {
@@ -5083,13 +5094,14 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
 
   float width = -1.0f;
   if (style.width_percent >= 0.0f) {
-    width = avail_w * style.width_percent + ContentBoxInset(style, true);
+    width = ResolvePercentExtent(avail_w, style.width_percent);
+    if (width >= 0.0f) width += ContentBoxInset(style, true);
   } else if (style.width >= 0.0f) {
     width = DeclaredWidth(style);
   } else if (is_text) {
     width = static_cast<float>(TextIntrinsicWidth(text, style)) +
             BorderBoxExtra(style, true);
-  } else if (stretch_w) {
+  } else if (stretch_w && avail_w < kInf) {
     width = avail_w;
   }
   if (width >= 0.0f) {
@@ -5103,7 +5115,8 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
   if (IsListBuilderName(node->name) || IsGridBuilderName(node->name)) {
     float height = style.height >= 0.0f ? DeclaredHeight(style) : -1.0f;
     if (height < 0.0f && style.height_percent >= 0.0f) {
-      height = avail_h * style.height_percent + ContentBoxInset(style, false);
+      height = ResolvePercentExtent(avail_h, style.height_percent);
+      if (height >= 0.0f) height += ContentBoxInset(style, false);
     }
     if (height < 0.0f) {
       int child_count = 0;
@@ -5182,13 +5195,15 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
     int flow_children = 0;
     const float main_gap = MainGap(style);
     const float cross_gap = style.row ? style.row_gap : style.column_gap;
-    const float explicit_height =
-        style.height >= 0.0f
-            ? DeclaredHeight(style)
-            : (style.height_percent >= 0.0f
-                   ? avail_h * style.height_percent +
-                         ContentBoxInset(style, false)
-                   : -1.0f);
+    float explicit_height = -1.0f;
+    if (style.height >= 0.0f) {
+      explicit_height = DeclaredHeight(style);
+    } else if (style.height_percent >= 0.0f) {
+      const float resolved = ResolvePercentExtent(avail_h, style.height_percent);
+      if (resolved >= 0.0f) {
+        explicit_height = resolved + ContentBoxInset(style, false);
+      }
+    }
     const float wrap_limit =
         style.wrap
             ? (style.row
@@ -5281,10 +5296,11 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
   }
   float height = -1.0f;
   if (style.height_percent >= 0.0f) {
-    height = avail_h * style.height_percent + ContentBoxInset(style, false);
+    height = ResolvePercentExtent(avail_h, style.height_percent);
+    if (height >= 0.0f) height += ContentBoxInset(style, false);
   } else if (style.height >= 0.0f) {
     height = DeclaredHeight(style);
-  } else if (stretch_h) {
+  } else if (stretch_h && avail_h < kInf) {
     height = avail_h;
   }
   if (height < 0.0f) {
@@ -10126,6 +10142,128 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   }
 }
 
+// Applies one live bridge batch to a persistent appservice page.
+//
+// The SkylineGlobal.PageContext bridge flushes deltas: the first batches may
+// only create elements, a later batch attaches the tree, and subsequent
+// batches update it.  Rebuilding from each batch (as ApplyOpsPage does for a
+// recorded fixture) loses the nodes created by earlier batches and leaves the
+// page slot occupied, so keep `g_page` alive across calls and materialise the
+// route only when an `attach` op arrives.
+void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
+  const PageBuilders builders = LoadPageBuilders(holder);
+  if (builders.yg_node == nullptr || builders.yg_connector == nullptr ||
+      builders.create_route == nullptr || builders.text == nullptr ||
+      builders.text_span == nullptr || builders.decorated == nullptr ||
+      builders.opacity == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] live ops: callbacks not registered\n");
+    return;
+  }
+  std::string json;
+  if (!ReadDescriptor(descriptor, &json)) {
+    std::fprintf(stderr, "[skyline-runtime] live ops: cannot read %s\n",
+                 descriptor);
+    return;
+  }
+  g_ops_document = std::make_unique<rapidjson::Document>();
+  rapidjson::Document& doc = *g_ops_document;
+  doc.Parse(json.c_str());
+  if (doc.HasParseError() || !doc.IsObject()) {
+    std::fprintf(stderr, "[skyline-runtime] live ops: parse error at %zu\n",
+                 static_cast<size_t>(doc.GetErrorOffset()));
+    return;
+  }
+  const auto ops_member = doc.FindMember("ops");
+  if (ops_member == doc.MemberEnd() || !ops_member->value.IsArray()) {
+    std::fprintf(stderr, "[skyline-runtime] live ops: missing ops array\n");
+    return;
+  }
+
+  const bool first_batch = g_page == nullptr;
+  if (first_batch) {
+    g_page = new OpPage();
+    ClearTransitions();
+    g_page->holder = holder;
+    g_ui_task_runner = UiTaskRunner();
+    g_next_rule_order = 0;
+    g_next_address = 0x5000;
+    g_builders_by_address.clear();
+    g_image_nodes.clear();
+  }
+
+  bool structural = false;
+  bool needs_flush = false;
+  bool created_route = false;
+  bool general_dirty = false;
+  for (const rapidjson::Value& op : ops_member->value.GetArray()) {
+    ApplyOperation(op);
+    const char* kind = MemberText(op, "op");
+    if (kind == nullptr) continue;
+    if (std::strcmp(kind, "attach") == 0) {
+      const uint8_t open_type = g_page->pending_open_type != 0
+                                    ? g_page->pending_open_type
+                                    : (g_page->page_count == 0 ? 0 : 4);
+      const int32_t page_id =
+          g_page->pending_page_id != 0 ? g_page->pending_page_id
+                                       : (g_page->page_count == 0 ? 0 : 1);
+      if (MaterializeAttachedPage(holder, builders, g_page->root_id, open_type,
+                                  page_id, g_page->pending_callback_id)) {
+        created_route = true;
+      }
+      g_page->pending_open_type = 0;
+      g_page->pending_page_id = 0;
+      g_page->pending_callback_id = 0;
+    } else if (std::strcmp(kind, "notifyNavigateBack") == 0) {
+      auto* navigateBack = reinterpret_cast<NavigateBackFn>(
+          FindCallback(holder->ffi_table, kNavigateBackHash));
+      if (g_page->page_count > 0 && navigateBack != nullptr) {
+        navigateBack(g_page->pending_back_delta,
+                     g_page->pending_back_animated ? 1 : 0, 0);
+      }
+      g_page->pending_open_type = 0;
+    } else if (std::strcmp(kind, "notifySwitchTab") == 0) {
+      auto* switchTab = reinterpret_cast<SwitchTabFn>(
+          FindCallback(holder->ffi_table, kSwitchTabHash));
+      if (g_page->page_count > 0 && switchTab != nullptr) {
+        switchTab(g_page->pending_page_id, 0);
+      }
+      g_page->pending_open_type = 0;
+    } else if (std::strcmp(kind, "startRender") != 0) {
+      needs_flush = true;
+      if (IsStructuralOpKind(kind)) {
+        structural = true;
+      } else {
+        general_dirty = true;
+      }
+    }
+  }
+
+  if (g_page->force_rebuild) {
+    structural = true;
+    g_page->force_rebuild = false;
+  }
+  // A live batch often attaches early (the page shell) and then appends the
+  // list/content in the remaining thousands of ops.  MaterializeAttachedPage
+  // only sees the tree at the attach op, so flush the post-attach changes as
+  // well instead of skipping the update when a route was created.
+  if (needs_flush && g_page->page_count > 0) {
+    if (structural) {
+      ClearTransitions();
+    } else {
+      StartTransitions(g_page->root_id);
+    }
+    SchedulePendingAnimatedStyles(holder);
+    FlushAppServicePage(holder, structural);
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] live ops: %u ops (first=%d structural=%d "
+               "flush=%d route=%d pages=%d)\n",
+               static_cast<unsigned>(ops_member->value.GetArray().Size()),
+               first_batch ? 1 : 0, structural ? 1 : 0, needs_flush ? 1 : 0,
+               created_route ? 1 : 0, g_page->page_count);
+}
+
 // Synthetic keyboard input: append/delete text on the focused node and push
 // the change through the normal fine-grained update path.
 void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
@@ -10267,15 +10405,12 @@ fml::RefPtr<fml::TaskRunner> g_live_ui_runner;
 void ScheduleLiveOps(std::string payload, int attempt) {
   auto runner = UiTaskRunner();
   if (!runner) return;
+  std::fprintf(stderr,
+               "[skyline-runtime] live ops scheduled (attempt=%d, bytes=%zu)\n",
+               attempt, payload.size());
   runner->PostDelayedTask(
       [payload, attempt]() {
         DemoPageApiScope scope;
-        if (appservice::g_page != nullptr) {
-          std::fprintf(stderr,
-                       "[skyline-runtime] live page ignored: a page is already "
-                       "attached\n");
-          return;
-        }
         if (g_isolate == nullptr || g_fallback_holder.ffi_table == nullptr) {
           if (attempt < 20) {
             ScheduleLiveOps(payload, attempt + 1);
@@ -10285,7 +10420,9 @@ void ScheduleLiveOps(std::string payload, int attempt) {
           }
           return;
         }
-        appservice::ApplyOpsPage(&g_fallback_holder, payload.c_str());
+        // Batches share one persistent page: the bridge may flush element
+        // creation before the attach and deltas afterwards.
+        appservice::ApplyLiveOpsBatch(&g_fallback_holder, payload.c_str());
       },
       fml::TimeDelta::FromMilliseconds(500));
 }
