@@ -179,6 +179,17 @@ function writeQuadBmp(file) {
   fs.writeFileSync(file, Buffer.concat([header, pixels]));
 }
 
+// First usable TrueType font for the in-memory font tests.
+function systemFontPath() {
+  const candidates = [
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+    '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+    '/System/Library/Fonts/Supplemental/Arial.ttf',
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
 function recordRealOps(options = {}) {
   if (!fs.existsSync(recorder)) return null;
   const suffix = options.tapOption === undefined ? '' : `-tap-${options.tapOption}`;
@@ -371,15 +382,83 @@ test('appservice ops: @font-face drives the resource-loading channel', {
       logs,
       /LoadResourceAsync: fake-font\.bin -> .*fake-font\.bin \(ok, 15 bytes, id=\d+, notified=yes\)/,
     );
-    // The fake bytes are not a valid font, so Dart reports FontFaceLoadStatus.error
-    // (2) back through NotifyFontFaceLoad after the resource channel completed.
-    assert.match(logs, /NotifyFontFaceLoad: id=\d+ status=2/);
+    // In-memory font state: the family is pending while FontLoader runs, then
+    // removed; because the text references it, the runtime schedules a
+    // targeted text relayout instead of rebuilding the page.
+    assert.match(logs, /AddPendingFont: TestFont \(pending=1\)/);
+    assert.match(
+      logs,
+      /RemovePendingFont: TestFont \(pending=0, used=1, status=-1\)/,
+    );
+    // The fake bytes are not a valid font, so Dart reports FontFaceLoadStatus
+    // error (2) back through NotifyFontFaceLoad after the resource channel
+    // completed.
+    assert.match(
+      logs,
+      /NotifyFontFaceLoad: id=\d+ status=2 family=TestFont \(pending=0\)/,
+    );
+    assert.match(logs, /font relayout: TestFont \(1 text node\(s\)\)/);
   } finally {
     try {
       fs.rmSync(resourceRoot, { recursive: true, force: true });
     } catch {
       // Best effort.
     }
+  }
+});
+
+test('appservice ops: loaded fonts refresh pending text in place', {
+  skip: prerequisiteSkip() || systemFontPath() === null
+    ? 'no system TrueType font available' : false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-real-font-'));
+  fs.copyFileSync(systemFontPath(), path.join(dir, 'real.ttf'));
+  const ops = path.join(dir, 'real-font.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1,
+        css: '@font-face{font-family:RealFont;src:url(real.ttf);}' +
+          '.p{width:320px;height:240px;background:#FFFFFF;' +
+          'font-family:"RealFont", sans-serif;}' +
+          '.t{font-size:20px;color:#000000;}' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'addClass', id: 2, prefix: 'p', name: 1 },
+      { op: 'createElement', id: 3, tag: 'text', name: '' },
+      { op: 'addClass', id: 3, prefix: 't', name: 1 },
+      { op: 'setText', id: 3, text: 'Hello RealFont' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(ops, {
+      timeoutMs: 2500,
+      frames: 0,
+      env: { SKYLINE_RESOURCE_ROOT: dir },
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /appservice font face: RealFont -> real\.ttf/);
+    assert.match(logs,
+      /LoadResourceAsync: real\.ttf -> .*\(ok, \d+ bytes, id=\d+, notified=yes\)/);
+    assert.match(logs, /AddPendingFont: RealFont \(pending=1\)/);
+    assert.match(
+      logs,
+      /RemovePendingFont: RealFont \(pending=0, used=1, status=-1\)/,
+    );
+    assert.match(
+      logs,
+      /NotifyFontFaceLoad: id=\d+ status=\d+ family=RealFont \(pending=0\)/,
+    );
+    // The inherited font-family list reaches the text node, so the completed
+    // load re-applies exactly that text widget.
+    assert.match(logs, /font relayout: RealFont \(1 text node\(s\)\)/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

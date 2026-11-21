@@ -5,8 +5,8 @@
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
 > 核心验收：**22 / 22（100%）**
-> 长尾/外部阻塞：**11 / 12**
-> 全部任务：**33 / 34（97.1%）**
+> 长尾/外部阻塞：**12 / 12（100%）**
+> 全部任务：**34 / 34（100%）**
 >
 > 勾选项表示已在 Linux 回放运行时上实现并通过测试；标有 `blocked` 的任务
 > 依赖外部环境或私有引擎能力。
@@ -17,8 +17,8 @@
 | --- | ---: | ---: | ---: |
 | A. 原始阶段 3 验收项 | 8 | 8 | 100% |
 | B. 后续运行时增量 | 14 | 14 | 100% |
-| C. 长尾 / 外部阻塞 | 11 | 12 | 91.7% |
-| **合计** | **33** | **34** | **97.1%** |
+| C. 长尾 / 外部阻塞 | 12 | 12 | 100% |
+| **合计** | **34** | **34** | **100%** |
 
 ## A. 原始阶段 3 验收项（8 / 8）
 
@@ -64,7 +64,7 @@
 - [x] **B13** 资源路径缓存（`LoadResourceSync`/`Async`，≤4 MB）
 - [x] **B14** L5 夹具扩展（transform-origin/fixed-scroll/align-gap/flex-wrap/order/overflow）
 
-## C. 长尾 / 外部阻塞（11 / 12）
+## C. 长尾 / 外部阻塞（12 / 12）
 
 - [x] **C1** 官方 Windows appservice guest 的真实 L5 采集与像素对比
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
@@ -197,14 +197,27 @@
   - 官方 Windows 引擎忽略 origin z（同一 transform 下 z=0/60 帧完全相同），
     3D 投影本身也存在既有保真差异；L5 夹具 `appservice-transform-origin-z`
     记录为已知差异（失配率约 10%）。
-- [ ] **C12** `AddPendingFont` / `RemovePendingFont` 与内存字体状态语义
+- [x] **C12** `AddPendingFont` / `RemovePendingFont` 与内存字体状态语义
+  - 原生运行时维护内存字体状态：`g_pending_fonts`（加载中的 family）、
+    `g_font_callback_families`（LoadFontFace 回调 id → family）与
+    `g_font_status`（最近一次状态；-1 = loading）。
+  - `AddPendingFont` 登记 family 并标记 loading；`RemovePendingFont` 移除并检查
+    当前页面是否有文本引用该 family，若有则通过 UI runner 定位重排这些文本
+    （`TextApplyUpdate` + `MarkYGNodeNeedsLayout`），不重建页面、不重复触发
+    @font-face 加载。`NotifyFontFaceLoad` 以 family 维度记录最终状态并输出日志。
+  - 新增 CSS `font-family` 解析（含引号与逗号列表）与继承；由于 NewTextSpan
+    只有 `fontFamilyFallback`，CSS family 置于回退链最前，其后追加 CJK/系统
+    回退。`font-family` 变更触发重建，字体加载完成走定位重排。
+  - JSON 页面描述符的 text 节点支持 `fontFamily`。
+  - `test:ops` 新增真实系统字体加载 + 定位重排用例，并扩展伪字体用例覆盖
+    pending/relayout 状态（64 / 64）。
 
 ## 测试基线（x / y）
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **158 / 182** | 24 skipped，0 fail |
-| `npm run test:ops` | **63 / 63** | appservice 操作流回放 |
+| `npm test` | **159 / 183** | 24 skipped，0 fail |
+| `npm run test:ops` | **64 / 64** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

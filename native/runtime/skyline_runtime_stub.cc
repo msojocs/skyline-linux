@@ -1396,6 +1396,7 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
                              double lineHeight,
                              int textAlign,
                              int maxLines,
+                             const std::vector<std::string>& fontFamilies,
                              Dart_Handle* out_span = nullptr) {
   Dart_Handle text_handle = Dart_NewStringFromCString(value);
   Dart_Handle no_children = Dart_NewList(0);
@@ -1403,22 +1404,33 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
     return Dart_IsError(text_handle) ? text_handle : no_children;
   }
   // Public engines do not apply the private TextStyle flags, but they do honour
-  // the public `fontFamilyFallback` list.  Listing common CJK/system families
-  // keeps Chinese text from falling back to tofu when the host has them.
+  // the public `fontFamilyFallback` list.  The CSS families come first (the
+  // first is the preferred family); common CJK/system families follow so
+  // Chinese text does not fall back to tofu when the host has them.
   Dart_Handle fallback = Dart_Null();
   {
     static const char* kFallbackFamilies[] = {"Noto Sans CJK SC",
                                               "Noto Sans CJK",
                                               "Noto Sans",
                                               "DejaVu Sans"};
-    Dart_Handle list = Dart_NewList(
-        static_cast<intptr_t>(sizeof(kFallbackFamilies) /
-                              sizeof(kFallbackFamilies[0])));
+    std::vector<std::string> families;
+    for (const std::string& family : fontFamilies) {
+      if (family.empty()) continue;
+      if (std::find(families.begin(), families.end(), family) ==
+          families.end()) {
+        families.push_back(family);
+      }
+    }
+    for (const char* family : kFallbackFamilies) {
+      if (std::find(families.begin(), families.end(), family) ==
+          families.end()) {
+        families.push_back(family);
+      }
+    }
+    Dart_Handle list = Dart_NewList(static_cast<intptr_t>(families.size()));
     if (!Dart_IsError(list)) {
-      for (size_t i = 0; i < sizeof(kFallbackFamilies) /
-                                 sizeof(kFallbackFamilies[0]);
-           i++) {
-        Dart_Handle family = Dart_NewStringFromCString(kFallbackFamilies[i]);
+      for (size_t i = 0; i < families.size(); i++) {
+        Dart_Handle family = Dart_NewStringFromCString(families[i].c_str());
         if (!Dart_IsError(family)) {
           Dart_ListSetAt(list, static_cast<intptr_t>(i), family);
         }
@@ -1595,6 +1607,10 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
       return BuiltJsonNode();
     }
   } else if (std::strcmp(type, "text") == 0) {
+    std::vector<std::string> families;
+    std::string family = MemberString(entry, "fontFamily", "");
+    if (family.empty()) family = MemberString(entry, "font-family", "");
+    if (!family.empty()) families.push_back(family);
     inner = CreateTextWidget(
         newText, newTextSpan, address, MemberString(entry, "text", "Text"),
         MemberNumber(entry, "fontSize", 20.0f),
@@ -1604,7 +1620,7 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
         MemberNumber(entry, "letterSpacing", std::nan("")),
         MemberNumber(entry, "lineHeight", std::nan("")),
         static_cast<int>(MemberNumber(entry, "textAlign", 0.0f)),
-        static_cast<int>(MemberNumber(entry, "maxLines", 0.0f)));
+        static_cast<int>(MemberNumber(entry, "maxLines", 0.0f)), families);
     if (Dart_IsError(inner)) {
       std::fprintf(stderr, "[skyline-runtime] json page: text widget failed\n");
       return BuiltJsonNode();
@@ -2249,6 +2265,10 @@ struct AppStyle {
   uint32_t color = 0xFF000000u;
   int font_weight = 3;  // FontWeight.w400
   int font_style = 0;   // normal
+  // CSS `font-family` list (first entry is the preferred family).  The public
+  // NewTextSpan surface has no primary family parameter, so these are placed at
+  // the front of `fontFamilyFallback`.
+  std::vector<std::string> font_families;
   double line_height = -1.0;         // absolute px, -1 = use factor
   double line_height_factor = 1.2;   // multiplier
   double letter_spacing = std::nan("");
@@ -2377,6 +2397,14 @@ std::unordered_map<intptr_t, AppNode*> g_image_nodes;
 
 // Nodes whose decorated box paints a CSS background-image.
 std::unordered_map<intptr_t, AppNode*> g_background_image_nodes;
+
+// In-memory font state.  `g_pending_fonts` tracks families registered by the
+// Dart FontFace loader while their @font-face request is in flight; the other
+// maps connect LoadFontFace callback ids to families and record the last
+// observed status (-1 while loading).
+std::unordered_set<std::string> g_pending_fonts;
+std::unordered_map<uint32_t, std::string> g_font_callback_families;
+std::unordered_map<std::string, int> g_font_status;
 
 // Native views (`<texture>`) keyed by the JS-visible `viewId`.  Pointer events
 // arriving from Dart via `HandleNativeViewPointerEvent` carry that id.
@@ -3988,6 +4016,22 @@ void ParseBackgroundShorthandSize(AppStyle* style, const std::string& raw) {
   ParseBackgroundSize(style, joined);
 }
 
+// Parses a CSS `font-family` list.  Quoted names are unquoted; the order is
+// preserved because it becomes the front of the text fallback chain.
+std::vector<std::string> ParseFontFamilies(const std::string& raw) {
+  std::vector<std::string> out;
+  for (const std::string& layer : SplitTopLevelComma(raw)) {
+    std::string family = TrimAscii(layer);
+    if (family.size() >= 2 &&
+        (family.front() == '"' || family.front() == '\'') &&
+        family.back() == family.front()) {
+      family = family.substr(1, family.size() - 2);
+    }
+    if (!family.empty()) out.push_back(family);
+  }
+  return out;
+}
+
 void ApplyDeclaration(AppStyle* style,
                       const std::string& raw_key,
                       const std::string& raw_value) {
@@ -4272,6 +4316,8 @@ void ApplyDeclaration(AppStyle* style,
     }
   } else if (key == "font-style") {
     style->font_style = value == "italic" ? 1 : 0;
+  } else if (key == "font-family") {
+    style->font_families = ParseFontFamilies(value);
   } else if (key == "line-height") {
     if (value == "normal") {
       style->line_height = -1.0;
@@ -4606,6 +4652,7 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
     style.line_height_factor = parent->line_height_factor;
     style.letter_spacing = parent->letter_spacing;
     style.text_align = parent->text_align;
+    style.font_families = parent->font_families;
   }
 
   if (g_page != nullptr) {
@@ -6952,7 +6999,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         style.font_weight, style.font_style,
         std::isnan(style.letter_spacing) ? std::nan("") : style.letter_spacing,
         line_height, style.text_align, static_cast<int>(style.max_lines),
-        &span_handle);
+        style.font_families, &span_handle);
     if (Dart_IsError(inner)) {
       ReportDartError("appservice text widget", inner);
       return Dart_Null();
@@ -8908,6 +8955,9 @@ bool StyleNeedsRebuild(const AppNode* node, const AppStyle& before,
   // A different background image URL (or gaining/losing one) needs a fresh
   // decorated-box registration/load; size/position changes repaint in place.
   if (before.background_image != after.background_image) return true;
+  // The text widget's fallback chain is fixed at creation time, so a font
+  // family change needs a rebuild (font loads themselves use targeted relayout).
+  if (before.font_families != after.font_families) return true;
   // Presence changes can be handled in place once the corresponding widget
   // handles already exist (notably during an opacity/background transition).
   if (node->decorated_box_p == nullptr &&
@@ -9947,7 +9997,11 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
       Dart_ListSetAt(urls, 0, url);
       std::fprintf(stderr, "[skyline-runtime] appservice font face: %s -> %s\n",
                    font.family.c_str(), font.url.c_str());
-      load_font_face(family, urls, 1000, ++font_callback_id);
+      const int32_t callback_id = ++font_callback_id;
+      g_font_callback_families[static_cast<uint32_t>(callback_id)] =
+          font.family;
+      g_font_status[font.family] = -1;
+      load_font_face(family, urls, 1000, callback_id);
     }
   }
 
@@ -10598,12 +10652,122 @@ SKYLINE_EXPORT extern "C" void LoadResourceAsync(void* runtime_ptr,
   });
 }
 
+// ---------------------------------------------------------------------------
+// In-memory font state
+//
+// `FontFace.load()` (package:skyline/utils/font_face.dart) registers families
+// with `AddPendingFont` while the @font-face request is in flight and calls
+// `RemovePendingFont` once FontLoader resolves.  Loading proceeds with the
+// fallback chain in the meantime; when the family stops being pending we
+// re-apply the text widgets that reference it so the newly registered font is
+// picked up without rebuilding (and re-loading) the whole page.
+// ---------------------------------------------------------------------------
+
+bool TextUsesFontFamily(const appservice::AppNode* node,
+                        const std::string& family) {
+  if (node == nullptr) return false;
+  for (const std::string& candidate : node->style.font_families) {
+    if (candidate == family) return true;
+  }
+  return false;
+}
+
+bool PageUsesFontFamily(const std::string& family) {
+  if (appservice::g_page == nullptr) return false;
+  for (const auto& entry : appservice::g_page->nodes) {
+    if (TextUsesFontFamily(entry.second, family)) return true;
+  }
+  return false;
+}
+
+void RelayoutTextForFont(RuntimeHolder* holder, const std::string& family) {
+  if (holder == nullptr || appservice::g_page == nullptr) return;
+  auto* apply = reinterpret_cast<TextApplyUpdateFn>(
+      FindCallback(holder->ffi_table, kTextApplyUpdateHash));
+  auto* mark_needs_layout = reinterpret_cast<MarkYGNodeNeedsLayoutFn>(
+      FindCallback(holder->ffi_table, kMarkYGNodeNeedsLayoutHash));
+  size_t relaid_out = 0;
+  for (const auto& entry : appservice::g_page->nodes) {
+    appservice::AppNode* node = entry.second;
+    if (node == nullptr || node->tag != "text" ||
+        !TextUsesFontFamily(node, family)) {
+      continue;
+    }
+    if (apply != nullptr && node->text_widget_p != nullptr) {
+      apply(Dart_HandleFromPersistent(node->text_widget_p), 0);
+      relaid_out++;
+    }
+    if (mark_needs_layout != nullptr && node->yoga_node_p != nullptr) {
+      mark_needs_layout(Dart_HandleFromPersistent(node->yoga_node_p));
+    }
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] font relayout: %s (%zu text node(s))\n",
+               family.c_str(), relaid_out);
+}
+
+SKYLINE_EXPORT extern "C" void AddPendingFont(void* /*runtime_ptr*/,
+                                              Dart_Handle family_handle) {
+  const char* text = nullptr;
+  if (Dart_IsError(Dart_StringToCString(family_handle, &text)) ||
+      text == nullptr) {
+    return;
+  }
+  const std::string family(text);
+  appservice::g_pending_fonts.insert(family);
+  appservice::g_font_status[family] = -1;
+  std::fprintf(stderr,
+               "[skyline-runtime] AddPendingFont: %s (pending=%zu)\n",
+               family.c_str(), appservice::g_pending_fonts.size());
+}
+
+SKYLINE_EXPORT extern "C" void RemovePendingFont(void* /*runtime_ptr*/,
+                                                 Dart_Handle family_handle) {
+  const char* text = nullptr;
+  if (Dart_IsError(Dart_StringToCString(family_handle, &text)) ||
+      text == nullptr) {
+    return;
+  }
+  const std::string family(text);
+  appservice::g_pending_fonts.erase(family);
+  const bool used = PageUsesFontFamily(family);
+  const auto status_it = appservice::g_font_status.find(family);
+  const int last_status =
+      status_it != appservice::g_font_status.end() ? status_it->second : -2;
+  std::fprintf(stderr,
+               "[skyline-runtime] RemovePendingFont: %s (pending=%zu, used=%d, "
+               "status=%d)\n",
+               family.c_str(), appservice::g_pending_fonts.size(),
+               used ? 1 : 0, last_status);
+  if (!used || appservice::g_page == nullptr ||
+      appservice::g_page->holder == nullptr) {
+    return;
+  }
+  RuntimeHolder* holder = appservice::g_page->holder;
+  auto runner = UiTaskRunner();
+  if (!runner) return;
+  runner->PostTask([holder, family]() {
+    DemoPageApiScope scope;
+    RelayoutTextForFont(holder, family);
+  });
+}
+
 SKYLINE_EXPORT extern "C" void NotifyFontFaceLoad(void* /*runtime_ptr*/,
                                                   int32_t callback_id,
                                                   int32_t status) {
+  std::string family;
+  const auto found =
+      appservice::g_font_callback_families.find(callback_id);
+  if (found != appservice::g_font_callback_families.end()) {
+    family = found->second;
+    appservice::g_font_status[family] = status;
+    appservice::g_font_callback_families.erase(found);
+  }
   std::fprintf(stderr,
-               "[skyline-runtime] NotifyFontFaceLoad: id=%d status=%d\n",
-               callback_id, status);
+               "[skyline-runtime] NotifyFontFaceLoad: id=%d status=%d family=%s "
+               "(pending=%zu)\n",
+               callback_id, status, family.c_str(),
+               appservice::g_pending_fonts.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -10731,13 +10895,15 @@ SKYLINE_EXPORT extern "C" void HandleGestureEvent(void* /*runtime_ptr*/,
 #define SKYLINE_VOID_STUB(name) SKYLINE_EXPORT extern "C" void name(...) {}
 
 // clang-format off
-SKYLINE_VOID_STUB(AddPendingFont)
 SKYLINE_VOID_STUB(BorderPaint)
 SKYLINE_VOID_STUB(DidChangeAppLifecycleState)
 SKYLINE_VOID_STUB(DidHaveMemoryPressure)
 SKYLINE_VOID_STUB(DoIDKeyReport)
 SKYLINE_VOID_STUB(DoKVReport)
 SKYLINE_VOID_STUB(EvaluateJavaScript)
+#ifndef SKYLINE_EMBEDDED
+SKYLINE_VOID_STUB(AddPendingFont)
+#endif
 #ifndef SKYLINE_EMBEDDED
 SKYLINE_VOID_STUB(ForwardHttpGet)
 #endif
@@ -10759,7 +10925,9 @@ SKYLINE_VOID_STUB(OnAccessibilityFeaturesChanged)
 SKYLINE_VOID_STUB(OnLayoutFinished)
 SKYLINE_VOID_STUB(OnNavigateBackIntercept)
 SKYLINE_VOID_STUB(OnViewportChanged)
+#ifndef SKYLINE_EMBEDDED
 SKYLINE_VOID_STUB(RemovePendingFont)
+#endif
 SKYLINE_VOID_STUB(ReportFrameTiming)
 SKYLINE_VOID_STUB(ReportPerformance)
 SKYLINE_VOID_STUB(SceneToImage)

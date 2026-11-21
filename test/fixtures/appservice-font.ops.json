@@ -3,7 +3,7 @@
     {
       "op": "appendStyleSheet",
       "index": 1,
-      "css": "@font-face { font-family: TestFont; src: url(fake-font.bin); } .t { font-size: 20px; }"
+      "css": "@font-face { font-family: TestFont; src: url(fake-font.bin); } .t { font-size: 20px; font-family: TestFont, sans-serif; }"
     },
     { "op": "createElement", "id": 2, "tag": "empty", "name": "page" },
     { "op": "createElement", "id": 3, "tag": "empty", "name": "view" },

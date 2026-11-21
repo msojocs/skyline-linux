@@ -169,11 +169,13 @@ CSS `@font-face` 会触发真实的 `package:skyline` 字体资源链路：
 @font-face { font-family: TestFont; src: url(fake-font.bin); }
   -> appservice font face
   -> LoadFontFace 回调 (Dart: font_face.dart)
+  -> AddPendingFont: family (native 登记 pending 字体)
   -> fetchFont -> ResourceLoader.loadResourceAsync
   -> LoadResourceAsync (native)
   -> 读取文件 -> NotifyResourceLoad 回调 (UI task runner)
   -> Dart Completer -> Flutter FontLoader
-  -> NotifyFontFaceLoad (native, 状态回报)
+  -> RemovePendingFont: family (native 移除；引用该 family 的文本调度定位重排)
+  -> NotifyFontFaceLoad: family + status (native 记忆最终状态)
 ```
 
 路径解析：
@@ -192,8 +194,11 @@ CSS `@font-face` 会触发真实的 `package:skyline` 字体资源链路：
 
 ```
 appservice font face: TestFont -> fake-font.bin
+AddPendingFont: TestFont (pending=1)
 LoadResourceAsync: fake-font.bin -> .../fake-font.bin (ok, 15 bytes, id=1, notified=yes)
-NotifyFontFaceLoad: id=1 status=2      # 假字节 -> FontFaceLoadStatus.error
+RemovePendingFont: TestFont (pending=0, used=1, status=-1)
+NotifyFontFaceLoad: id=1 status=2 family=TestFont (pending=0)
+font relayout: TestFont (1 text node(s))
 ```
 
 图片资源不再依赖占位实现：`name` 为 `image`/`wx-image`/`cover-image` 的节点
@@ -404,8 +409,9 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
   `at <position>`；引擎径向着色器使用单半径，`ellipse` 与圆共用同一半径规则）
   与 `conic-gradient`（`from <angle>`、`at <position>`）。
   颜色停靠点支持百分比、px（径向）与角度（锥形），每个颜色可带 0/1/2 个位置。
-- 文本：`font-size`、`font-weight`、`font-style`、`line-height`（px 或倍数）、
-  `letter-spacing`、`text-align`、`-webkit-line-clamp`
+- 文本：`font-family`（引号/逗号列表，可继承）、`font-size`、`font-weight`、
+  `font-style`、`line-height`（px 或倍数）、`letter-spacing`、`text-align`、
+  `-webkit-line-clamp`
 
 选择器支持元素名、`.class`、`#id`、组合（如 `wx-button.plain`）与逗号列表；
 按 specificity + 源顺序级联，内联 `style` 最后覆盖。字号/颜色/行高/字重等文本
@@ -480,7 +486,10 @@ npm run test:ops
 - `host pointer script reaches the Skyline hit test path`：`--pointer-script`
   的 embedder 指针事件命中 YGNode 树。
 - `font-face resource channel`：`@font-face` -> `LoadFontFace` ->
-  `LoadResourceAsync` -> `NotifyResourceLoad` -> `NotifyFontFaceLoad`。
+  `LoadResourceAsync` -> `AddPendingFont` -> `RemovePendingFont` ->
+  `NotifyFontFaceLoad`；引用该 family 的文本在加载完成后定位重排。
+- `loaded fonts refresh pending text in place`：加载宿主真实系统字体，断言
+  pending 登记、family 状态回报与 `font relayout: <family> (1 text node(s))`。
 - `list-builder incremental mount`：100 个声明 child 只捕获 20 个 item，初始
   仅 mount 可视的 5 个（`NewListBuilder` + `ListBuilderAppendChild`）。
 - `route stack push/pop`：`notifyNavigateTo` + attach 推入页 B，
@@ -568,8 +577,13 @@ npm run test:ops
   状态；`test:ops` 覆盖指针转发与释放。
 - `LoadResourceSync`/`LoadResourceAsync` 共用按解析后路径的资源缓存（≤4 MB，
   日志带 `, cache`）；`data:` 内存字体由 Dart `fetchFont` 直接解码，native
-  只需完成普通文件/网络资源通道。`AddPendingFont`/`RemovePendingFont` 仍为
-  no-op（字体加载状态由 Dart 侧 FontFace 管理）。
+  只需完成普通文件/网络资源通道。
+- 内存字体状态：`AddPendingFont` 把 family 登记为 pending，`RemovePendingFont`
+  移除；若当前页面有文本引用该 family，则通过 UI runner 对该文本执行
+  `TextApplyUpdate` + `MarkYGNodeNeedsLayout` 定位重排（不重建页面，避免重复
+  触发 @font-face 加载）。`NotifyFontFaceLoad` 按 family 记录最终状态。
+  CSS `font-family` 支持引号/逗号列表并继承，family 置于 `fontFamilyFallback`
+  最前（NewTextSpan 无独立主字体参数）。
 - 文本 span 通过 `fontFamilyFallback` 传入常见 CJK/系统字体；宿主无 CJK 字体时
   仍会显示 tofu。私有 `backgroundUseLineMetrics`/`useCoreTextWordBreak` 已按官方
   位布局编码并由 native 文本实现解码（CSS line-height 仍可经 span height 生效）；
