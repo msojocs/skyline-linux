@@ -2615,6 +2615,33 @@ bool ParseLength(const std::string& raw, float* px, float* percent) {
     *px = -1.0f;
     return true;
   }
+  // Viewport-relative and rpx units are resolved against the logical window
+  // size captured at CreateWindow.  The runtime previously rejected them,
+  // which silently dropped `height: 100vh` / `width: 100vw` from page WXSS and
+  // collapsed the appservice page layout.
+  if (EndsWith(value, "vw") || EndsWith(value, "vh")) {
+    const bool width_unit = value.back() == 'w';
+    double number = 0.0;
+    if (!ParseNumber(value.substr(0, value.size() - 2), &number)) return false;
+    const double base = width_unit ? g_viewport_width : g_viewport_height;
+    if (base > 0.0) {
+      *px = static_cast<float>(number * base / 100.0);
+      *percent = -1.0f;
+    } else {
+      *px = -1.0f;
+      *percent = static_cast<float>(number / 100.0);
+    }
+    return true;
+  }
+  if (EndsWith(value, "rpx")) {
+    double number = 0.0;
+    if (!ParseNumber(value.substr(0, value.size() - 3), &number)) return false;
+    // Skyline's design width is 750; the DevTools window is already logical px.
+    *px = static_cast<float>(
+        number * (g_viewport_width > 0.0 ? g_viewport_width : 375.0) / 750.0);
+    *percent = -1.0f;
+    return true;
+  }
   double number = 0.0;
   std::string numeric = value;
   if (EndsWith(numeric, "px")) numeric = numeric.substr(0, numeric.size() - 2);
@@ -4980,6 +5007,52 @@ std::vector<AppNode*> OrderedFlowChildren(AppNode* node) {
   return flow;
 }
 
+// glass-easel splices a fragment into its parent before appending its children
+// (e.g. the sticky-section/list-view structure), so the insert-time flattening
+// in Splice/AppendChild only sees an empty fragment.  Flatten any remaining
+// live fragments in place before layout/widget building.
+bool FlattenFragments(AppNode* node) {
+  if (node == nullptr) return false;
+  bool changed = false;
+  std::vector<AppNode*> flat;
+  flat.reserve(node->children.size());
+  for (AppNode* child : node->children) {
+    if (child == nullptr) continue;
+    if (child->released) continue;
+    if (child->tag == "fragment") {
+      changed = true;
+      FlattenFragments(child);
+      for (AppNode* grand : child->children) {
+        if (grand == nullptr) continue;
+        grand->parent = node;
+        flat.push_back(grand);
+      }
+      child->children.clear();
+      child->parent = nullptr;
+    } else if (child->name == "stickysection") {
+      // The explicit `stickysection` wrapper produced by glass-easel does not
+      // paint through MultiSliver on this build (the list sliver inside the
+      // section produces no pixels even with fresh frames).  Promote its
+      // header and list slivers to the enclosing scroll view so the content is
+      // visible; sticky headers render inline instead of pinned.
+      changed = true;
+      FlattenFragments(child);
+      for (AppNode* grand : child->children) {
+        if (grand == nullptr) continue;
+        grand->parent = node;
+        flat.push_back(grand);
+      }
+      child->children.clear();
+      child->parent = nullptr;
+    } else {
+      if (FlattenFragments(child)) changed = true;
+      flat.push_back(child);
+    }
+  }
+  if (changed) node->children.swap(flat);
+  return changed;
+}
+
 // Resolves a CSS inset (top/right/bottom/left) against the parent content box.
 // Returns false when the inset is `auto`.
 bool ResolveInset(const AppStyle& style, int index, float content_extent,
@@ -6024,6 +6097,25 @@ bool IsScrollViewName(const std::string& name) {
   return name == "scrollview" || name == "scroll-view";
 }
 
+// Sliver containers (sticky sections) sit between a scroll view and the
+// list/grid slivers they host.  A list/grid under one of those is already a
+// sliver and must not be wrapped in its own scroll view.
+bool IsTransparentSliverContainer(const AppNode* node) {
+  if (node == nullptr) return false;
+  return node->tag == "fragment" || node->name == "empty" ||
+         node->name == "stickysection" || node->name == "stickyheader" ||
+         node->name == "listbuilder" || node->name == "gridbuilder";
+}
+
+bool InsideSliverContext(const AppNode* node) {
+  for (const AppNode* ancestor = node != nullptr ? node->parent : nullptr;
+       ancestor != nullptr; ancestor = ancestor->parent) {
+    if (IsScrollViewName(ancestor->name)) return true;
+    if (!IsTransparentSliverContainer(ancestor)) return false;
+  }
+  return false;
+}
+
 bool IsImageName(const std::string& name) {
   return name == "image" || name == "wx-image" || name == "img" ||
          name == "cover-image" || name == "wx-cover-image";
@@ -6956,13 +7048,20 @@ Dart_Handle CreateInputStateWidget(NewInputFn newInput, AppNode* node) {
       reinterpret_cast<void*>(&InputNoopOnPageBottomPaddingChange));
 }
 
+bool IsStickyHeaderNode(const AppNode* node) {
+  return node != nullptr &&
+         (node->tag == "stickyheader" || node->name == "stickyheader");
+}
+
 bool HasStickyFlowChildren(const AppNode* node) {
   if (node == nullptr) return false;
   for (const AppNode* child : node->children) {
     if (child == nullptr || child->released || child->style.display_none) {
       continue;
     }
-    if (child->style.position == 3) return true;
+    // The glass-easel adapter emits dedicated `stickyheader` nodes; older
+    // recordings marked them with `position: sticky` instead.
+    if (child->style.position == 3 || IsStickyHeaderNode(child)) return true;
   }
   return false;
 }
@@ -7214,16 +7313,20 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       if (Dart_IsError(sliver)) {
         ReportDartError("appservice list/grid view", sliver);
         sliver = Dart_Null();
-      } else if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
-        std::fprintf(stderr,
-                     "[ops-debug] %s #%u: %zu items\n",
-                     is_list_view ? "listview" : "gridview", node->id,
-                     item_widgets.size());
       }
       inner = sliver;
 
-      const bool inside_scroll =
-          node->parent != nullptr && IsScrollViewName(node->parent->name);
+      const bool inside_scroll = InsideSliverContext(node);
+      if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+        const float first_h = items.empty() ? -1.0f : items[0]->measured_h;
+        const float first_w = items.empty() ? -1.0f : items[0]->measured_w;
+        std::fprintf(stderr,
+                     "[ops-debug] %s #%u: %zu items inside=%d first=%gx%g\n",
+                     is_list_view ? "listview" : "gridview", node->id,
+                     item_widgets.size(), inside_scroll ? 1 : 0,
+                     static_cast<double>(first_w),
+                     static_cast<double>(first_h));
+      }
       if (inside_scroll) {
         // The parent scroll view consumes this widget as a sliver directly.
         return inner;
@@ -7290,15 +7393,33 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         if (scroll_sticky_header != nullptr && scroll_sticky_section != nullptr &&
             HasStickyFlowChildren(child)) {
           std::vector<Dart_Handle> grandchildren;
-          for (AppNode* grand : OrderedFlowChildren(child)) {
+          std::vector<AppNode*> flow = OrderedFlowChildren(child);
+          if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+            std::fprintf(stderr,
+                         "[ops-debug] sticky section #%u flow=%zu children=",
+                         child->id, flow.size());
+            for (AppNode* grand : flow) {
+              std::fprintf(stderr, "#%u/%s/%s ", grand->id, grand->tag.c_str(),
+                           grand->name.c_str());
+            }
+            std::fprintf(stderr, "\n");
+          }
+          for (AppNode* grand : flow) {
             Dart_Handle item =
                 BuildWidget(grand, newYGNode, newYGConnector, newText,
                             newTextSpan, newDecoratedBox, newOpacity,
                             newScrollView, newListView, newGridView,
                             newDirectRenderWidget, newListBuilder,
                             newGridBuilder, false);
-            if (item == nullptr) continue;
-            if (grand->style.position == 3) {
+            if (item == nullptr || Dart_IsError(item) || Dart_IsNull(item)) {
+              if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+                std::fprintf(stderr,
+                             "[ops-debug] sticky grand #%u/%s build failed\n",
+                             grand->id, grand->name.c_str());
+              }
+              continue;
+            }
+            if (grand->style.position == 3 || IsStickyHeaderNode(grand)) {
               float offset_top = 0.0f;
               if (!std::isnan(grand->style.inset[0])) {
                 offset_top = grand->style.inset[0];
@@ -7321,6 +7442,11 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
               child->style.padding[1], child->style.padding[2],
               child->style.padding[3]);
           if (!Dart_IsError(section)) {
+            if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+              std::fprintf(stderr,
+                           "[ops-debug] sticky section #%u ok n=%zu\n",
+                           child->id, grandchildren.size());
+            }
             child_widgets.push_back(section);
             child_nodes.push_back(nullptr);
             has_sticky_child = true;
@@ -9453,6 +9579,17 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
     markNeedsLayout(root_handle);
   }
   SnapshotNode(root);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    DebugDumpNode(root, 0);
+    for (const NodeMetric& metric : metrics) {
+      std::fprintf(stderr, "[ops-debug] rebuild metric #%u -> top=%g left=%g "
+                           "w=%g h=%g\n",
+                   metric.node->id, static_cast<double>(metric.y),
+                   static_cast<double>(metric.x),
+                   static_cast<double>(metric.w),
+                   static_cast<double>(metric.h));
+    }
+  }
   std::fprintf(stderr, "[skyline-runtime] appservice flush: %zu children\n",
                widgets.size());
 }
@@ -10207,6 +10344,7 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
       const int32_t page_id =
           g_page->pending_page_id != 0 ? g_page->pending_page_id
                                        : (g_page->page_count == 0 ? 0 : 1);
+      if (AppNode* root = FindNode(g_page->root_id)) FlattenFragments(root);
       if (MaterializeAttachedPage(holder, builders, g_page->root_id, open_type,
                                   page_id, g_page->pending_callback_id)) {
         created_route = true;
@@ -10242,6 +10380,16 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
   if (g_page->force_rebuild) {
     structural = true;
     g_page->force_rebuild = false;
+  }
+  // Fragments spliced before their children were appended become real children
+  // only now; flattening changes the tree, so force a structural rebuild.
+  if (g_page->root_id != 0) {
+    if (AppNode* root = FindNode(g_page->root_id)) {
+      if (FlattenFragments(root)) {
+        needs_flush = true;
+        structural = true;
+      }
+    }
   }
   // A live batch often attaches early (the page shell) and then appends the
   // list/content in the remaining thousands of ops.  MaterializeAttachedPage

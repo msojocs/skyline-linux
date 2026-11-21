@@ -414,6 +414,11 @@
   const opsByWindow = new Map();
   const jsValues = new Map();
   let nextJsValueId = 0;
+  // compileStyleSheet(path) -> id; appendCompiledStyleSheet(scope, id) replays
+  // the raw WXSS through the native CSS parser when the resource loader can
+  // return text.
+  const compiledStyleSheets = new Map();
+  let nextStyleSheetId = 0;
 
   function bridgeOps(windowId) {
     const key = windowId === undefined || windowId === null ? 0 : windowId;
@@ -487,6 +492,76 @@
       seen.add(value);
       return value;
     });
+  }
+
+  function toText(data) {
+    if (data === null || data === undefined) return null;
+    if (typeof data === 'string') return data;
+    try {
+      let bytes = null;
+      if (data instanceof ArrayBuffer) {
+        bytes = new Uint8Array(data);
+      } else if (ArrayBuffer.isView(data)) {
+        bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      }
+      if (!bytes) return null;
+      return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function looksLikeCss(text) {
+    if (typeof text !== 'string' || text.length === 0) return false;
+    // Reject binary blobs: require mostly printable text and CSS punctuation.
+    let printable = 0;
+    for (let i = 0; i < text.length && i < 512; i += 1) {
+      const code = text.charCodeAt(i);
+      if (code === 9 || code === 10 || code === 13 || (code >= 32 && code < 127) ||
+          code > 159) {
+        printable += 1;
+      }
+    }
+    if (printable < Math.min(text.length, 512) * 0.95) return false;
+    return text.indexOf('{') >= 0 && (text.indexOf(':') >= 0 || text.indexOf(';') >= 0);
+  }
+
+  function describeData(data, text) {
+    if (data === null || data === undefined) return 'null';
+    const length = typeof data.byteLength === 'number'
+      ? data.byteLength
+      : (typeof data.length === 'number' ? data.length : -1);
+    const head = typeof text === 'string' ? text.slice(0, 120).replace(/\s+/g, ' ') : '';
+    return `len=${length} text=${looksLikeCss(text) ? 'css' : 'no'} head="${head}"`;
+  }
+
+  // The DevTools appservice exposes the compiled WXSS as base64 text at
+  // `/appservice/__skyline__/<path>.wxss` (the base `wxlibfile://` library
+  // stylesheets are not served there).  Use the appservice's own XHR so this
+  // works in every frame of the appservice webview.
+  function loadStyleSheetText(path) {
+    if (typeof path !== 'string' || path.startsWith('wxlibfile://')) return null;
+    try {
+      const pageGlobal = (typeof window !== 'undefined' &&
+        (window.__global || window.__global__)) || null;
+      const Xhr = pageGlobal && pageGlobal.XMLHttpRequest;
+      if (typeof Xhr !== 'function') return null;
+      const xhr = new Xhr();
+      xhr.open('GET', `/appservice/__skyline__/${path}.wxss`, false);
+      xhr.send(null);
+      if (xhr.status !== 200 || !xhr.response) return null;
+      const atobFn = (pageGlobal && pageGlobal.atob) ||
+        (typeof atob === 'function' ? atob : null);
+      if (typeof atobFn !== 'function') return null;
+      const binary = atobFn(xhr.response);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    } catch (_error) {
+      return null;
+    }
   }
 
   function autoStub(target) {
@@ -788,8 +863,15 @@
       }
     }
     appendCompiledStyleSheet(scopeId, compiled) {
+      const css = compiledStyleSheets.get(compiled);
       if (typeof native.log === 'function') {
-        native.log(`compiledStyleSheet scope=${scopeId} size=${compiled && compiled.byteLength !== undefined ? compiled.byteLength : typeof compiled}`);
+        native.log(`compiledStyleSheet scope=${scopeId} id=${compiled} ` +
+          `css=${css ? css.length : 'none'}`);
+      }
+      if (css) {
+        // The native replay consumes plain CSS; `index` is currently unused by
+        // the runtime but kept for the recorded fixture schema.
+        this.ops.push({ op: 'appendStyleSheet', index: scopeId, css });
       }
     }
     appendCompiledStyleSheets(list) {
@@ -904,6 +986,33 @@
     },
     getJsValueById(id) { return jsValues.get(id); },
     unRegisterJsValue(id) { jsValues.delete(id); },
+    // The Skyline style runtime asks the native runtime to compile a WXSS
+    // resource and returns an opaque handle.  We load the resource through the
+    // DevTools' registered loader and keep the text so appendCompiledStyleSheet
+    // can replay it through the native CSS parser.
+    compileStyleSheet(path, groupId, prefix) {
+      const id = ++nextStyleSheetId;
+      let data = null;
+      let error = null;
+      if (typeof shellCallbacks.setLoadResourceCallback === 'function') {
+        try {
+          data = shellCallbacks.setLoadResourceCallback({ path });
+        } catch (loadError) {
+          error = loadError;
+        }
+      }
+      let text = toText(data);
+      if (!looksLikeCss(text)) {
+        const fetched = loadStyleSheetText(path);
+        if (looksLikeCss(fetched)) text = fetched;
+      }
+      if (looksLikeCss(text)) compiledStyleSheets.set(id, text);
+      if (typeof native.log === 'function') {
+        native.log(`compileStyleSheet path=${path} group=${groupId} prefix=${prefix} ` +
+          `id=${id} ${error ? 'error=' + error.message : describeData(text, text)}`);
+      }
+      return id;
+    },
     registerEventCallback() {},
     registerAnimationCallback() {},
     registerTouchCallback() {},
