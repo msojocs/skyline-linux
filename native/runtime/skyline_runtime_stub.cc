@@ -2532,6 +2532,8 @@ struct OpPage {
   uint8_t pending_open_type = 0;
   int32_t pending_page_id = 0;
   int32_t pending_callback_id = 0;
+  // Root id that was active before the current `attach` op replaced root_id.
+  uint32_t attach_previous_root_id = 0;
   int pending_back_delta = 1;
   bool pending_back_animated = true;
   int page_count = 0;
@@ -2542,6 +2544,17 @@ struct OpPage {
   // Attached page identity, used to push incremental updates.
   Dart_PersistentHandle root_node = nullptr;
   Dart_PersistentHandle root_connector = nullptr;
+  // Previously attached pages, most recent last.  Skyline keeps covered pages
+  // alive while `navigateTo` pushes a new route; `navigateBack` restores the
+  // covered page's root/connector so rebuilds target the route that becomes
+  // visible again (without this the top page's connector is reused and the
+  // revealed page stays blank).
+  struct PageEntry {
+    uint32_t root_id = 0;
+    Dart_PersistentHandle root_node = nullptr;
+    Dart_PersistentHandle root_connector = nullptr;
+  };
+  std::vector<PageEntry> page_stack;
   RuntimeHolder* holder = nullptr;
 };
 
@@ -2557,6 +2570,9 @@ struct NodeRectSnapshot {
   float top = 0.0f;
   float width = 0.0f;
   float height = 0.0f;
+  // Stacking order among siblings; the appservice hit test uses it to pick the
+  // visually topmost target (e.g. a navigation bar above a full-screen image).
+  float z_index = 0.0f;
 };
 std::mutex g_rect_mutex;
 std::unordered_map<uint32_t, NodeRectSnapshot> g_rect_snapshot;
@@ -2568,8 +2584,22 @@ void PublishNodeRects() {
   for (auto& entry : g_page->nodes) {
     const AppNode* node = entry.second;
     if (node == nullptr || node->released) continue;
+    // Publish the painted position: translation transforms move the box, and
+    // the appservice hit test / selector queries must see the same geometry a
+    // browser's getBoundingClientRect would (the album image is centred with
+    // `translate(-50%, -50%)`, so its layout box alone misses taps).
+    const AppStyle& style = node->style;
+    float tx = style.transform[12];
+    float ty = style.transform[13];
+    if (!std::isnan(style.translate_percent_x)) {
+      tx += style.translate_percent_x * node->measured_w;
+    }
+    if (!std::isnan(style.translate_percent_y)) {
+      ty += style.translate_percent_y * node->measured_h;
+    }
     g_rect_snapshot[node->id] = NodeRectSnapshot{
-        node->abs_x, node->abs_y, node->measured_w, node->measured_h};
+        node->abs_x + tx, node->abs_y + ty, node->measured_w,
+        node->measured_h, static_cast<float>(style.z_index)};
   }
 }
 // Captured on the UI thread; the host keyboard channel is called from the
@@ -5047,6 +5077,8 @@ void ParseStyleSheet(const std::string& css) {
   }
 }
 
+bool IsSwiperNode(const AppNode* node);
+
 void ResolveStyles(AppNode* node, const AppStyle* parent) {
   AppStyle style;
   if (parent != nullptr) {
@@ -5105,6 +5137,14 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
     for (int side = 0; side < 4; side++) {
       style.inset[side] = 0.0f;
       style.inset_percent[side] = std::nanf("");
+    }
+  }
+  // Builtin swiper defaults from the base stylesheet (`wx-swiper{height:150px}`)
+  // plus the pager's mandatory clipping.
+  if (IsSwiperNode(node)) {
+    style.clip = true;
+    if (style.height < 0.0f && style.height_percent < 0.0f) {
+      style.height = 150.0f;
     }
   }
   node->style = style;
@@ -5515,6 +5555,8 @@ bool IsImageName(const std::string& name);
 bool IsListBuilderName(const std::string& name);
 bool IsGridBuilderName(const std::string& name);
 bool IsScrollViewName(const std::string& name);
+bool IsShareElementNode(const AppNode* node);
+bool IsSwiperNode(const AppNode* node);
 bool LoadImageForNode(AppNode* node);
 bool LoadBackgroundImageForNode(AppNode* node);
 void CancelPendingImage(AppNode* node);
@@ -5891,6 +5933,12 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
                 float cb_h = -1.0f) {
   node->abs_x = abs_x;
   node->abs_y = abs_y;
+  // Keep the measured size in sync with the final laid-out box.  MeasureNode
+  // reports intrinsic sizes, so flex-grown children (e.g. the album component
+  // host with `height: 0; flex: 1`) would otherwise publish a zero rect and
+  // the mirrored hit test could not descend into them.
+  node->measured_w = w;
+  node->measured_h = h;
   if (metrics != nullptr) {
     metrics->push_back(NodeMetric{node, x, y, w, h});
   }
@@ -5920,6 +5968,31 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
   const float content_h =
       std::max(0.0f, h - BorderBoxExtra(style, false));
 
+  // Builtin swiper: each item is a full-size page; `current` selects which one
+  // sits at the viewport origin.  The parent clips the overflow.
+  if (IsSwiperNode(node)) {
+    int current = 0;
+    const auto current_attr = node->attrs.find("current");
+    if (current_attr != node->attrs.end()) {
+      current = std::atoi(current_attr->second.c_str());
+    }
+    if (current < 0) current = 0;
+    int index = 0;
+    for (AppNode* child : node->children) {
+      if (child == nullptr || child->released || child->style.display_none) {
+        continue;
+      }
+      const float offset = static_cast<float>(index - current) * content_w;
+      MeasureNode(child, content_w, true, content_h, true);
+      const float child_x = content_x + offset;
+      LayoutNode(child, child_x, content_y, content_w, content_h, metrics,
+                 abs_x + child_x, abs_y + content_y, cb_abs_x, cb_abs_y, cb_w,
+                 cb_h);
+      index += 1;
+    }
+    return;
+  }
+
   struct ChildLayout {
     AppNode* node = nullptr;
     float w = 0.0f;
@@ -5938,6 +6011,8 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
 
   const float main_extent = style.row ? content_w : content_h;
   const bool in_scroll_view = IsScrollViewName(node->name);
+  const bool fill_share_wrapper = IsShareElementNode(node) &&
+                                  node->children.size() == 1;
   float total_outer_base = 0.0f;
   float grow_sum = 0.0f;
   float shrink_weight_sum = 0.0f;
@@ -5952,6 +6027,7 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     SizeF measured =
         MeasureNode(child, content_w, !style.row && stretch_cross, content_h,
                     style.row && stretch_cross);
+    if (fill_share_wrapper) measured = SizeF{content_w, content_h};
     layout.w = measured.w;
     layout.h = measured.h;
     if (style.row) {
@@ -6604,6 +6680,24 @@ bool IsBuilderName(const std::string& name) {
 
 bool IsScrollViewName(const std::string& name) {
   return name == "scrollview" || name == "scroll-view";
+}
+
+// The builtin `share-element` template wraps its slotted child in an anonymous
+// `<view><slot/></view>` that the base stylesheet (WASkylineStyleV2, not served
+// by the DevTools) sizes to `width/height:100%`.  Without it the wrapper stays
+// 0-high and both painting and the mirrored hit test lose the content.
+bool IsShareElementNode(const AppNode* node) {
+  return node != nullptr &&
+         (node->tag == "share-element" || node->tag == "shareelement" ||
+          node->name == "share-element" || node->name == "shareelement");
+}
+
+// `swiper` is a builtin native component: its `swiper-item` children are
+// full-viewport pages laid out horizontally and clipped, with `current`
+// selecting the visible page.
+bool IsSwiperNode(const AppNode* node) {
+  return node != nullptr &&
+         (node->tag == "swiper" || node->name == "swiper");
 }
 
 // glass-easel wraps the real adapter node (`scrollview`, which carries the
@@ -8245,7 +8339,17 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         for (size_t i = 0; i < child_widgets.size(); i++) {
           Dart_ListSetAt(list, static_cast<intptr_t>(i), child_widgets[i]);
         }
-        Dart_Handle connector = newYGConnector(0, list);
+        // `z-index` only takes effect when the connector paints through
+        // StackingRenderBoxObjectMixin; otherwise siblings paint in tree order
+        // (e.g. the previewer's white preview list covered its navigation bar).
+        bool stacking = false;
+        for (AppNode* child : child_nodes) {
+          if (child != nullptr && child->style.z_index != 0) {
+            stacking = true;
+            break;
+          }
+        }
+        Dart_Handle connector = newYGConnector(stacking ? 1 : 0, list);
         if (Dart_IsError(connector)) {
           ReportDartError("appservice NewYGConnector", connector);
         } else {
@@ -9500,6 +9604,29 @@ void ApplyOperation(const rapidjson::Value& op) {
       g_page->pending_back_delta =
           static_cast<int>(arg_number(2, 1.0));
       g_page->pending_back_animated = arg_number(3, 1.0) != 0.0;
+      // Restore the covered page's root/connector so the pending rebuild
+      // targets the route revealed by the pop instead of the destroyed one.
+      int delta = g_page->pending_back_delta;
+      if (delta < 1) delta = 1;
+      while (delta-- > 0 && !g_page->page_stack.empty()) {
+        DeletePersistent(&g_page->root_node);
+        DeletePersistent(&g_page->root_connector);
+        OpPage::PageEntry entry = g_page->page_stack.back();
+        g_page->page_stack.pop_back();
+        g_page->root_id = entry.root_id;
+        g_page->root_node = entry.root_node;
+        g_page->root_connector = entry.root_connector;
+        if (g_page->page_count > 0) g_page->page_count--;
+      }
+      if (g_page->root_id != 0 && g_page->root_connector != nullptr) {
+        g_page->force_rebuild = true;
+      }
+      std::fprintf(stderr,
+                   "[skyline-runtime] navigateBack restore root=%u stack=%zu "
+                   "root_node=%p connector=%p\n",
+                   g_page->root_id, g_page->page_stack.size(),
+                   static_cast<void*>(g_page->root_node),
+                   static_cast<void*>(g_page->root_connector));
     }
   } else if (std::strcmp(kind, "createContext") == 0 ||
              std::strcmp(kind, "setAsTab") == 0 ||
@@ -9651,6 +9778,10 @@ void ApplyOperation(const rapidjson::Value& op) {
   } else if (std::strcmp(kind, "addAnimatedStyle") == 0) {
     CollectAnimatedStyles(op, FindNode(MemberUint(op, "id", 0)));
   } else if (std::strcmp(kind, "attach") == 0) {
+    // Remember the previously attached page before the new root replaces it;
+    // MaterializeAttachedPage pushes it onto the page stack so navigateBack can
+    // restore the covered page's connector.
+    g_page->attach_previous_root_id = g_page->root_id;
     g_page->root_id = MemberUint(op, "root", 0);
   } else if (std::strcmp(kind, "startRender") == 0) {
     g_page->started = true;
@@ -10335,6 +10466,17 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
   }
   std::fprintf(stderr, "[skyline-runtime] appservice flush: %zu children\n",
                widgets.size());
+  if (widgets.empty()) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] flush root=%u children=%zu connector=%p\n",
+                 g_page->root_id, root->children.size(),
+                 static_cast<void*>(g_page->root_connector));
+    for (AppNode* child : root->children) {
+      std::fprintf(stderr, "  child #%u tag=%s released=%d display_none=%d\n",
+                   child->id, child->tag.c_str(), child->released ? 1 : 0,
+                   child->style.display_none ? 1 : 0);
+    }
+  }
 }
 
 // Live-op batches that only need a rebuild because a style changed (e.g.
@@ -10795,6 +10937,7 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   static SkylinePageConfig config;
   config.backgroundColorContent = 0xFFFFFFFFu;
   config.pageUrl = page_url;
+  const uint32_t previous_root_id = g_page->attach_previous_root_id;
   Dart_Handle empty = Dart_NewStringFromCString("");
   g_page->root_id = root_id;
   g_page->page_count++;
@@ -10808,8 +10951,15 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
                         1, 1, 0, 0, 0, 0, 0, empty, 1, 1, 0, 0, 0, 0, 0, 0,
                         empty, empty, Dart_Null(), root_widget, &config);
 
-  DeletePersistent(&g_page->root_node);
-  DeletePersistent(&g_page->root_connector);
+  // Keep the covered page's widget handles so `navigateBack` can rebuild the
+  // route that becomes visible again.  Only the newest page's handles are
+  // cleared for the next materialize call.
+  if (g_page->root_node != nullptr || g_page->root_connector != nullptr) {
+    g_page->page_stack.push_back(OpPage::PageEntry{
+        previous_root_id, g_page->root_node, g_page->root_connector});
+    g_page->root_node = nullptr;
+    g_page->root_connector = nullptr;
+  }
   g_page->root_node = Dart_NewPersistentHandle(root_widget);
   if (root->connector != nullptr) {
     g_page->root_connector = Dart_NewPersistentHandle(root->connector);
@@ -11451,6 +11601,7 @@ SKYLINE_EXPORT extern "C" int32_t SkylineGetNodeRect(uint32_t node_id,
   out[1] = found->second.top;
   out[2] = found->second.width;
   out[3] = found->second.height;
+  out[4] = found->second.z_index;
   return 1;
 }
 

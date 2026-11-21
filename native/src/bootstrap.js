@@ -425,6 +425,26 @@
     setTimeout(() => retryLaunchIfNoPage(attempt + 1), 1500);
   }
 
+  // Route notifications (`notifyNavigateTo`/`notifyNavigateBack`/...) used to
+  // be dropped because `native.notify` is a no-op in the addon.  Route them
+  // through the live-ops channel so the runtime can pop/restore pages; the
+  // subsequent row of `attach` ops materializes the new page route.
+  function sendNotifyOp(kind, args) {
+    const list = Array.prototype.slice.call(args || []);
+    const windowId = typeof list[0] === 'number' ? list[0] : 0;
+    let payload;
+    try {
+      payload = JSON.stringify({ ops: [{ op: kind, args: list }] });
+    } catch (_error) {
+      return;
+    }
+    try {
+      if (typeof native.applyPageOps === 'function') {
+        native.applyPageOps(windowId, payload);
+      }
+    } catch (_error) {}
+  }
+
   const definitions = [
     ['setNotifyBootstrapDoneCallback', setter('setNotifyBootstrapDoneCallback')],
     ['createWindow', function (...args) {
@@ -487,7 +507,7 @@
     ['dispatchCharEvent', dispatch('dispatchCharEvent', 2)],
     ['dispatchKeyboardEvent', dispatch('dispatchKeyboardEvent', 5)],
     ['notifyNavigateTo', function (...args) {
-      native.notify('notifyNavigateTo', args);
+      sendNotifyOp('notifyNavigateTo', args);
       if (typeof native.log === 'function') {
         native.log(`notifyNavigateTo window=${args[0]} page=${args[1]} task=${args[2]}`);
       }
@@ -495,7 +515,7 @@
       return undefined;
     }],
     ['notifyRedirectTo', function (...args) {
-      native.notify('notifyRedirectTo', args);
+      sendNotifyOp('notifyRedirectTo', args);
       if (typeof native.log === 'function') {
         native.log(`notifyRedirectTo window=${args[0]} page=${args[1]} task=${args[2]}`);
       }
@@ -503,7 +523,18 @@
       return undefined;
     }],
     ['notifyNavigateBack', function (...args) {
-      native.notify('notifyNavigateBack', args);
+      sendNotifyOp('notifyNavigateBack', args);
+      // Mirror the native page-stack pop so the hit test uses the page that is
+      // visible again after the back animation.
+      try {
+        const windowId = typeof args[0] === 'number' ? args[0] : 0;
+        const delta = typeof args[2] === 'number' && args[2] > 0 ? args[2] : 1;
+        const stack = attachedRootStack.get(windowId);
+        if (stack && stack.length > 1) {
+          for (let i = 0; i < delta && stack.length > 1; i += 1) stack.pop();
+          attachedRoots.set(windowId, stack[stack.length - 1]);
+        }
+      } catch (_error) {}
       if (typeof native.log === 'function') {
         native.log(`notifyNavigateBack window=${args[0]} page=${args[1]} task=${args[4]}`);
       }
@@ -511,7 +542,7 @@
       return undefined;
     }],
     ['notifyAppLaunch', function (...args) {
-      native.notify('notifyAppLaunch', args);
+      sendNotifyOp('notifyAppLaunch', args);
       if (typeof native.log === 'function') {
         native.log(`notifyAppLaunch window=${args[0]} page=${args[1]}`);
       }
@@ -526,7 +557,7 @@
       return undefined;
     }],
     ['notifyReLaunch', function (...args) {
-      native.notify('notifyReLaunch', args);
+      sendNotifyOp('notifyReLaunch', args);
       if (typeof native.log === 'function') {
         native.log(`notifyReLaunch window=${args[0]} page=${args[1]}`);
       }
@@ -534,12 +565,12 @@
       return undefined;
     }],
     ['notifyAutoReLaunch', function (...args) {
-      native.notify('notifyAutoReLaunch', args);
+      sendNotifyOp('notifyAutoReLaunch', args);
       completeRoute(0);
       return undefined;
     }],
     ['notifySwitchTab', function (...args) {
-      native.notify('notifySwitchTab', args);
+      sendNotifyOp('notifySwitchTab', args);
       if (typeof native.log === 'function') {
         native.log(`notifySwitchTab window=${args[0]} page=${args[1]}`);
       }
@@ -1096,10 +1127,45 @@
     getParentNode() { return this.parent; }
     getChildNode(index) { return this.children[index] || null; }
     get classList() { return []; }
+    // Layout offsets read directly by builtin components (swiper/scroll views
+    // use them to compute gesture deltas).
+    get offsetTop() {
+      const rect = nodeRect(this.windowId, this.viewTag);
+      return rect ? rect.top : 0;
+    }
+    get offsetLeft() {
+      const rect = nodeRect(this.windowId, this.viewTag);
+      return rect ? rect.left : 0;
+    }
+    get offsetWidth() {
+      const rect = nodeRect(this.windowId, this.viewTag);
+      return rect ? rect.width : 0;
+    }
+    get offsetHeight() {
+      const rect = nodeRect(this.windowId, this.viewTag);
+      return rect ? rect.height : 0;
+    }
     matches() { return false; }
     isConnected() { return true; }
+    // Native event registration surface used by the builtin components.  The
+    // appservice hit test already synthesizes touch/tap events; these hooks
+    // exist so `attached()` does not throw (e.g. `wx-swiper` registers an
+    // onChangeEvent callback in `attached`).  Stored for the native channels
+    // that get wired up later.
+    onChangeEvent(callback) { this.changeEventCallback = callback; }
+    onScrollEvent(callback) { this.scrollEventCallback = callback; }
+    onLoadEvent(callback) { this.loadEventCallback = callback; }
+    onErrorEvent(callback) { this.errorEventCallback = callback; }
+    onKeyboardValueChange(callback) { this.keyboardValueChangeCallback = callback; }
+    onKeyboardShow(callback) { this.keyboardShowCallback = callback; }
+    onKeyboardHeightChange(callback) { this.keyboardHeightChangeCallback = callback; }
+    onKeyboardConfirm(callback) { this.keyboardConfirmCallback = callback; }
+    onKeyboardComplete(callback) { this.keyboardCompleteCallback = callback; }
     getOffsetPosition(callback) {
-      if (typeof callback === 'function') callback({ left: 0, top: 0 });
+      const rect = nodeRect(this.windowId, this.viewTag);
+      if (typeof callback === 'function') {
+        callback({ left: rect ? rect.left : 0, top: rect ? rect.top : 0 });
+      }
     }
     setEventDefaultPrevented() {}
     setModelBindingStat() {}
@@ -1286,6 +1352,14 @@
       this.ops.push({ op: 'attach', root: bridgeId(root), host: bridgeId(host) });
       if (root && typeof root === 'object') {
         attachedRoots.set(this.windowId, root);
+        let stack = attachedRootStack.get(this.windowId);
+        if (!stack) {
+          stack = [];
+          attachedRootStack.set(this.windowId, stack);
+        }
+        if (stack.length === 0 || stack[stack.length - 1] !== root) {
+          stack.push(root);
+        }
       }
       // `startRender` marks the tree as complete and flushes synchronously.
       // Keep a long fallback for bundles that only call attach; a short timer
@@ -1376,6 +1450,10 @@
   const runtimeTransitionCallbacks = [];
   const runtimeTriggerEventCallbacks = [];
   const attachedRoots = new Map();
+  // Attached roots in page-stack order (skyline keeps covered pages alive
+  // while navigateTo pushes a new route).  navigateBack restores the previous
+  // root here as well so the JS hit test follows the visible page.
+  const attachedRootStack = new Map();
   const detachedPortals = new Map();
   const lastTouchPoint = new Map();
   // Debug handle for CDP inspection of the mirrored element tree.
@@ -1411,16 +1489,37 @@
     if (typeof node._style === 'string' && node._style.indexOf('display:none') >= 0) {
       return null;
     }
-    for (let i = node.children.length - 1; i >= 0; i -= 1) {
+    // Visit siblings in paint order (ascending z-index, then DOM order) from
+    // top to bottom so a navigation bar stacked above a full-screen image wins
+    // the hit test even though it comes first in the tree.
+    const candidates = [];
+    for (let i = 0; i < node.children.length; i += 1) {
       const child = node.children[i];
       if (!child) continue;
       if (child.name === 'root-portal' || child.name === 'rootportal') continue;
-      if (!pointInRect(nodeRect(windowId, child.viewTag), x, y)) continue;
+      const rect = nodeRect(windowId, child.viewTag);
+      if (!rect) continue;
+      candidates.push({
+        child,
+        index: i,
+        rect,
+        z: typeof rect.zIndex === 'number' ? rect.zIndex : 0,
+      });
+    }
+    candidates.sort((a, b) => (a.z - b.z) || (a.index - b.index));
+    for (let i = candidates.length - 1; i >= 0; i -= 1) {
+      const { child, rect } = candidates[i];
+      const inside = pointInRect(rect, x, y);
+      // A zero-area box (e.g. an auto-sized `position:absolute` wrapper whose
+      // children are absolutely positioned, like the previewer's navigation
+      // bar) does not clip its overflow; descendants can still be hit outside
+      // its own border box.  Non-empty boxes keep the clipping approximation.
+      if (!inside && (rect.width > 0 && rect.height > 0)) continue;
       const deeper = hitTestElement(windowId, child, x, y);
       if (deeper) return deeper;
       // Containers do not swallow touches when none of their children hit;
       // this mirrors the patched YGConnector shadow hit test.
-      if (!child.children.length) return child;
+      if (inside && !child.children.length) return child;
     }
     return null;
   }

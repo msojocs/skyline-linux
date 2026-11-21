@@ -358,7 +358,7 @@ napi_value GetNodeRect(napi_env env, napi_callback_info info) {
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   if (argc < 2) return Undefined(env);
   const double node_id = ReadNumber(env, argv[1]);
-  float rect[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  float rect[5] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 #ifdef SKYLINE_HAVE_ENGINE
   if (!SkylineGetNodeRect(static_cast<uint32_t>(node_id), rect)) {
     return Undefined(env);
@@ -369,11 +369,12 @@ napi_value GetNodeRect(napi_env env, napi_callback_info info) {
 #endif
   napi_value object = nullptr;
   napi_create_object(env, &object);
-  const double values[6] = {rect[0], rect[1], rect[0] + rect[2],
-                            rect[1] + rect[3], rect[2], rect[3]};
-  static const char* const keys[6] = {"left", "top", "right",
-                                      "bottom", "width", "height"};
-  for (int i = 0; i < 6; i++) {
+  const double values[7] = {rect[0], rect[1], rect[0] + rect[2],
+                            rect[1] + rect[3], rect[2], rect[3], rect[4]};
+  static const char* const keys[7] = {"left",  "top",   "right",
+                                      "bottom", "width", "height",
+                                      "zIndex"};
+  for (int i = 0; i < 7; i++) {
     napi_value value = nullptr;
     napi_create_double(env, values[i], &value);
     napi_set_named_property(env, object, keys[i], value);
