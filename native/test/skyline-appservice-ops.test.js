@@ -2457,3 +2457,161 @@ test('appservice ops: radial gradients update in place to conic', {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('appservice ops: background-size lengths scale and tile images', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-bgsize-'));
+  writeQuadBmp(path.join(dir, 'quad.bmp'));
+  const ops = path.join(dir, 'background-size.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      // 40x20 explicit size at the top-left.
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:0px;top:0px;width:160px;height:80px;' +
+          'background-image:url(quad.bmp);background-size:40px 20px;' +
+          'background-repeat:no-repeat;background-position:left top;' },
+      // 50%x50% of the 160x80 box -> 80x40, centred.
+      { op: 'createElement', id: 4, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 4,
+        value: 'position:absolute;left:160px;top:0px;width:160px;height:80px;' +
+          'background-image:url(quad.bmp);background-size:50% 50%;' +
+          'background-repeat:no-repeat;background-position:center;' },
+      // Width 32px, height auto (8x8 image -> 32x32 tile), repeated.
+      { op: 'createElement', id: 5, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 5,
+        value: 'position:absolute;left:0px;top:80px;width:160px;height:80px;' +
+          'background-image:url(quad.bmp);background-size:32px auto;' +
+          'background-repeat:repeat;' },
+      // Height 40px, width auto (-> 40x40), anchored bottom-right.
+      { op: 'createElement', id: 6, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 6,
+        value: 'position:absolute;left:160px;top:80px;width:160px;height:80px;' +
+          'background-image:url(quad.bmp);background-size:auto 40px;' +
+          'background-repeat:no-repeat;background-position:right bottom;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'appendChild', id: 2, child: 4 },
+      { op: 'appendChild', id: 2, child: 5 },
+      { op: 'appendChild', id: 2, child: 6 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 1800,
+      frames: 0,
+      env: { SKYLINE_RESOURCE_ROOT: dir },
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+
+    // 40x20 at (0,0).
+    assert.deepEqual(pixelAt(pixels, 10, 5), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 30, 5), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 10, 15), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 30, 15), [255, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 50, 5), [255, 255, 255, 255]);
+
+    // 80x40 centred in the second box (x 200..280, y 20..60).
+    assert.deepEqual(pixelAt(pixels, 220, 30), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 260, 30), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 220, 50), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 260, 50), [255, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 180, 10), [255, 255, 255, 255]);
+
+    // 32x32 tiles: the second tile starts at x=32 and the second row at y=112.
+    assert.deepEqual(pixelAt(pixels, 5, 85), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 20, 85), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 5, 100), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 37, 85), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 52, 85), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 5, 117), [255, 0, 0, 255]);
+
+    // 40x40 at the bottom-right corner (x 280..320, y 120..160).
+    assert.deepEqual(pixelAt(pixels, 290, 130), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 310, 130), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 290, 150), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 310, 150), [255, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 200, 100), [255, 255, 255, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: background-size updates repaint images and gradients', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-bgsize-up-'));
+  writeQuadBmp(path.join(dir, 'quad.bmp'));
+  const ops = path.join(dir, 'background-size-update.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:0px;top:0px;width:160px;height:80px;' +
+          'background-image:url(quad.bmp);background-size:40px 20px;' +
+          'background-repeat:no-repeat;background-position:left top;' },
+      { op: 'createElement', id: 4, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 4,
+        value: 'position:absolute;left:0px;top:80px;width:100px;height:100px;' +
+          'background:linear-gradient(90deg,#FF0000,#0000FF);' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'appendChild', id: 2, child: 4 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 300, ops: [
+        { op: 'setStyle', id: 3,
+          value: 'background-size:80px 40px;background-position:center;' },
+        { op: 'setStyle', id: 4,
+          value: 'background-size:50px 50px;background-repeat:no-repeat;' +
+            'background-position:center;' },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2600,
+      frames: 0,
+      env: { SKYLINE_RESOURCE_ROOT: dir },
+    });
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+
+    // The image grew to 80x40 and moved to the box centre (x 40..120, y 20..60).
+    assert.deepEqual(pixelAt(pixels, 60, 30), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 100, 30), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 60, 50), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 100, 50), [255, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 20, 10), [255, 255, 255, 255]);
+
+    // The gradient shrank to a centred 50x50 tile (box at y 80..180).
+    const gradientLeft = pixelAt(pixels, 30, 130);
+    const gradientRight = pixelAt(pixels, 70, 130);
+    assert.ok(gradientLeft[0] > 200 && gradientLeft[2] < 55,
+      `centred gradient left edge should be red, got ${gradientLeft}`);
+    assert.ok(gradientRight[2] > 200 && gradientRight[0] < 55,
+      `centred gradient right edge should be blue, got ${gradientRight}`);
+    assert.deepEqual(pixelAt(pixels, 20, 130), [255, 255, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 80, 130), [255, 255, 255, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

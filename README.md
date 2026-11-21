@@ -31,7 +31,7 @@
 > gap/`flex-wrap`/`align-content`、`flex-basis`/`flex-shrink`、逐边 border、
 > `overflow: hidden` 裁剪、逐角圆角、资源路径缓存与
 > `background-position`/`object-position`、`box-sizing: content-box`、百分比 padding/margin、`position: sticky`、
-> `radial-gradient`/`conic-gradient`。
+> `radial-gradient`/`conic-gradient`、显式 `background-size` 长度值。
 > L5 已接入官方 Windows
 > 引擎的真实帧基线
 > （`spec/l5-baseline.win32.json`，Wine 渲染进程 + dpr=2 采集）。
@@ -285,7 +285,8 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   （px/%/auto）与 `flex-shrink` 缩放收缩、逐边 border、
   `overflow: hidden` 裁剪、逐角圆角与资源路径缓存、`background-position` /
   `object-position`、`box-sizing: content-box`、百分比 padding/margin、`position: sticky`、
-  `radial-gradient`/`conic-gradient`（尺寸关键字、`at` 位置与硬停止），
+  `radial-gradient`/`conic-gradient`（尺寸关键字、`at` 位置与硬停止）、
+  显式 `background-size` 长度/百分比值，
   以及私有 `dart:ui` 文本编码
   标志（`backgroundUseLineMetrics`/`useCoreTextWordBreak`，按官方位布局写入
   native 并在 SkParagraph 中应用行框背景/选区）、native view 通道

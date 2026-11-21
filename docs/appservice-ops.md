@@ -392,11 +392,13 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
   `border`/`border-width`/`border-color`、`border-radius`、
   `box-sizing: border-box|content-box`（默认保持 Skyline 的 border-box 语义）
 - 绘制：`background`/`background-color`、`background-image`、
-  `background-size`、`background-repeat`、`background-position`、
+  `background-size`（`cover`/`contain` 或 1–2 个 `auto`/px/% 值）、
+  `background-repeat`、`background-position`、
   `object-fit`、`object-position`、`opacity`、`transform`
   （`translate`/`scale`/`rotate`/`matrix`，绕元素中心）、`box-shadow`
   （首层 offset/blur/spread/color/inset）。position 支持 1/2/4 值关键字、
-  百分比与 px（含 `right 10px`/`bottom 20%`）。
+  百分比与 px（含 `right 10px`/`bottom 20%`）。显式背景尺寸同样作用于线性
+  渐变层；单值 `auto` 保持位图宽高比。
 - 渐变：`linear-gradient`（方向/角度）、`radial-gradient`（`circle`/`ellipse`、
   `closest-side`/`farthest-side`/`closest-corner`/`farthest-corner`、显式长度、
   `at <position>`；引擎径向着色器使用单半径，`ellipse` 与圆共用同一半径规则）
@@ -499,6 +501,9 @@ npm run test:ops
 - `radial/conic gradient`：100×100 圆的径向渐变（中心红、外沿蓝）、
   `circle 30px` 显式半径、四象限硬停止锥形与 `from 90deg` 旋转后的锥形分布；
   另验证径向→锥形的原地 `DecoratedBoxUpdateGradient` 更新。
+- `background-size`：8×8 四象限位图按 `40px 20px`（固定）、`50% 50%`（百分比）、
+  `32px auto`（平铺）与 `auto 40px`（右下锚定）绘制；更新后尺寸/位置原地重绘。
+  渐变同样按显式尺寸与百分比裁剪、平铺。
 - `network image`：本地 HTTP server -> `RequestHttpResource` -> 解码 -> 重建
   页面 -> 四象限像素。
 - `host keyboard channel`：`--key-script` 触发 `FlutterEngineSendKeyEvent` 与
@@ -521,6 +526,7 @@ npm run test:ops
   `box-sizing: content-box`、百分比 padding/margin（按包含块宽度解析）、
   `position: sticky`（`NewStickyHeader`/`NewStickySection`），
   `radial-gradient`/`conic-gradient`（`NewRadialGradient`/`NewConicGradient`），
+  显式 `background-size`（图片原生绘制与线性渐变 fittingSize），
   逐边 `border-width/color`，逐角
   `border-radius`（px/%），以及 `overflow:
   hidden/clip`（`NewClipRRect`，圆角增量走 `ClipRRectUpdateRadius`）。

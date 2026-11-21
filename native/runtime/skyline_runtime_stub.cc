@@ -2179,6 +2179,13 @@ struct AppStyle {
   std::string background_image;
   int background_repeat = 0;  // 0 no-repeat, 1 repeat, 2 repeat-x, 3 repeat-y
   int background_fit = 0;     // 0 fill, 1 contain, 2 cover
+  // CSS background-size explicit values (`cover`/`contain` stay in
+  // `background_fit`).  -1 = auto; percentages are 0..1.
+  bool has_background_size = false;
+  float background_size_width = -1.0f;
+  float background_size_height = -1.0f;
+  bool background_size_width_percent = false;
+  bool background_size_height_percent = false;
   // CSS background-position (default 0% 0%).
   CssPositionAxis background_position_x;
   CssPositionAxis background_position_y;
@@ -3044,11 +3051,62 @@ int ParseBackgroundRepeat(const std::string& raw) {
   return 0;
 }
 
-int ParseBackgroundFit(const std::string& raw) {
-  const std::string value = LowerAscii(TrimAscii(raw));
-  if (value == "cover") return 2;
-  if (value == "contain") return 1;
-  return 0;  // fill / auto
+// Parses CSS `background-size`: `cover`/`contain`, or one/two explicit values
+// (`auto`, length or percentage).
+void ParseBackgroundSize(AppStyle* style, const std::string& raw) {
+  const std::vector<std::string> layers = SplitTopLevelComma(raw);
+  const std::string value =
+      LowerAscii(TrimAscii(layers.empty() ? raw : layers[0]));
+  if (value.empty()) return;
+  auto reset_explicit = [style]() {
+    style->has_background_size = false;
+    style->background_size_width = -1.0f;
+    style->background_size_height = -1.0f;
+    style->background_size_width_percent = false;
+    style->background_size_height_percent = false;
+  };
+  if (value == "cover") {
+    style->background_fit = 2;
+    reset_explicit();
+    return;
+  }
+  if (value == "contain") {
+    style->background_fit = 1;
+    reset_explicit();
+    return;
+  }
+  const std::vector<std::string> parts = SplitWhitespace(value);
+  if (parts.empty() || parts.size() > 2) return;
+  auto parse = [](const std::string& token, float* out, bool* percent) {
+    if (LowerAscii(token) == "auto") {
+      *out = -1.0f;
+      *percent = false;
+      return true;
+    }
+    float px = -1.0f;
+    float pct = -1.0f;
+    if (!ParseLength(token, &px, &pct)) return false;
+    if (pct >= 0.0f) {
+      *out = pct;
+      *percent = true;
+    } else {
+      *out = px;
+      *percent = false;
+    }
+    return true;
+  };
+  float width = -1.0f;
+  float height = -1.0f;
+  bool width_percent = false;
+  bool height_percent = false;
+  if (!parse(parts[0], &width, &width_percent)) return;
+  if (parts.size() > 1 && !parse(parts[1], &height, &height_percent)) return;
+  style->background_fit = 0;
+  style->has_background_size = true;
+  style->background_size_width = width;
+  style->background_size_height = height;
+  style->background_size_width_percent = width_percent;
+  style->background_size_height_percent = height_percent;
 }
 
 // Parses CSS `transform-origin` (one to three components; z is ignored).
@@ -3864,6 +3922,42 @@ void ParseBackgroundShorthandPosition(AppStyle* style, const std::string& raw) {
                     &style->background_position_y);
 }
 
+// Extracts `<size>` after the top-level `/` of the `background` shorthand,
+// e.g. `background: url(x) center / 50px 50% no-repeat`.
+void ParseBackgroundShorthandSize(AppStyle* style, const std::string& raw) {
+  std::vector<std::string> size;
+  bool after_slash = false;
+  for (const std::string& raw_token : TokenizeCssValue(raw)) {
+    std::string token = raw_token;
+    const size_t slash = token.find('/');
+    if (slash != std::string::npos) {
+      after_slash = true;
+      token = TrimAscii(token.substr(slash + 1));
+      if (token.empty()) continue;
+    } else if (!after_slash) {
+      continue;
+    }
+    if (token == ",") break;
+    const std::string lower = LowerAscii(token);
+    float px = 0.0f;
+    float percent = -1.0f;
+    const bool is_length = ParseLength(token, &px, &percent);
+    if (lower != "auto" && lower != "cover" && lower != "contain" &&
+        !is_length) {
+      break;  // repeat/fit/box keywords end the size list
+    }
+    size.push_back(token);
+    if (lower == "cover" || lower == "contain" || size.size() >= 2) break;
+  }
+  if (size.empty()) return;
+  std::string joined;
+  for (const std::string& token : size) {
+    if (!joined.empty()) joined.push_back(' ');
+    joined += token;
+  }
+  ParseBackgroundSize(style, joined);
+}
+
 void ApplyDeclaration(AppStyle* style,
                       const std::string& raw_key,
                       const std::string& raw_value) {
@@ -3961,11 +4055,12 @@ void ApplyDeclaration(AppStyle* style,
         }
       }
       ParseBackgroundShorthandPosition(style, value);
+      ParseBackgroundShorthandSize(style, value);
     }
   } else if (key == "background-repeat") {
     style->background_repeat = ParseBackgroundRepeat(value);
   } else if (key == "background-size") {
-    style->background_fit = ParseBackgroundFit(value);
+    ParseBackgroundSize(style, value);
   } else if (key == "background-position") {
     ParsePositionPair(value, &style->background_position_x,
                       &style->background_position_y);
@@ -5863,7 +5958,10 @@ void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& imag
                     double width, double height, int fit, int repeat,
                     double offset_x, double offset_y,
                     const CssPositionAxis& pos_x,
-                    const CssPositionAxis& pos_y) {
+                    const CssPositionAxis& pos_y,
+                    bool size_override = false,
+                    double override_w = 0.0,
+                    double override_h = 0.0) {
   if (!image || !canvas || canvas->builder() == nullptr) return;
   const double image_width = image->width();
   const double image_height = image->height();
@@ -5876,7 +5974,10 @@ void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& imag
   double dest_y = 0.0;
   double dest_w = target_w;
   double dest_h = target_h;
-  if (fit == 1 || fit == 3 || fit == 4) {
+  if (size_override) {
+    dest_w = std::max(0.0, override_w);
+    dest_h = std::max(0.0, override_h);
+  } else if (fit == 1 || fit == 3 || fit == 4) {
     double scale = fit == 3 ? 1.0 : std::min(target_w / image_width,
                                              target_h / image_height);
     if (fit == 4 && image_width <= target_w && image_height <= target_h) {
@@ -5890,10 +5991,11 @@ void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& imag
     dest_w = image_width * scale;
     dest_h = image_height * scale;
   }
+  if (dest_w <= 0.0 || dest_h <= 0.0) return;
 
   canvas->save();
   canvas->translate(offset_x, offset_y);
-  if (fit == 2 || repeat != 0) {
+  if (fit == 2 || repeat != 0 || size_override) {
     canvas->clipRect(0.0, 0.0, target_w, target_h,
                      flutter::DlClipOp::kIntersect);
   }
@@ -5909,8 +6011,10 @@ void DrawImageInBox(flutter::Canvas* canvas, const sk_sp<flutter::DlImage>& imag
     // CSS repeat tiles at the natural image size (or the background-size
     // result when a fit was requested).  background-position moves the origin
     // of the tile grid.
-    const double tile_w = fit == 0 ? image_width : dest_w;
-    const double tile_h = fit == 0 ? image_height : dest_h;
+    const double tile_w =
+        size_override ? dest_w : (fit == 0 ? image_width : dest_w);
+    const double tile_h =
+        size_override ? dest_h : (fit == 0 ? image_height : dest_h);
     if (tile_w <= 0.0 || tile_h <= 0.0) {
       canvas->restore();
       return;
@@ -6006,6 +6110,39 @@ void DirectRenderImagePaint(intptr_t ptr, Dart_Handle canvas_handle,
 void BackgroundImageCreate(intptr_t /*ptr*/) {}
 void BackgroundImageDisposed(intptr_t /*ptr*/) {}
 
+// Resolves explicit `background-size` values against the background painting
+// area.  Returns false when the default fit handling should be used instead.
+bool ResolveBackgroundSize(const AppStyle& style,
+                           double image_w,
+                           double image_h,
+                           double box_w,
+                           double box_h,
+                           double* dest_w,
+                           double* dest_h) {
+  if (!style.has_background_size || style.background_fit != 0) return false;
+  const bool has_w = style.background_size_width >= 0.0f;
+  const bool has_h = style.background_size_height >= 0.0f;
+  if (!has_w && !has_h) {
+    // `background-size: auto` keeps the intrinsic image dimensions.
+    *dest_w = image_w;
+    *dest_h = image_h;
+    return true;
+  }
+  double w = has_w ? (style.background_size_width_percent
+                          ? style.background_size_width * box_w
+                          : style.background_size_width)
+                   : -1.0;
+  double h = has_h ? (style.background_size_height_percent
+                          ? style.background_size_height * box_h
+                          : style.background_size_height)
+                   : -1.0;
+  if (w < 0.0 && h >= 0.0) w = image_w * h / image_h;
+  if (h < 0.0 && w >= 0.0) h = image_h * w / image_w;
+  *dest_w = std::max(0.0, w);
+  *dest_h = std::max(0.0, h);
+  return true;
+}
+
 void BackgroundImagePaint(intptr_t ptr, Dart_Handle canvas_handle, double left,
                           double top, double right, double bottom,
                           Dart_Handle /*path*/) {
@@ -6017,10 +6154,16 @@ void BackgroundImagePaint(intptr_t ptr, Dart_Handle canvas_handle, double left,
   if (canvas == nullptr || canvas->builder() == nullptr) return;
   const double width = std::max(0.0, right - left);
   const double height = std::max(0.0, bottom - top);
+  double dest_w = 0.0;
+  double dest_h = 0.0;
+  const bool size_override = ResolveBackgroundSize(
+      node->style, node->background_image_dl->width(),
+      node->background_image_dl->height(), width, height, &dest_w, &dest_h);
   DrawImageInBox(canvas, node->background_image_dl, width, height,
                  node->style.background_fit, node->style.background_repeat, left,
                  top, node->style.background_position_x,
-                 node->style.background_position_y);
+                 node->style.background_position_y, size_override, dest_w,
+                 dest_h);
 }
 
 // `package:skyline` registers this Dart callback; native calls it to perform
@@ -6506,6 +6649,40 @@ bool LoadBackgroundImageForNode(AppNode* node) {
 void OnBuilderBuildChild(intptr_t address, int32_t index);
 void OnBuilderDisposeChild(intptr_t address, int32_t index);
 
+// Flutter's ImageRepeat order is repeat/repeatX/repeatY/noRepeat, whereas the
+// CSS parser stores no-repeat/repeat/repeat-x/repeat-y.
+uint8_t FlutterImageRepeatIndex(int css_repeat) {
+  switch (css_repeat) {
+    case 1:
+      return 0;  // ImageRepeat.repeat
+    case 2:
+      return 1;  // ImageRepeat.repeatX
+    case 3:
+      return 2;  // ImageRepeat.repeatY
+    default:
+      return 3;  // ImageRepeat.noRepeat
+  }
+}
+
+// Converts one `background-position` axis into the alignment/offset/edge form
+// consumed by NewLinearGradient (`Edge` values: left=1, top=2, right=3,
+// bottom=4).
+void GradientAxisFromPosition(const CssPositionAxis& pos,
+                              uint8_t begin_edge,
+                              uint8_t end_edge,
+                              double* alignment,
+                              double* offset,
+                              uint8_t* side) {
+  *side = pos.from_end ? end_edge : begin_edge;
+  if (pos.percent) {
+    *alignment = pos.value / 100.0 * 2.0 - 1.0;
+    *offset = 0.0;
+  } else {
+    *alignment = -1.0;
+    *offset = pos.value;
+  }
+}
+
 // Builds the gradient argument for NewDecoratedBox: linear, radial or conic
 // depending on the parsed CSS.
 Dart_Handle BuildGradientHandle(const AppStyle& style) {
@@ -6572,8 +6749,32 @@ Dart_Handle BuildGradientHandle(const AppStyle& style) {
   auto* new_linear = reinterpret_cast<NewLinearGradientFn>(
       FindCallback(g_page->holder->ffi_table, kNewLinearGradientHash));
   if (new_linear == nullptr) return Dart_Null();
-  return new_linear(style.gradient_angle, colors, stops.data(), -1.0, -1.0,
-                    0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0);
+  // `background-size` only affects the linear layer: radial/conic gradients
+  // have no fitting-size parameters in their FFI surface.
+  double fit_width = -1.0;
+  double fit_height = -1.0;
+  uint8_t fit_width_percent = 0;
+  uint8_t fit_height_percent = 0;
+  if (style.has_background_size && style.background_fit == 0) {
+    fit_width = style.background_size_width;
+    fit_height = style.background_size_height;
+    fit_width_percent = style.background_size_width_percent ? 1 : 0;
+    fit_height_percent = style.background_size_height_percent ? 1 : 0;
+  }
+  double alignment_x = -1.0;
+  double alignment_y = -1.0;
+  double offset_x = 0.0;
+  double offset_y = 0.0;
+  uint8_t side_x = 1;  // Edge.left
+  uint8_t side_y = 2;  // Edge.top
+  GradientAxisFromPosition(style.background_position_x, 1, 3, &alignment_x,
+                           &offset_x, &side_x);
+  GradientAxisFromPosition(style.background_position_y, 2, 4, &alignment_y,
+                           &offset_y, &side_y);
+  return new_linear(style.gradient_angle, colors, stops.data(), fit_width,
+                    fit_height, fit_width_percent, fit_height_percent, side_x,
+                    side_y, alignment_x, alignment_y, offset_x, offset_y,
+                    FlutterImageRepeatIndex(style.background_repeat));
 }
 
 Dart_Handle BuildBoxShadowList(const AppStyle& style) {  if (!style.has_shadow || g_page == nullptr || g_page->holder == nullptr) {
@@ -8627,9 +8828,28 @@ bool SameFloatOrNan(float a, float b) {
   return std::fabs(a - b) < 0.01f;
 }
 
+bool SameCssPositionAxis(const CssPositionAxis& a, const CssPositionAxis& b) {
+  return std::fabs(a.value - b.value) <= 0.001f && a.percent == b.percent &&
+         a.from_end == b.from_end;
+}
+
+// Background box properties shared by background images and linear gradients.
+bool SameBackgroundBox(const AppStyle& a, const AppStyle& b) {
+  return a.background_fit == b.background_fit &&
+         a.has_background_size == b.has_background_size &&
+         Nearly(a.background_size_width, b.background_size_width) &&
+         Nearly(a.background_size_height, b.background_size_height) &&
+         a.background_size_width_percent == b.background_size_width_percent &&
+         a.background_size_height_percent == b.background_size_height_percent &&
+         a.background_repeat == b.background_repeat &&
+         SameCssPositionAxis(a.background_position_x, b.background_position_x) &&
+         SameCssPositionAxis(a.background_position_y, b.background_position_y);
+}
+
 bool SameGradient(const AppStyle& a, const AppStyle& b) {
   if (a.has_gradient != b.has_gradient) return false;
   if (!a.has_gradient) return true;
+  if (!SameBackgroundBox(a, b)) return false;
   if (a.gradient_kind != b.gradient_kind) return false;
   if (std::fabs(a.gradient_angle - b.gradient_angle) > 0.001) return false;
   if (a.gradient_colors != b.gradient_colors) return false;
@@ -8657,6 +8877,9 @@ bool StyleNeedsRebuild(const AppNode* node, const AppStyle& before,
                        const AppStyle& after) {
   if (before.display_none != after.display_none) return true;
   if (before.clip != after.clip) return true;
+  // A different background image URL (or gaining/losing one) needs a fresh
+  // decorated-box registration/load; size/position changes repaint in place.
+  if (before.background_image != after.background_image) return true;
   // Presence changes can be handled in place once the corresponding widget
   // handles already exist (notably during an opacity/background transition).
   if (node->decorated_box_p == nullptr &&
@@ -8914,6 +9137,15 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
             }
             clear_gradient(decorated);
           }
+        }
+        // background-size / position / repeat apply to the natively painted
+        // background image; mark it dirty so the onPaint callback re-runs.
+        if (!after.background_image.empty() &&
+            !SameBackgroundBox(before, after)) {
+          auto* mark_paint = reinterpret_cast<void (*)(Dart_Handle)>(
+              FindCallback(holder->ffi_table,
+                           kBackgroundImageMarkNeedPaintHash));
+          if (mark_paint != nullptr) mark_paint(decorated);
         }
       }
       if (node->clip_widget_p != nullptr && RadiiChanged(before, after)) {

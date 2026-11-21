@@ -5,8 +5,8 @@
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
 > 核心验收：**22 / 22（100%）**
-> 长尾/外部阻塞：**9 / 12**
-> 全部任务：**31 / 34（91.2%）**
+> 长尾/外部阻塞：**10 / 12**
+> 全部任务：**32 / 34（94.1%）**
 >
 > 勾选项表示已在 Linux 回放运行时上实现并通过测试；标有 `blocked` 的任务
 > 依赖外部环境或私有引擎能力。
@@ -17,8 +17,8 @@
 | --- | ---: | ---: | ---: |
 | A. 原始阶段 3 验收项 | 8 | 8 | 100% |
 | B. 后续运行时增量 | 14 | 14 | 100% |
-| C. 长尾 / 外部阻塞 | 9 | 12 | 75.0% |
-| **合计** | **31** | **34** | **91.2%** |
+| C. 长尾 / 外部阻塞 | 10 | 12 | 83.3% |
+| **合计** | **32** | **34** | **94.1%** |
 
 ## A. 原始阶段 3 验收项（8 / 8）
 
@@ -64,15 +64,16 @@
 - [x] **B13** 资源路径缓存（`LoadResourceSync`/`Async`，≤4 MB）
 - [x] **B14** L5 夹具扩展（transform-origin/fixed-scroll/align-gap/flex-wrap/order/overflow）
 
-## C. 长尾 / 外部阻塞（9 / 12）
+## C. 长尾 / 外部阻塞（10 / 12）
 
 - [x] **C1** 官方 Windows appservice guest 的真实 L5 采集与像素对比
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
     `skyline.node`，窗口就绪后经 `notifyAppLaunch` + `PageContext` 回放夹具操作，
     从共享内存读取 640x480 帧。原始 Windows 帧为 BGRA，工具统一转为 RGBA。
-  - `spec/l5-baseline.win32.json` 保存 18 个夹具的 zlib 压缩帧、样本点与容差；
+  - `spec/l5-baseline.win32.json` 保存 19 个夹具的 zlib 压缩帧、样本点与容差；
     `npm run test:l5` 在 Linux 以 dpr=2 重放同一夹具并逐像素比较。
-  - 结果：12 个夹具逐像素完全一致，`shadow`/`radial-conic` 最大差 1；`overflow`
+  - 结果：12 个夹具逐像素完全一致，`shadow`/`radial-conic`/`background-size`
+    最大差 1；`overflow`
     失配率 < 0.2%（裁剪边缘），`fixed-scroll` 已完全一致；`transform3d` 存在 3D 变换保真差异；
     `gridview`/`listview` 的合成 op 流无法触发官方 native builder 回调，标记为
     不可比。详见 `docs/feasibility.md` §3.1。
@@ -165,7 +166,23 @@
     （59 / 59）。
   - L5 夹具 `appservice-radial-conic.ops.json` 与官方 Windows 帧比较
     maxDelta=1、失配率 0。
-- [ ] **C10** 显式 `background-size` 长度值（非 cover/contain）
+- [x] **C10** 显式 `background-size` 长度值（非 cover/contain）
+  - `background-size` 支持 1–2 个值：`auto`、px、百分比（相对背景定位区）；
+    长手与 `background` 简写（`<position>/<size>`、含无空格 `center/50px`）均解析。
+    值写入 `AppStyle`，`cover`/`contain` 继续走 `background_fit`。
+  - 背景图由 `BackgroundImagePaint` 原生绘制：显式尺寸按 CSS 规则解析（单值 +
+    `auto` 保持位图宽高比、双值精确缩放），重复时以该尺寸为 tile，并按背景
+    定位区裁剪；`background-position`/`repeat` 同步生效。
+  - 线性渐变经 `NewLinearGradient` 的 fittingSize/alignment/side/offset/repeat
+    参数应用同一套尺寸与位置；并修正 CSS repeat 到 Flutter `ImageRepeat`
+    枚举序（repeat=0…noRepeat=3）的映射。径向/锥形 FFI 无尺寸参数，不受影响。
+  - 更新路径：URL 变化触发重建，尺寸/位置/repeat 变化经
+    `BackgroundImageMarkNeedPaint` 重绘背景图、经 `DecoratedBoxUpdateGradient`
+    更新渐变。
+  - `test:ops` 新增 4 种图片尺寸（40×20、50%、`32px auto` 平铺、`auto 40px`
+    右下锚定）与图片/渐变尺寸原地更新用例（61 / 61）。
+  - L5 夹具 `appservice-background-size.ops.json`（px/%/平铺/简写四种线性
+    渐变）与官方 Windows 帧比较 maxDelta=1、失配率 0。
 - [ ] **C11** `transform-origin` 的 z 分量 / 3D origin
 - [ ] **C12** `AddPendingFont` / `RemovePendingFont` 与内存字体状态语义
 
@@ -173,8 +190,8 @@
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **154 / 178** | 24 skipped，0 fail |
-| `npm run test:ops` | **59 / 59** | appservice 操作流回放 |
+| `npm test` | **156 / 180** | 24 skipped，0 fail |
+| `npm run test:ops` | **61 / 61** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 
