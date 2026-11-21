@@ -256,6 +256,102 @@
     }
   }
 
+  // The DevTools dispatches the initial `onAppRoute` while the appservice
+  // SDK is still loading, so the route engines never see the `appLaunch`
+  // route and the later routeDone reports `webviewId N is not found`.  Once
+  // the Skyline window is up we replay the same route through the real
+  // appservice bridge, which creates the page before routeDone is sent.
+  function triggerBridgeEvent(win, eventName, data, webviewId) {
+    try {
+      const pageGlobal = win && (win.__global || win.__global__);
+      const bridge = pageGlobal && pageGlobal.WeixinJSBridge;
+      if (bridge && typeof bridge.__triggerOnEvent === 'function') {
+        bridge.__triggerOnEvent(eventName, data, webviewId);
+        return true;
+      }
+    } catch (_error) {}
+    return false;
+  }
+
+  function replayAppLaunchRoute(windowId, pageId) {
+    const pageGlobal = typeof window !== 'undefined'
+      ? (window.__global || window.__global__)
+      : null;
+    if (!pageGlobal ||
+        typeof pageGlobal.getInstanceWindow !== 'function') {
+      return Promise.resolve(false);
+    }
+    let path = '';
+    let query = {};
+    let scene = 1001;
+    try {
+      const app = appFrameWindow();
+      const options = app && app.wx && app.wx.getLaunchOptionsSync &&
+        app.wx.getLaunchOptionsSync();
+      if (options) {
+        path = options.path || '';
+        query = options.query || {};
+        if (typeof options.scene === 'number') scene = options.scene;
+      }
+    } catch (_error) {}
+    if (!path) return Promise.resolve(false);
+    const data = {
+      path,
+      webviewId: pageId,
+      openType: 'appLaunch',
+      query,
+      scene,
+      renderer: 'skyline',
+      singlePageData: {
+        windowId,
+        pageId,
+        isNewEngineHomePage: windowId === pageId,
+      },
+    };
+    // Only the main appservice engine (`instanceframe`) receives the route:
+    // it fans it out to the app/render sub-contexts just like the DevTools
+    // broadcast did.  Triggering the sub-contexts directly creates duplicate
+    // pages (`appLaunch with an already exist webviewId`).
+    return Promise.resolve(pageGlobal.getInstanceWindow()).then((win) => {
+      const replayed = triggerBridgeEvent(win, 'onAppRoute', data, pageId);
+      if (replayed && typeof native.log === 'function') {
+        native.log(`replayed appLaunch route webview=${pageId} ` +
+          'into the appservice engine');
+      }
+      return replayed;
+    }).catch(() => false);
+  }
+
+  // A page engine that already created the launch page must not receive the
+  // replayed route (the SDK reports "already exist webviewId").
+  function hasLaunchPage() {
+    for (const candidate of [appFrameWindow(), typeof window !== 'undefined'
+      ? window : null]) {
+      try {
+        if (candidate && typeof candidate.getCurrentPages === 'function' &&
+            candidate.getCurrentPages().length > 0) {
+          return true;
+        }
+      } catch (_error) {}
+    }
+    return false;
+  }
+
+  function pageStackSummary() {
+    let main = -1;
+    try {
+      main = typeof getCurrentPages === 'function' ? getCurrentPages().length : -1;
+    } catch (_error) {}
+    let app = -1;
+    try {
+      const frame = appFrameWindow();
+      app = frame && typeof frame.getCurrentPages === 'function'
+        ? frame.getCurrentPages().length
+        : -1;
+    } catch (_error) {}
+    return `main=${main} app=${app}`;
+  }
+
   function retryLaunchIfNoPage(attempt) {
     const app = appFrameWindow();
     if (!app) {
@@ -272,7 +368,8 @@
     }
     if (pages > 0) {
       if (typeof native.log === 'function') {
-        native.log(`initial route created ${pages} page(s)`);
+        native.log(`initial route created ${pages} page(s) ` +
+          `(${pageStackSummary()})`);
       }
       return;
     }
@@ -288,7 +385,8 @@
     try {
       if (app.wx && typeof app.wx.reLaunch === 'function') {
         if (typeof native.log === 'function') {
-          native.log(`retry initial route via reLaunch ${url}`);
+          native.log(`retry initial route via reLaunch ${url} ` +
+            `(${pageStackSummary()})`);
         }
         app.wx.reLaunch({ url });
       }
@@ -390,10 +488,17 @@
       if (typeof native.log === 'function') {
         native.log(`notifyAppLaunch window=${args[0]} page=${args[1]}`);
       }
-      // Complete the DevTools appLaunch handshake so the appservice proceeds
-      // to build its PageContext tree (the native page is created when that
-      // tree is attached).  appLaunch routes always use taskId 0.
-      completeRoute(0);
+      // The first onAppRoute is dispatched before the SDK subscribes; replay
+      // the launch route now that the route engines are up, then complete the
+      // DevTools handshake so its routeDone finds the created page.  appLaunch
+      // routes always use taskId 0.
+      const replay = hasLaunchPage()
+        ? Promise.resolve(false)
+        : replayAppLaunchRoute(args[0], args[1]);
+      Promise.resolve(replay).then(
+        () => completeRoute(0),
+        () => completeRoute(0),
+      );
       // Fallback: if the launch route initialised the app but produced no
       // page, replay it once through the SDK after the route has settled.
       setTimeout(() => retryLaunchIfNoPage(0), 1500);
