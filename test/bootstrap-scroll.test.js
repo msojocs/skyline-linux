@@ -667,6 +667,10 @@ test('bootstrap: worklet mappers drive applyAnimatedStyle updates', () => {
   const ownedId = SkylineGlobal.workletModule.startMapper(
     4, ownedWorklet, [ownedProgress], [], { immediate: false });
   owned.addAnimatedStyle(ownedId);
+  // `immediate: false` must not paint the updater's current values at
+  // registration (list cards start with opacity/scale 0 and rely on this).
+  assert.equal(styleOf(owned), undefined,
+               'immediate:false mapper does not run at registration');
   ownedProgress.value = 0.75;
   assert.match(styleOf(owned) || '', /opacity: 0?\.75;/,
                'window-id mapper paints its registered owner');
@@ -681,4 +685,25 @@ test('bootstrap: worklet mappers drive applyAnimatedStyle updates', () => {
     4, derivedWorklet, [source], [derivedOut], { flush: 'sync' });
   source.value = 5;
   assert.equal(derivedOut.value, 15, 'selector-less mapper still executes');
+});
+
+test('bootstrap: derived getter recomputes from its dependencies', () => {
+  // `wx.worklet.derived(processor)` uses `mutable.installGetter` on this
+  // platform.  The detail page's `.detail-content` opacity comes from a
+  // derived value; a missing getter leaves it at 0 and hides the text.
+  const { sandbox } = loadBootstrap();
+  const M = sandbox.SkylineGlobal.ReanimatedModule;
+  const base = M.makeMutable(2);
+  const out = M.makeMutable(0);
+  const processor = function () { return base.value * 4; };
+  processor._closure = { base };
+  out.installGetter(processor, Object.values(processor._closure));
+  assert.equal(out.value, 8, 'initial derived value');
+  base.value = 3;
+  assert.equal(out.value, 12, 'derived recomputes when an input changes');
+  let notified = 0;
+  out.addListener(() => { notified += 1; });
+  base.value = 5;
+  assert.equal(out.value, 20);
+  assert.ok(notified >= 1, 'derived notifies its listeners');
 });

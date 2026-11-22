@@ -1297,6 +1297,34 @@
       removeListener(listener) {
         listeners.delete(listener);
       },
+      // `wx.worklet.derived(processor)` on the non-native worklet path calls
+      // `mutable.installGetter(processor, closureValues)`.  Recompute the
+      // derived value whenever a captured shared value changes (route
+      // animations rely on this: `_curvePrimaryAnimation` drives the detail
+      // page opacity, a stale 0 hides all detail text).
+      installGetter(processor, deps) {
+        if (typeof processor !== 'function') return;
+        const inputs = [];
+        collectWorkletInputs(deps || [], inputs, new Set(), 0);
+        let computing = false;
+        const recompute = () => {
+          if (computing) return;
+          computing = true;
+          try {
+            current = processor.call(processor._closure || undefined);
+          } catch (_error) {
+          } finally {
+            computing = false;
+          }
+          notify();
+        };
+        for (const input of inputs) {
+          try {
+            input.addListener(recompute);
+          } catch (_error) {}
+        }
+        recompute();
+      },
     };
   }
 
@@ -1321,6 +1349,11 @@
     // re-run when they change.
     target.startMapper = function (selector, worklet, inputs, outputs, config) {
       if (typeof worklet !== 'function') return 0;
+      // `immediate: false` means "do not apply the updater's current styles at
+      // registration"; the first run happens when an input changes.  Running
+      // it eagerly paints initial shared values (card opacity/scale start at
+      // 0) and hides card text/images that the official renderer leaves alone.
+      const immediate = !(config && config.immediate === false);
       const id = nextWorkletMapperId++;
       const entry = {
         id,
@@ -1328,7 +1361,7 @@
         worklet,
         inputs: [],
         outputs: [],
-        dirty: true,
+        dirty: immediate,
         misses: 0,
         owner: null,
         flush: config && config.flush === 'sync' ? 'sync' : 'async',
@@ -1350,7 +1383,7 @@
         } catch (_error) {}
       }
       workletMappers.set(id, entry);
-      scheduleWorkletMapperFrame();
+      if (immediate) scheduleWorkletMapperFrame();
       return id;
     };
     target.stopMapper = function (windowId, mapperId) {
