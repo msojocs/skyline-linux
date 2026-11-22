@@ -1403,6 +1403,8 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
                              double lineHeight,
                              int textAlign,
                              int maxLines,
+                             int overflow,
+                             bool softWrap,
                              const std::vector<std::string>& fontFamilies,
                              Dart_Handle* out_span = nullptr) {
   Dart_Handle text_handle = Dart_NewStringFromCString(value);
@@ -1450,8 +1452,10 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
       address, text_handle, color, 0, 0, 0, 0, 0.0, nullptr, 0, fontSize,
       static_cast<uint8_t>(fontWeight), static_cast<uint8_t>(fontStyle),
       fallback, std::isnan(lineHeight) ? nan : lineHeight,
-      std::isnan(letterSpacing) ? nan : letterSpacing, nan, 0, Dart_Null(),
-      no_children);
+      std::isnan(letterSpacing) ? nan : letterSpacing, nan,
+      // Skyline's default WordBreak is breakAll (the official engine breaks
+      // long English words at the character that overflows).
+      1, Dart_Null(), no_children);
   if (Dart_IsError(span)) {
     return span;
   }
@@ -1460,8 +1464,9 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
   Dart_ListSetAt(spans, 0, span);
   return newText(address, reinterpret_cast<void*>(&DemoMarkDirty),
                  reinterpret_cast<void*>(&DemoCreateParagraph),
-                 static_cast<uint8_t>(textAlign), 1 /* ltr */, 0 /* clip */,
-                 1 /* softWrap */, static_cast<uint32_t>(maxLines), 0, 0,
+                 static_cast<uint8_t>(textAlign), 1 /* ltr */,
+                 static_cast<uint8_t>(overflow), softWrap ? 1 : 0,
+                 static_cast<uint32_t>(maxLines), 0, 0,
                  0 /* Flutter text */, spans);
 }
 
@@ -1627,7 +1632,8 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
         MemberNumber(entry, "letterSpacing", std::nan("")),
         MemberNumber(entry, "lineHeight", std::nan("")),
         static_cast<int>(MemberNumber(entry, "textAlign", 0.0f)),
-        static_cast<int>(MemberNumber(entry, "maxLines", 0.0f)), families);
+        static_cast<int>(MemberNumber(entry, "maxLines", 0.0f)), 0, true,
+        families);
     if (Dart_IsError(inner)) {
       std::fprintf(stderr, "[skyline-runtime] json page: text widget failed\n");
       return BuiltJsonNode();
@@ -2252,6 +2258,9 @@ struct AppStyle {
   float height = -1.0f;
   float width_percent = -1.0f;  // 0..1
   float height_percent = -1.0f;
+  // CSS aspect-ratio (width / height); -1 = none.  The automatic axis is
+  // derived from the definite one during layout.
+  float aspect_ratio = -1.0f;
   // 0 = border-box (Skyline's effective default), 1 = content-box.
   int box_sizing = 0;
   float min_width = 0.0f;
@@ -2296,7 +2305,15 @@ struct AppStyle {
   double letter_spacing = std::nan("");
   int text_align = 0;
   uint32_t max_lines = 0;
+  // CSS white-space: 0 normal, 1 nowrap, 2 pre, 3 pre-wrap, 4 pre-line.
+  int white_space = 0;
+  // Flutter TextOverflow index (0 clip, 1 fade, 2 ellipsis, 3 visible).
+  int text_overflow = 0;
   bool display_none = false;
+  // CSS display: inline-block / inline participates in the parent's inline
+  // formatting context instead of stacking as a block.
+  bool inline_block = false;
+  bool inline_level = false;
   bool clip = false;  // overflow: hidden/clip
   // Image fit: 0 fill, 1 contain, 2 cover, 3 none, 4 scale-down.
   int object_fit = 0;
@@ -4203,7 +4220,11 @@ void ApplyDeclaration(AppStyle* style,
   if (key.empty() || value.empty()) return;
 
   if (key == "display") {
-    style->display_none = value == "none";
+    const std::string display = LowerAscii(value);
+    style->display_none = display == "none";
+    style->inline_block = display == "inline-block" ||
+                          display == "inline-flex" || display == "inline-grid";
+    style->inline_level = display == "inline";
   } else if (key == "overflow" || key == "overflow-x" ||
              key == "overflow-y") {
     style->clip = value == "hidden" || value == "clip" || value == "scroll" ||
@@ -4332,6 +4353,38 @@ void ApplyDeclaration(AppStyle* style,
     style->align = ParseAlign(value);
   } else if (key == "align-self") {
     style->align_self = value == "auto" ? -1 : ParseAlign(value);
+  } else if (key == "white-space") {
+    const std::string white_space = LowerAscii(value);
+    style->white_space = white_space == "nowrap"  ? 1
+                         : white_space == "pre"   ? 2
+                         : white_space == "pre-wrap" ? 3
+                         : white_space == "pre-line" ? 4
+                                                     : 0;
+  } else if (key == "text-overflow") {
+    const std::string text_overflow = LowerAscii(value);
+    style->text_overflow = text_overflow == "ellipsis" ? 2
+                            : text_overflow == "fade"  ? 1
+                                                       : 0;
+  } else if (key == "aspect-ratio") {
+    // CSS syntax: `auto`, `<ratio>`, or `auto <ratio>`, where a ratio is
+    // `number` or `number / number`.
+    std::string ratio = LowerAscii(value);
+    if (StartsWith(ratio, "auto")) ratio = TrimAscii(ratio.substr(4));
+    double numerator = 0.0;
+    double denominator = 1.0;
+    const size_t slash = ratio.find('/');
+    if (slash == std::string::npos) {
+      if (ParseNumber(ratio, &numerator) && numerator > 0.0) {
+        style->aspect_ratio = static_cast<float>(numerator);
+      }
+    } else {
+      const std::string left = TrimAscii(ratio.substr(0, slash));
+      const std::string right = TrimAscii(ratio.substr(slash + 1));
+      if (ParseNumber(left, &numerator) && ParseNumber(right, &denominator) &&
+          numerator > 0.0 && denominator > 0.0) {
+        style->aspect_ratio = static_cast<float>(numerator / denominator);
+      }
+    }
   } else if (key == "box-sizing") {
     style->box_sizing = LowerAscii(value) == "content-box" ? 1 : 0;
   } else if (key == "width" || key == "min-width" || key == "max-width" ||
@@ -5092,6 +5145,7 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
     style.letter_spacing = parent->letter_spacing;
     style.text_align = parent->text_align;
     style.font_families = parent->font_families;
+    style.white_space = parent->white_space;
   }
 
   if (g_page != nullptr) {
@@ -5298,7 +5352,31 @@ const char* NodeText(const AppNode* node, std::string* storage) {
 // single space and leading/trailing whitespace is dropped.  The SDK hands us
 // the raw template text (indentation and newlines included), which otherwise
 // measures as a huge multiline block (e.g. the A-Z popup letter).
-std::string NormalizeTextWhitespace(const std::string& raw) {
+std::string NormalizeTextWhitespace(const std::string& raw,
+                                    int white_space = 0) {
+  // `pre`/`pre-wrap` preserve spaces and newlines verbatim.
+  if (white_space == 2 || white_space == 3) return raw;
+  // `pre-line` collapses runs of spaces/tabs but preserves newlines.
+  if (white_space == 4) {
+    std::string out;
+    out.reserve(raw.size());
+    bool pending_space = false;
+    for (const unsigned char c : raw) {
+      if (c == '\n') {
+        out.push_back('\n');
+        pending_space = false;
+      } else if (c == ' ' || c == '\t' || c == '\r' || c == '\f') {
+        pending_space = !out.empty() && out.back() != '\n';
+      } else {
+        if (pending_space) out.push_back(' ');
+        pending_space = false;
+        out.push_back(static_cast<char>(c));
+      }
+    }
+    return out;
+  }
+  // normal/nowrap: whitespace runs collapse to a single space and
+  // leading/trailing whitespace is dropped.
   std::string out;
   out.reserve(raw.size());
   bool pending_space = false;
@@ -5315,6 +5393,10 @@ std::string NormalizeTextWhitespace(const std::string& raw) {
   }
   return out;
 }
+
+// Skyline's default WordBreak is breakAll; Flutter's public paragraph builder
+// does not expose that switch, so the wrapping path below uses Flutter's
+// default word wrapping.
 
 double GlyphWidth(uint32_t codepoint, double font_size) {
   if (codepoint == ' ') return 0.30 * font_size;
@@ -5385,6 +5467,16 @@ double TextIntrinsicWidth(const std::string& text, const AppStyle& style) {
 
 int CountTextLines(const std::string& text, double max_width,
                    const AppStyle& style) {
+  // white-space:nowrap collapses newlines to spaces and never wraps.
+  if (style.white_space == 1) return 1;
+  // white-space:pre keeps hard newlines but never soft-wraps.
+  if (style.white_space == 2) {
+    int lines = 1;
+    for (char c : text) {
+      if (c == '\n') lines++;
+    }
+    return lines;
+  }
   if (max_width <= 0.0 || max_width >= kInf) {
     int lines = 1;
     for (char c : text) {
@@ -5449,6 +5541,25 @@ std::vector<AppNode*> OrderedFlowChildren(AppNode* node) {
                      return a->style.order < b->style.order;
                    });
   return flow;
+}
+
+// A block container whose in-flow children are all inline-level (text or
+// display:inline-block/inline).  CSS wraps them into line boxes; the official
+// engine bottom-aligns inline-block children on the line.  Pure text-only
+// containers keep the existing stretched-text path so text-align still applies
+// across the full container width.
+bool IsInlineFlowContainer(AppNode* node) {
+  if (node == nullptr || node->style.row || node->style.wrap) return false;
+  bool has_inline_element = false;
+  for (AppNode* child : OrderedFlowChildren(node)) {
+    if (child->tag == "text") continue;
+    if (child->style.inline_block || child->style.inline_level) {
+      has_inline_element = true;
+      continue;
+    }
+    return false;
+  }
+  return has_inline_element;
 }
 
 // glass-easel splices a fragment into its parent before appending its children
@@ -5643,8 +5754,9 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
 
   const bool is_text = node->tag == "text";
   std::string text_storage;
-  const std::string text =
-      is_text ? NormalizeTextWhitespace(NodeText(node, &text_storage))
+  std::string text =
+      is_text ? NormalizeTextWhitespace(NodeText(node, &text_storage),
+                                        style.white_space)
               : std::string();
 
   float width = -1.0f;
@@ -5654,8 +5766,14 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
   } else if (style.width >= 0.0f) {
     width = DeclaredWidth(style);
   } else if (is_text) {
-    width = static_cast<float>(TextIntrinsicWidth(text, style)) +
-            BorderBoxExtra(style, true);
+    const double intrinsic = TextIntrinsicWidth(text, style);
+    // Block-level text stretches to the containing block width; that is what
+    // makes white-space:normal wrap and nowrap + ellipsis clip inside the box.
+    if (stretch_w && avail_w < kInf) {
+      width = avail_w;
+    } else {
+      width = static_cast<float>(intrinsic) + BorderBoxExtra(style, true);
+    }
   } else if (stretch_w && avail_w < kInf) {
     width = avail_w;
   }
@@ -5745,6 +5863,32 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
                     : avail_w;
 
   auto measure_children = [&]() {
+    if (IsInlineFlowContainer(node)) {
+      float line_main = 0.0f;
+      float line_cross = 0.0f;
+      float max_line_main = 0.0f;
+      float total_cross = 0.0f;
+      for (AppNode* child : OrderedFlowChildren(node)) {
+        if (child == nullptr) continue;
+        const SizeF measured = MeasureNode(child, content_avail_w, false, kInf, false);
+        const float outer_main =
+            measured.w + child->style.margin[1] + child->style.margin[3];
+        const float outer_cross =
+            measured.h + child->style.margin[0] + child->style.margin[2];
+        if (line_main > 0.0f && content_avail_w < kInf &&
+            line_main + outer_main > content_avail_w + 0.01f) {
+          max_line_main = std::max(max_line_main, line_main);
+          total_cross += line_cross;
+          line_main = 0.0f;
+          line_cross = 0.0f;
+        }
+        line_main += outer_main;
+        line_cross = std::max(line_cross, outer_cross);
+      }
+      max_line_main = std::max(max_line_main, line_main);
+      total_cross += line_cross;
+      return SizeF{max_line_main, total_cross};
+    }
     float main_extent = 0.0f;
     float cross_extent = 0.0f;
     int flow_children = 0;
@@ -5857,6 +6001,36 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
     height = DeclaredHeight(style);
   } else if (stretch_h && avail_h < kInf) {
     height = avail_h;
+  }
+  const bool width_definite =
+      HasExplicitWidth(style) || (stretch_w && avail_w < kInf);
+  const bool height_definite =
+      HasExplicitHeight(style) || (stretch_h && avail_h < kInf);
+  if (!is_text && style.aspect_ratio > 0.0f) {
+    // CSS aspect-ratio: derive the automatic axis from the definite one.
+    // Alignment stretch counts as definite, so a stretched flex/block box uses
+    // the used width and derives its height.
+    if (!height_definite && width_definite && width >= 0.0f) {
+      const float content_w = IsContentBox(style)
+                                  ? std::max(0.0f, width - BorderBoxExtra(style, true))
+                                  : width;
+      float content_h = content_w / style.aspect_ratio;
+      height = IsContentBox(style)
+                   ? content_h + BorderBoxExtra(style, false)
+                   : content_h;
+      if (height < MinBoxHeight(style)) height = MinBoxHeight(style);
+      if (height > MaxBoxHeight(style)) height = MaxBoxHeight(style);
+    } else if (!width_definite && height_definite && height >= 0.0f) {
+      const float content_h = IsContentBox(style)
+                                  ? std::max(0.0f, height - BorderBoxExtra(style, false))
+                                  : height;
+      float content_w = content_h * style.aspect_ratio;
+      width = IsContentBox(style)
+                  ? content_w + BorderBoxExtra(style, true)
+                  : content_w;
+      if (width < MinBoxWidth(style)) width = MinBoxWidth(style);
+      if (width > MaxBoxWidth(style)) width = MaxBoxWidth(style);
+    }
   }
   if (height < 0.0f) {
     SizeF remeasured = measure_children();
@@ -5993,6 +6167,54 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     return;
   }
 
+  if (IsInlineFlowContainer(node)) {
+    struct InlineItem {
+      AppNode* node = nullptr;
+      float x = 0.0f;
+      float w = 0.0f;
+      float h = 0.0f;
+      float margin_top = 0.0f;
+      float margin_bottom = 0.0f;
+    };
+    std::vector<InlineItem> line;
+    float cursor_x = content_x;
+    float line_top = content_y;
+    float line_height = 0.0f;
+    auto flush_line = [&]() {
+      for (const InlineItem& item : line) {
+        // inline-block boxes align their bottom margin edge with the line
+        // bottom (baseline for the common no-text case).
+        const float offset =
+            line_height - (item.h + item.margin_top + item.margin_bottom);
+        const float child_y = line_top + item.margin_top + offset;
+        LayoutNode(item.node, item.x, child_y, item.w, item.h, metrics,
+                   abs_x + item.x, abs_y + child_y, cb_abs_x, cb_abs_y, cb_w,
+                   cb_h);
+      }
+      line_top += line_height;
+      line_height = 0.0f;
+      cursor_x = content_x;
+      line.clear();
+    };
+    for (AppNode* child : OrderedFlowChildren(node)) {
+      const SizeF measured = MeasureNode(child, content_w, false, kInf, false);
+      const float margin_left = child->style.margin[3];
+      const float margin_right = child->style.margin[1];
+      const float margin_top = child->style.margin[0];
+      const float margin_bottom = child->style.margin[2];
+      const float outer_w = measured.w + margin_left + margin_right;
+      const float outer_h = measured.h + margin_top + margin_bottom;
+      if (!line.empty() && content_w < kInf &&
+          cursor_x - content_x + outer_w > content_w + 0.01f) {
+        flush_line();
+      }
+      line.push_back({child, cursor_x + margin_left, measured.w, measured.h,
+                      margin_top, margin_bottom});
+      line_height = std::max(line_height, outer_h);
+      cursor_x += outer_w;
+    }
+    flush_line();
+  } else {
   struct ChildLayout {
     AppNode* node = nullptr;
     float w = 0.0f;
@@ -6317,6 +6539,7 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     cursor += child.main + child.margin_main_end + MainGap(style) + extra_gap;
   }
   }  // !style.wrap
+  }  // !IsInlineFlowContainer
 
   // Absolute/fixed children: absolute boxes resolve against the nearest
   // positioned ancestor's padding box (`cb_*`), fixed boxes against the
@@ -7811,19 +8034,23 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     }
     std::string text_storage;
     const std::string text =
-        NormalizeTextWhitespace(NodeText(node, &text_storage));
+        NormalizeTextWhitespace(NodeText(node, &text_storage),
+                                style.white_space);
     // NewTextSpan's `height` is the Flutter line-height multiplier, while CSS
     // line-height is in pixels; convert back to a multiplier.
     const double line_height =
         style.line_height > 0.0 ? style.line_height / style.font_size
                                 : style.line_height_factor;
     Dart_Handle span_handle = nullptr;
+    // CSS white-space nowrap/pre disable wrapping; text-overflow is the
+    // Flutter TextOverflow index (ellipsis = 2).
+    const bool soft_wrap = style.white_space != 1 && style.white_space != 2;
     inner = CreateTextWidget(
         newText, newTextSpan, node->address, text.c_str(), style.font_size,
         style.color, style.font_weight, style.font_style,
         std::isnan(style.letter_spacing) ? std::nan("") : style.letter_spacing,
         line_height, style.text_align, static_cast<int>(style.max_lines),
-        style.font_families, &span_handle);
+        style.text_overflow, soft_wrap, style.font_families, &span_handle);
     if (Dart_IsError(inner)) {
       ReportDartError("appservice text widget", inner);
       return Dart_Null();
@@ -9891,6 +10118,11 @@ bool StyleNeedsRebuild(const AppNode* node, const AppStyle& before,
                        const AppStyle& after) {
   if (before.display_none != after.display_none) return true;
   if (before.clip != after.clip) return true;
+  // softWrap/overflow are baked into the Flutter text widget at creation.
+  if (before.white_space != after.white_space ||
+      before.text_overflow != after.text_overflow) {
+    return true;
+  }
   // A different background image URL (or gaining/losing one) needs a fresh
   // decorated-box registration/load; size/position changes repaint in place.
   if (before.background_image != after.background_image) return true;
@@ -9930,7 +10162,8 @@ void SnapshotNode(AppNode* node) {
   node->has_previous_style = true;
   if (node->tag == "text") {
     std::string storage;
-    node->previous_text = NormalizeTextWhitespace(NodeText(node, &storage));
+    node->previous_text = NormalizeTextWhitespace(NodeText(node, &storage),
+                                                  node->style.white_space);
   }
   for (AppNode* child : node->children) SnapshotNode(child);
 }
@@ -9946,6 +10179,7 @@ bool LayoutAffectingStyleChanged(const AppStyle& a, const AppStyle& b) {
   if (a.row != b.row || a.justify != b.justify || a.align != b.align ||
       a.align_self != b.align_self || a.wrap != b.wrap ||
       a.align_content != b.align_content || a.order != b.order ||
+      a.inline_block != b.inline_block || a.inline_level != b.inline_level ||
       ne(a.gap, b.gap) || ne(a.row_gap, b.row_gap) ||
       ne(a.column_gap, b.column_gap) || a.position != b.position) {
     return true;
@@ -9962,7 +10196,8 @@ bool LayoutAffectingStyleChanged(const AppStyle& a, const AppStyle& b) {
   }
   if (ne(a.width, b.width) || ne(a.height, b.height) ||
       ne(a.width_percent, b.width_percent) ||
-      ne(a.height_percent, b.height_percent) || a.box_sizing != b.box_sizing ||
+      ne(a.height_percent, b.height_percent) ||
+      ne(a.aspect_ratio, b.aspect_ratio) || a.box_sizing != b.box_sizing ||
       ne(a.min_width, b.min_width) || ne(a.max_width, b.max_width) ||
       ne(a.min_height, b.min_height) || ne(a.max_height, b.max_height) ||
       ne(a.flex, b.flex) || a.has_flex != b.has_flex ||
@@ -9978,7 +10213,8 @@ bool LayoutAffectingStyleChanged(const AppStyle& a, const AppStyle& b) {
   if (ne(a.font_size, b.font_size) || ne(a.line_height, b.line_height) ||
       ne(a.line_height_factor, b.line_height_factor) ||
       ne(a.letter_spacing, b.letter_spacing) ||
-      a.font_families != b.font_families || a.max_lines != b.max_lines) {
+      a.font_families != b.font_families || a.max_lines != b.max_lines ||
+      a.white_space != b.white_space) {
     return true;
   }
   return false;
@@ -10084,7 +10320,8 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
     if (node->tag == "text") {
       std::string storage;
       const std::string text_value =
-          NormalizeTextWhitespace(NodeText(node, &storage));
+          NormalizeTextWhitespace(NodeText(node, &storage),
+                                  node->style.white_space);
       const bool text_changed = text_value != node->previous_text;
       const bool color_changed = before.color != after.color;
       const bool size_changed = std::fabs(before.font_size - after.font_size) > 0.01;
@@ -10311,7 +10548,8 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
     node->previous_style = after;
     if (node->tag == "text") {
       std::string storage;
-      node->previous_text = NormalizeTextWhitespace(NodeText(node, &storage));
+      node->previous_text = NormalizeTextWhitespace(NodeText(node, &storage),
+                                                  node->style.white_space);
     }
   }
   if (rebuild) return false;

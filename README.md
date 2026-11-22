@@ -74,11 +74,12 @@ L1–L4 可在本仓库直接运行；L5 已有 Linux 基线与**官方 Windows 
 （`npm run test:l5`）。`tools/l5-windows.js` 在 Wine 渲染进程中以 dpr=2 启动官方
 `skyline.node`，经 `notifyAppLaunch` + `PageContext` 回放夹具并从共享内存读取帧
 （Windows 原始帧为 BGRA，工具转为 RGBA），结果写入
-`spec/l5-baseline.win32.json`。25 个夹具中 13 个逐像素完全一致，
+`spec/l5-baseline.win32.json`。25 个夹具中 14 个逐像素完全一致，
 `shadow`/`radial-conic`/`background-size` 最大差 1，`overflow` 仅有边缘级差异；
-`transform3d`/`transform-origin-z`、以及 D2 新增的 `aspect-ratio`/
-`vertical-align`/`text-overflow`/`white-space` 为已记录的 Windows/Linux 差异，
-`map` 逐像素一致，`gridview`/`listview` 不可比；详见 `docs/feasibility.md` §3.1。
+`transform3d`/`transform-origin-z` 及 D2/D6 后的 `vertical-align`/
+`text-overflow`/`white-space` 为已记录的文本/布局残余差异（inline-block、
+nowrap/normal、aspect-ratio 已对齐），`map` 逐像素一致，`gridview`/`listview`
+不可比；详见 `docs/feasibility.md` §3.1。
 
 汇总缺口报告：`npm run gaps`（`tools/conformance-gaps.js`）把 Windows API oracle
 覆盖率、L5 逐像素结果、官方符号清单、原生运行时未接线的回调，以及

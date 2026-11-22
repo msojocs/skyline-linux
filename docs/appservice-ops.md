@@ -593,9 +593,9 @@ npm run test:ops
 - L5：Linux 侧确定性帧哈希与 `test/lib/l5.js` 容差比较已就绪
   （`npm run test:l5`）。官方 Windows 引擎帧由 `tools/l5-windows.js` 在
   Wine 渲染进程中以 dpr=2 采集，基线写入 `spec/l5-baseline.win32.json`；
-  Windows 原始帧为 BGRA，采集工具统一转 RGBA。13 个夹具逐像素完全一致
+  Windows 原始帧为 BGRA，采集工具统一转 RGBA。14 个夹具逐像素完全一致
   （`shadow`/`radial-conic`/`background-size` 最大差 1），
   `overflow` 仅有边缘级差异，`transform3d`、`transform-origin-z`
-  （官方引擎忽略 origin z）、D2 探针 `aspect-ratio`/`vertical-align`/
-  `text-overflow`/`white-space` 与 `gridview`/`listview` 的已知差异见
+  （官方引擎忽略 origin z）、D2/D6 后的 `vertical-align`/`text-overflow`/
+  `white-space` 文本残余差异，以及 `gridview`/`listview` 的已知差异见
   `docs/feasibility.md` §3.1。

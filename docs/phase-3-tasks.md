@@ -72,7 +72,7 @@
     从共享内存读取 640x480 帧。原始 Windows 帧为 BGRA，工具统一转为 RGBA。
   - `spec/l5-baseline.win32.json` 保存 25 个夹具的 zlib 压缩帧、样本点与容差；
     `npm run test:l5` 在 Linux 以 dpr=2 重放同一夹具并逐像素比较。
-  - 结果：13 个夹具逐像素完全一致，`shadow`/`radial-conic`/`background-size`
+  - 结果：14 个夹具逐像素完全一致，`shadow`/`radial-conic`/`background-size`
     最大差 1；`overflow`
     失配率 < 0.2%（裁剪边缘），`fixed-scroll` 已完全一致；`transform3d` 存在 3D 变换保真差异；
     `transform-origin-z` 因官方引擎忽略 origin z 分量而失配率约 10%（已知差异）；
@@ -249,9 +249,9 @@
     - `text-overflow`：官方 `nowrap + ellipsis`，失配 1.37%；
     - `white-space`：官方区分 `nowrap`/`normal`，失配 1.93%；
     - `map`：maxDelta=0（该 op 流下两边都是空白占位，原生地图内容未被覆盖）。
-  - 四个文本/布局差异已写入 `KNOWN_DIVERGENCES`（带说明与 0.5% headroom），
-    `npm run test:l5` 仍为 2/2 通过。`pointer-events`/`will-change` 无静态像素差异，
-    移入 D3 行为探针。
+  - 四个文本/布局差异中 `aspect-ratio` 已在 D6 修复并移出
+    `KNOWN_DIVERGENCES`；其余三个保留说明与 0.5% headroom。
+    `pointer-events`/`will-change` 无静态像素差异，移入 D3 行为探针。
 - [ ] **D3** 候选回调行为探针
   - 重点：`ScrollViewUpdateOnScroll/OnScrollStart/OnScrollEnd`、
     `SwiperUpdateOnChange/OnScroll`、`InputFocusManually/BlurManually`、
@@ -267,6 +267,24 @@
 - [ ] **D5** 把 `npm run gaps` 纳入基线
   - 固定报告格式，加入 CI：或提交 `docs/conformance-gaps.md` 基线，
     在契约/L5 结果变化时显式更新。
+- [x] **D6** 修复 D2 探针确认的 CSS/布局差异
+  - `aspect-ratio`：解析 `auto`/`n`/`n / m`，在确定轴上推导另一轴（含
+    border-box/content-box、min/max 与 flex stretch 语义）。L5 探针现与官方
+    逐像素一致（maxDelta=0）。
+  - `display:inline-block`：块容器内全部为行内级子项时按行盒排布，行高取最大
+    子项高度并底部对齐；`vertical-align` 探针的三个色块位置与官方完全一致，
+    剩余 ~0.8% 为文本栅格化差异。
+  - `white-space`：支持 `normal`/`nowrap`/`pre`/`pre-wrap`/`pre-line`；
+    `NormalizeTextWhitespace` 按模式保留/折叠空白；nowrap 不换行，块级文本按
+    容器宽度换行。`text-overflow` 支持 `clip`/`ellipsis`（映射 Flutter
+    TextOverflow）。
+  - 文本宽度：块级文本节点按包含块宽度约束，使 nowrap + ellipsis 能在容器内
+    裁剪；行内流中的文本保持固有宽度。
+  - 已知剩余：Skyline 默认 `WordBreak.breakAll` 未能在该 Flutter 文本路径上
+    生效（U+200B 试验无效），`white-space` 探针剩余 ~2.3% 为断行/栅格化差异；
+    `text-overflow` 在该 op 流下官方也是直接裁剪，剩余 ~1.6% 为文本栅格化。
+    L5 基线已记录说明。
+  - 回归：`test:ops` 68/68、`test:page` 14/14、`test:l5` 2/2 通过。
 
 ## 测试基线（x / y）
 

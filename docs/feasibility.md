@@ -217,16 +217,20 @@ C1 原先按“需要完整官方 DevTools 环境”阻塞。实际验证表明�
 
 | 夹具 | 结果 |
 | --- | --- |
-| stripes/fixed/transform-origin/align-gap/flex-wrap/order/absolute/flex-basis/box-sizing/percent-box/sticky/map | 逐像素完全一致（maxDelta=0） |
+| stripes/fixed/transform-origin/align-gap/flex-wrap/order/absolute/flex-basis/box-sizing/percent-box/sticky/aspect-ratio/map | 逐像素完全一致（maxDelta=0） |
 | shadow/radial-conic/background-size | maxDelta=1 |
 | overflow | maxDelta=109，失配率 0.14%（裁剪边缘） |
 | transform3d | 失配率 18%，Linux 3D 变换保真差异（记录为已知差异） |
 | transform-origin-z | 失配率 10%；官方引擎忽略 transform-origin 的 z 分量（已知差异） |
-| aspect-ratio | 失配率 3.5%；官方按 2:1 画出 100x50，Linux 高度塌缩为 0（已知差异） |
-| vertical-align | 失配率 6.3%；官方 inline-block 按 top/bottom/middle 排成一行，Linux 当作块级竖排（已知差异） |
-| text-overflow | 失配率 1.4%；官方 `nowrap + ellipsis`，Linux 裁剪文本（已知差异） |
-| white-space | 失配率 1.9%；官方区分 `nowrap`/`normal`，Linux 换行/折叠不同（已知差异） |
+| vertical-align | 失配率 0.8%；inline-block 行盒布局已对齐，剩余为文本栅格化差异 |
+| text-overflow | 失配率 1.6%；官方在该 op 流下同样直接裁剪，剩余为文本栅格化差异 |
+| white-space | 失配率 2.3%；nowrap/normal 切换已对齐，剩余为 Skyline breakAll 与 Flutter 单词换行的差异 |
 | gridview/listview | 合成 op 流不会触发官方 native builder 回调，标记不可比 |
+
+D6 后 `aspect-ratio`、`display:inline-block` 行盒、`white-space` 模式和
+`text-overflow` 解析均已实现；`white-space` 的剩余差异来自 Skyline 默认
+`WordBreak.breakAll`（该 Flutter 文本路径不暴露该开关），`text-overflow` 的
+剩余差异是文本栅格化。
 
 `map` 在 L5 合成 op 流中两边都是空白占位（maxDelta=0），因此“原生地图内容”
 仍未被该夹具覆盖；`pointer-events`/`will-change` 无静态像素差异，留待行为探针。

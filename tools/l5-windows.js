@@ -72,29 +72,22 @@ const KNOWN_DIVERGENCES = {
     note: 'official engine requires a list builder callback; synthetic ops leave the list empty',
     compare: false,
   },
-  // D2 feature probes.  These are real Windows/Linux differences found by
-  // conformance-gaps; keep a small headroom so cross-run anti-aliasing noise
-  // does not flip the test, but leave the measured ratios in the baseline.
-  'appservice-aspect-ratio': {
-    note: 'official engine applies CSS aspect-ratio (100x50); Linux collapses the box to height 0',
-    compare: true,
-    headroom: 0.005,
-    samplesInformational: true,
-  },
+  // D2 feature probes.  The fixed CSS/layout behaviour now matches; the
+  // remaining ratios are text rasterization or Skyline breakAll metrics.
   'appservice-vertical-align': {
-    note: 'official engine lays out inline-block children with vertical-align top/bottom/middle; Linux stacks them as blocks',
+    note: 'inline-block line layout now matches; residual is text rasterization/metrics (~0.8%)',
     compare: true,
     headroom: 0.005,
     samplesInformational: true,
   },
   'appservice-text-overflow': {
-    note: 'official engine applies white-space:nowrap + text-overflow:ellipsis; Linux clips at different text metrics',
+    note: 'official clips at the same point in this op stream (no ellipsis); residual is text rasterization (~1.6%)',
     compare: true,
     headroom: 0.005,
     samplesInformational: true,
   },
   'appservice-white-space': {
-    note: 'official engine applies white-space:nowrap/normal; Linux wraps/collapses text differently',
+    note: 'nowrap/normal switching now matches; residual is Skyline breakAll vs Flutter word wrapping (~2.3%)',
     compare: true,
     headroom: 0.005,
     samplesInformational: true,
