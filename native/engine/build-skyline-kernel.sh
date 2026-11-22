@@ -78,6 +78,9 @@ if [ "$check_only" -eq 1 ]; then
   grep -q 'List<Widget>.of(children)' \
     "$app/packages/skyline/lib/widgets/multi_child_render_object_widget.dart" \
     || die "growable widget children patch missing (custom routes); run without --check"
+  grep -q 'bool showDebugBanner = false;' \
+    "$app/packages/skyline/lib/core/application.dart" \
+    || die "debug banner patch missing (deterministic frames); run without --check"
   log "kernel ok: $out"
   exit 0
 fi

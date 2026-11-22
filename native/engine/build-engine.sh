@@ -34,12 +34,12 @@ done
 
 case "$runtime_mode" in
   debug)
-    gn_mode_args=(--unoptimized --runtime-mode=debug)
+    gn_mode_args=(--unoptimized --runtime-mode=debug --enable-fontconfig)
     gn_out="host_debug_unopt"
     stage="$ENGINE_DIR/out/linux-x64-debug"
     ;;
   release)
-    gn_mode_args=(--runtime-mode=release)
+    gn_mode_args=(--runtime-mode=release --enable-fontconfig)
     gn_out="host_release"
     stage="$ENGINE_DIR/out/linux-x64-release"
     ;;

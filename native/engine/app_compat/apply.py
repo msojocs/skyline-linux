@@ -374,3 +374,23 @@ else:
     raise SystemExit(
         "cannot find SkylineMultiChildRenderObjectWidget constructor in "
         f"{multi_path}")
+
+# Flutter paints the "DEBUG" banner only when asserts are enabled (the JIT
+# host kernel).  It needs a fallback font — before fontconfig was enabled the
+# engine had none, so deterministic host fixtures were recorded without it.
+# The DevTools runtime is release (no banner), so disable it in the simulated
+# app to keep golden frames font-independent.
+application = (
+    app / "packages" / "skyline" / "lib" / "core" / "application.dart"
+)
+application_text = application.read_text(encoding="utf-8")
+banner_old = "  bool showDebugBanner = true;"
+banner_new = "  bool showDebugBanner = false;"
+if banner_old in application_text:
+    application.write_text(
+        application_text.replace(banner_old, banner_new, 1), encoding="utf-8")
+    print(f"disabled debug banner in {application}")
+elif banner_new in application_text:
+    print(f"debug banner already disabled in {application}")
+else:
+    raise SystemExit(f"cannot find showDebugBanner anchor in {application}")
