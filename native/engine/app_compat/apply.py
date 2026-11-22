@@ -337,3 +337,40 @@ if "skyline/keyboard" not in sample_text:
     print(f"patched keyboard channel in {sample}")
 else:
     print(f"keyboard channel already patched in {sample}")
+
+# Custom routes mutate the host connector's children in
+# `SkylineCupertinoPageTransition.build` (`children.clear()` + `children.add()`).
+# The embedder passes widget children as a fixed-length Dart list, so every
+# custom route build threw "Cannot change the length of a fixed-length list"
+# and the pushed page stayed invisible.  Keep a growable copy in the base
+# multi-child widget.
+multi_path = (
+    app / "packages" / "skyline" / "lib" / "widgets"
+    / "multi_child_render_object_widget.dart"
+)
+multi_text = multi_path.read_text(encoding="utf-8")
+old_ctor = (
+    "  SkylineMultiChildRenderObjectWidget(\n"
+    "      {Key? key, this.children = const <Widget>[]})\n"
+    "      : assert(children != null),\n"
+    "        super(key: key) {"
+)
+new_ctor = (
+    "  SkylineMultiChildRenderObjectWidget(\n"
+    "      {Key? key, List<Widget> children = const <Widget>[]})\n"
+    "      : assert(children != null),\n"
+    "        // Linux compat: the embedder passes a fixed-length list; custom\n"
+    "        // routes mutate connector.children, so keep a growable copy.\n"
+    "        children = List<Widget>.of(children),\n"
+    "        super(key: key) {"
+)
+if old_ctor in multi_text:
+    multi_path.write_text(
+        multi_text.replace(old_ctor, new_ctor, 1), encoding="utf-8")
+    print(f"patched growable children in {multi_path}")
+elif new_ctor in multi_text:
+    print(f"growable children already patched in {multi_path}")
+else:
+    raise SystemExit(
+        "cannot find SkylineMultiChildRenderObjectWidget constructor in "
+        f"{multi_path}")

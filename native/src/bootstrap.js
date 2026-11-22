@@ -1315,9 +1315,60 @@
     target.makeShareable = function (value) { return value; };
     target.makeMutable = workletMutable;
     target.makeRemote = function (value) { return value; };
-    target.startMapper = function () { return 0; };
-    target.stopMapper = function () {};
-    target.stopMappers = function () {};
+    // applyAnimatedStyle/derived mapper registration: the first argument is a
+    // selector string (or a direct element), `worklet` is the generated mapper
+    // worklet and `inputs` are the captured shared values that schedule a
+    // re-run when they change.
+    target.startMapper = function (selector, worklet, inputs, outputs, config) {
+      if (typeof worklet !== 'function') return 0;
+      const id = nextWorkletMapperId++;
+      const entry = {
+        id,
+        selector,
+        worklet,
+        inputs: [],
+        outputs: [],
+        dirty: true,
+        misses: 0,
+        owner: null,
+        flush: config && config.flush === 'sync' ? 'sync' : 'async',
+        listener: null,
+      };
+      collectWorkletInputs(inputs || [], entry.inputs, new Set(), 0);
+      collectWorkletInputs(outputs || [], entry.outputs, new Set(), 0);
+      entry.listener = () => {
+        entry.dirty = true;
+        if (entry.flush === 'sync') {
+          executeWorkletMapper(entry);
+        } else {
+          scheduleWorkletMapperFrame();
+        }
+      };
+      for (const input of entry.inputs) {
+        try {
+          input.addListener(entry.listener);
+        } catch (_error) {}
+      }
+      workletMappers.set(id, entry);
+      scheduleWorkletMapperFrame();
+      return id;
+    };
+    target.stopMapper = function (windowId, mapperId) {
+      stopWorkletMapper(Number(mapperId) || 0);
+    };
+    target.stopMappers = function (windowId, mapperIds) {
+      if (Array.isArray(mapperIds)) {
+        for (const mapperId of mapperIds) {
+          stopWorkletMapper(Number(mapperId) || 0);
+        }
+      } else if (typeof mapperIds === 'number') {
+        stopWorkletMapper(mapperIds);
+      } else {
+        for (const mapperId of Array.from(workletMappers.keys())) {
+          stopWorkletMapper(mapperId);
+        }
+      }
+    };
     target.enableMapper = function () {};
     target.disableMapper = function () {};
     target.pushFrame = function () {};
@@ -1339,6 +1390,226 @@
         return passthrough;
       },
     });
+  }
+
+  // -- worklet mappers (applyAnimatedStyle / derived) ------------------------
+  // The SDK's `applyAnimatedStyle` and `wx.worklet.derived` register a mapper
+  // with `SkylineGlobal.workletModule.startMapper(selector, worklet, inputs,
+  // outputs, config)`.  The official renderer runs that worklet whenever one
+  // of its input shared values changes; the worklet applies the style through
+  // `workletUIModule.updateNodeStyle`.  Without this emulation nothing drives
+  // worklet animations (a custom-route drag stayed frozen while the finger
+  // moved and only the release animation ran).
+  const workletMappers = new Map();
+  let nextWorkletMapperId = 1;
+  let workletMapperScheduled = false;
+
+  // Collects worklet-mutable-like inputs.  The closure values are arbitrary
+  // objects (the component instance, plain objects, arrays); recurse with a
+  // budget and skip the global object so a captured `globalThis` cannot walk
+  // the entire realm.
+  function collectWorkletInputs(value, out, seen, depth) {
+    if (value === null || typeof value !== 'object') return;
+    if (typeof value.addListener === 'function' && 'value' in value) {
+      if (!seen.has(value)) {
+        seen.add(value);
+        out.push(value);
+      }
+      return;
+    }
+    if (depth > 6 || seen.size > 500) return;
+    if (seen.has(value)) return;
+    if (value === globalThis ||
+        (typeof window !== 'undefined' && value === window)) {
+      return;
+    }
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        collectWorkletInputs(item, out, seen, depth + 1);
+      }
+      return;
+    }
+    let keys;
+    try {
+      keys = Object.keys(value);
+    } catch (_error) {
+      return;
+    }
+    for (const key of keys) {
+      if (key === 'window' || key === 'globalThis' || key === 'global') continue;
+      let child;
+      try {
+        child = value[key];
+      } catch (_error) {
+        continue;
+      }
+      collectWorkletInputs(child, out, seen, depth + 1);
+    }
+  }
+
+  function elementIsMounted(element) {
+    let root = element;
+    while (root && root.parent) root = root.parent;
+    if (!root) return false;
+    for (const attached of attachedRoots.values()) {
+      if (attached === root) return true;
+    }
+    for (const portals of detachedPortals.values()) {
+      for (const portal of portals) {
+        if (portal === root) return true;
+      }
+    }
+    return false;
+  }
+
+  function elementMatchesCompound(element, compound) {
+    if (!element || !compound) return false;
+    let rest = compound;
+    const tagMatch = /^[A-Za-z_][\w-]*/.exec(rest);
+    if (tagMatch) {
+      const tag = tagMatch[0];
+      if (tag !== element.tag && tag !== element.name) return false;
+      rest = rest.slice(tag.length);
+    }
+    while (rest.length > 0) {
+      const match = /^([#.])([\w-]+)/.exec(rest);
+      if (!match) return false;
+      rest = rest.slice(match[0].length);
+      if (match[1] === '#') {
+        if (element._id !== match[2]) return false;
+      } else if (!Array.isArray(element._classNames) ||
+                 element._classNames.indexOf(match[2]) < 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function elementMatchesSelector(element, selector) {
+    const groups = String(selector).split(',');
+    for (const group of groups) {
+      const parts = group.replace(/\s*>\s*/g, ' ').trim().split(/\s+/);
+      if (parts.length === 0 || !parts[0]) continue;
+      if (!elementMatchesCompound(element, parts[parts.length - 1])) continue;
+      let index = parts.length - 2;
+      let ancestor = element.parent;
+      while (index >= 0 && ancestor) {
+        if (elementMatchesCompound(ancestor, parts[index])) index -= 1;
+        ancestor = ancestor.parent;
+      }
+      if (index < 0) return true;
+    }
+    return false;
+  }
+
+  // Resolves `applyAnimatedStyle` targets.  `selector` is normally a CSS
+  // selector string; components may also pass an element/backend node directly.
+  // `owner` is the component backend element that registered the mapper:
+  // class selectors are component-scoped (`applyAnimatedStyle('.card_wrap')`
+  // must not paint every card in the list).
+  function isSelfOrDescendant(element, owner) {
+    for (let node = element; node; node = node.parent) {
+      if (node === owner) return true;
+    }
+    return false;
+  }
+
+  function workletSelectorNodes(selector, owner) {
+    const direct = (value) => {
+      if (!value || typeof value !== 'object') return null;
+      if (typeof value.setAnimatedStyle === 'function') return value;
+      const backend = value.$$;
+      if (backend && typeof backend.setAnimatedStyle === 'function') {
+        return backend;
+      }
+      return null;
+    };
+    if (typeof selector !== 'string') {
+      if (Array.isArray(selector)) {
+        const nodes = [];
+        for (const entry of selector) {
+          for (const node of workletSelectorNodes(entry, owner)) {
+            if (nodes.indexOf(node) < 0) nodes.push(node);
+          }
+        }
+        return nodes;
+      }
+      const one = direct(selector);
+      return one ? [one] : [];
+    }
+    const matches = [];
+    const unmounted = [];
+    for (const element of bridgeElements.values()) {
+      if (!element || element.released) continue;
+      if (owner && !isSelfOrDescendant(element, owner)) continue;
+      if (!elementMatchesSelector(element, selector)) continue;
+      if (elementIsMounted(element)) {
+        matches.push(element);
+      } else {
+        unmounted.push(element);
+      }
+    }
+    // Selectors created during `attached` run before the root is registered in
+    // every host; fall back to the detached matches rather than never painting.
+    return matches.length > 0 ? matches : unmounted;
+  }
+
+  function executeWorkletMapper(entry) {
+    entry.dirty = false;
+    let nodes;
+    const hasSelector = entry.selector !== 0 && entry.selector !== null &&
+      entry.selector !== undefined;
+    if (hasSelector) {
+      nodes = workletSelectorNodes(entry.selector, entry.owner);
+      if (nodes.length === 0) {
+        // The selector may not be attached yet (or its route is still being
+        // built); retry for about a second before giving up.
+        if (entry.misses < 60) {
+          entry.misses += 1;
+          entry.dirty = true;
+        }
+        return;
+      }
+      entry.misses = 0;
+    }
+    try {
+      entry.worklet.call(entry.worklet._closure || undefined, undefined, nodes);
+    } catch (error) {
+      if (typeof native.log === 'function') {
+        native.log(`worklet mapper failed: ${error && error.message}`);
+      }
+    }
+  }
+
+  function runWorkletMappers() {
+    let pending = false;
+    for (const entry of Array.from(workletMappers.values())) {
+      if (!entry.dirty) continue;
+      executeWorkletMapper(entry);
+      if (entry.dirty) pending = true;
+    }
+    if (pending) scheduleWorkletMapperFrame();
+  }
+
+  function scheduleWorkletMapperFrame() {
+    if (workletMapperScheduled) return;
+    workletMapperScheduled = true;
+    setTimeout(() => {
+      workletMapperScheduled = false;
+      runWorkletMappers();
+    }, 16);
+  }
+
+  function stopWorkletMapper(mapperId) {
+    const entry = workletMappers.get(mapperId);
+    if (!entry) return;
+    workletMappers.delete(mapperId);
+    for (const input of entry.inputs) {
+      try {
+        input.removeListener(entry.listener);
+      } catch (_error) {}
+    }
   }
 
   // The miniprogram SDK's worklet code references the native-provided
@@ -1386,7 +1657,6 @@
           : frameId;
         if (id) clearTimeout(id);
       },
-      requestFrame() {},
       scrollTo() {},
       snapshotChangeMode() {},
       startUserGesture(windowId) {
@@ -1406,7 +1676,20 @@
                                            Number(value) || 0);
         }
       },
-      updateNodeStyle() {},
+      updateNodeStyle(node, style) {
+        let element = null;
+        if (node && typeof node.setAnimatedStyle === 'function') {
+          element = node;
+        } else if (typeof node === 'number') {
+          element = bridgeElements.get(node) || null;
+        } else if (node && node.$$ &&
+                   typeof node.$$.setAnimatedStyle === 'function') {
+          element = node.$$;
+        }
+        if (element) {
+          element.setAnimatedStyle(style == null ? '' : String(style));
+        }
+      },
     };
   }
 
@@ -1513,6 +1796,9 @@
       this.text = '';
       this._id = '';
       this._style = '';
+      this._baseStyle = '';
+      this._animatedStyle = '';
+      this._classNames = [];
       this.viewTag = ++nextBridgeTag;
       this.ops.push({ op: 'createElement', id: this.viewTag, tag, name });
       bridgeElements.set(this.viewTag, this);
@@ -1542,16 +1828,45 @@
       this.ops.push({ op: 'removeAttribute', id: this.viewTag, name });
     }
     setStyle(value) {
-      this._style = String(value);
+      this._baseStyle = String(value);
+      this._pushCombinedStyle();
+    }
+    // Worklet-driven styles (`applyAnimatedStyle`) live on top of the element's
+    // inline style: composing keeps the WXML declarations intact while the
+    // mapper repaints its animated properties every frame.
+    setAnimatedStyle(value) {
+      const next = value == null ? '' : String(value);
+      if (next === this._animatedStyle) return;
+      this._animatedStyle = next;
+      this._pushCombinedStyle();
+    }
+    _pushCombinedStyle() {
+      let combined = this._baseStyle;
+      if (this._animatedStyle) {
+        combined = combined ? `${combined};${this._animatedStyle}`
+                            : this._animatedStyle;
+      }
+      if (combined === this._style) return;
+      this._style = combined;
       this.ops.push({ op: 'setStyle', id: this.viewTag, value: this._style });
     }
     addClass(prefix, scope) {
+      const name = String(prefix == null ? '' : prefix);
+      if (name && this._classNames.indexOf(name) < 0) {
+        this._classNames.push(name);
+      }
       this.ops.push({ op: 'addClass', id: this.viewTag, prefix, name: scope });
     }
     removeClass(prefix, scope) {
+      const name = String(prefix == null ? '' : prefix);
+      const index = this._classNames.indexOf(name);
+      if (index >= 0) this._classNames.splice(index, 1);
       this.ops.push({ op: 'removeClass', id: this.viewTag, prefix, name: scope });
     }
     setClass(names) {
+      this._classNames = String(names == null ? '' : names)
+        .split(/\s+/)
+        .filter(Boolean);
       this.ops.push({ op: 'setClass', id: this.viewTag, names: String(names) });
     }
     setStyleScope(scope) {
@@ -1573,10 +1888,19 @@
       this.ops.push({ op: 'setHitTestBehavior', id: this.viewTag, value });
     }
     addAnimatedStyle(style) {
+      const mapperId = typeof style === 'number'
+        ? style
+        : (style && typeof style === 'object' ? style.mapperId : undefined);
+      if (typeof mapperId === 'number') {
+        // The SDK registers the mapper on the component's backend element; use
+        // it to keep class selectors scoped to that component's subtree.
+        const entry = workletMappers.get(mapperId);
+        if (entry) entry.owner = this;
+      }
       this.ops.push({
         op: 'addAnimatedStyle',
         id: this.viewTag,
-        mapperId: style && typeof style === 'object' ? style.mapperId : undefined,
+        mapperId,
       });
     }
     asShadowRoot() {
@@ -1639,7 +1963,10 @@
       const clone = new BridgeElement(this.tag, this.name, this.ops, this.windowId);
       clone.attrs = Object.assign({}, this.attrs);
       clone.text = this.text;
+      clone._baseStyle = this._baseStyle;
+      clone._animatedStyle = this._animatedStyle;
       clone._style = this._style;
+      clone._classNames = this._classNames.slice();
       this.ops.push({ op: 'cloneNode', id: this.viewTag, clone: clone.viewTag });
       return clone;
     }
@@ -1713,7 +2040,7 @@
     // JS page framework running without changing the rendered tree.
     getParentNode() { return this.parent; }
     getChildNode(index) { return this.children[index] || null; }
-    get classList() { return []; }
+    get classList() { return this._classNames; }
     // Layout offsets read directly by builtin components (swiper/scroll views
     // use them to compute gesture deltas).
     get offsetTop() {
@@ -1756,6 +2083,37 @@
     onKeyboardHeightChange(callback) { this.keyboardHeightChangeCallback = callback; }
     onKeyboardConfirm(callback) { this.keyboardConfirmCallback = callback; }
     onKeyboardComplete(callback) { this.keyboardCompleteCallback = callback; }
+    // The builtin <input>/<textarea> register every keyboard channel in
+    // `created`; the native widget event channel only drives value changes for
+    // now, but the registrations must exist or component creation throws.
+    onKeyboardSelectionChange(callback) {
+      this.keyboardSelectionChangeCallback = callback;
+    }
+    onKeyboardCompositionStart(callback) {
+      this.keyboardCompositionStartCallback = callback;
+    }
+    onKeyboardCompositionEnd(callback) {
+      this.keyboardCompositionEndCallback = callback;
+    }
+    onKeyboardCompositionUpdate(callback) {
+      this.keyboardCompositionUpdateCallback = callback;
+    }
+    onKeyboardLineChange(callback) {
+      this.keyboardLineChangeCallback = callback;
+    }
+    onSetValueCompleted(callback) {
+      this.setValueCompletedCallback = callback;
+    }
+    focus() {
+      if (typeof native.inputFocus === 'function') {
+        native.inputFocus(this.windowId, this.viewTag, true);
+      }
+    }
+    blur() {
+      if (typeof native.inputFocus === 'function') {
+        native.inputFocus(this.windowId, this.viewTag, false);
+      }
+    }
     getOffsetPosition(callback) {
       const rect = nodeRect(this.windowId, this.viewTag);
       if (typeof callback === 'function') {
@@ -1788,8 +2146,15 @@
     getBeforePseudoNode() { return null; }
     getAfterPseudoNode() { return null; }
     updateStyle(value) { this.setStyle(value); }
-    appendStyle(value) { this.setStyle(`${this._style}${value}`); }
-    clearAnimatedStyle() {}
+    appendStyle(value) { this.setStyle(`${this._baseStyle}${value}`); }
+    clearAnimatedStyle(mapperId) {
+      const id = typeof mapperId === 'number'
+        ? mapperId
+        : (mapperId && typeof mapperId === 'object' ? mapperId.mapperId : NaN);
+      if (typeof id === 'number' && !Number.isNaN(id)) {
+        stopWorkletMapper(id);
+      }
+    }
     appendFragment(fragment) {
       if (!fragment) return;
       for (const child of fragment.children) this.appendChild(child);
@@ -2179,7 +2544,8 @@
     touchCallbacks: runtimeTouchCallbacks,
     scrollOffsets,
     workletEventHandlers,
-    scrollEventCallbacks,
+    workletMappers,
+    resolveWorkletNodes: workletSelectorNodes,    scrollEventCallbacks,
     swiperScrollEventCallbacks,
     scrollStartEventCallbacks,
     scrollEndEventCallbacks,

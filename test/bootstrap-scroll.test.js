@@ -533,3 +533,119 @@ test('bootstrap: shared values drive timing animations to completion', () => {
   assert.equal(callbacks, 1, 'animation callback runs when onFrame finishes');
   assert.equal(mutable.value, 0, 'final value is the animation current');
 });
+
+test('bootstrap: builtin input keyboard registration surface is complete', () => {
+  // `<input>`/`<textarea>` register every keyboard channel in `created`; a
+  // missing method aborts component creation with
+  // `this.$.input.$$.onKeyboardSelectionChange is not a function`.
+  const { sandbox, calls } = loadBootstrap();
+  const context = new sandbox.SkylineGlobal.PageContext(4, 4);
+  const input = context.createElement('wx-input', 'input');
+  const channels = [
+    'onKeyboardValueChange',
+    'onKeyboardShow',
+    'onKeyboardHeightChange',
+    'onKeyboardConfirm',
+    'onKeyboardComplete',
+    'onKeyboardSelectionChange',
+    'onKeyboardCompositionStart',
+    'onKeyboardCompositionEnd',
+    'onKeyboardCompositionUpdate',
+    'onKeyboardLineChange',
+    'onSetValueCompleted',
+  ];
+  for (const name of channels) {
+    assert.equal(typeof input[name], 'function', `${name} is missing`);
+    assert.doesNotThrow(() => input[name](() => {}));
+  }
+  input.focus();
+  input.blur();
+  assert.deepEqual(
+    calls.filter((call) => call[0] === 'inputFocus'),
+    [
+      ['inputFocus', 4, input.viewTag, true],
+      ['inputFocus', 4, input.viewTag, false],
+    ],
+  );
+});
+
+test('bootstrap: worklet mappers drive applyAnimatedStyle updates', () => {
+  // `applyAnimatedStyle(selector, worklet)` registers a mapper with
+  // SkylineGlobal.workletModule.startMapper.  The native worklet module used to
+  // no-op, so a custom-route drag only applied the final release animation and
+  // never followed the finger.
+  const { sandbox } = loadBootstrap();
+  const SkylineGlobal = sandbox.SkylineGlobal;
+  const context = new SkylineGlobal.PageContext(4, 4);
+  const root = context.getRootNode();
+  const view = context.createElement('empty', 'view');
+  view.setId('fake-host');
+  view.setClass('card detail-content');
+  view.setStyle('width: 10px;');
+  root.appendChild(view);
+  context.attach(root, null);
+
+  const progress = SkylineGlobal.ReanimatedModule.makeMutable(0);
+  // Mirrors the generated mapper: it closes over the shared values lexically
+  // and applies the returned style to the resolved nodes.
+  const worklet = function (_unused, nodes) {
+    const style = `opacity: ${progress.value};`;
+    for (const node of nodes || []) {
+      sandbox.workletUIModule.updateNodeStyle(node, style);
+    }
+  };
+  worklet._closure = { progress };
+  const mapperId = SkylineGlobal.workletModule.startMapper(
+    '.detail-content', worklet, [progress], [], { immediate: true, flush: 'async' });
+  assert.ok(mapperId > 0, 'startMapper returns a mapper id');
+
+  progress.value = 0.25;
+  const styles = context.ops
+    .filter((op) => op.op === 'setStyle' && op.id === view.viewTag)
+    .map((op) => op.value);
+  const last = styles[styles.length - 1];
+  assert.ok(last, `no animated style was applied:\n${styles.join('\n')}`);
+  assert.match(last, /width: 10px;/, 'inline style is preserved');
+  assert.match(last, /opacity: 0\.25;/, 'animated style follows the shared value');
+
+  // The mapper only reacts while registered.
+  SkylineGlobal.workletModule.stopMapper(4, mapperId);
+  progress.value = 0.75;
+  const afterStop = context.ops
+    .filter((op) => op.op === 'setStyle' && op.id === view.viewTag)
+    .map((op) => op.value);
+  assert.equal(afterStop[afterStop.length - 1], last, 'stopped mappers stop updating');
+
+  // Component-scoped selectors: a second card registering `.detail-content`
+  // must not repaint the first card's element.
+  const host = context.createElement('empty', 'view');
+  const other = context.createElement('empty', 'view');
+  other.setClass('card detail-content');
+  host.appendChild(other);
+  root.appendChild(host);
+  const otherProgress = SkylineGlobal.ReanimatedModule.makeMutable(0);
+  const scopedWorklet = function (_unused, nodes) {
+    const style = `opacity: ${otherProgress.value};`;
+    for (const node of nodes || []) {
+      sandbox.workletUIModule.updateNodeStyle(node, style);
+    }
+  };
+  scopedWorklet._closure = { progress: otherProgress };
+  const scopedId = SkylineGlobal.workletModule.startMapper(
+    '.detail-content', scopedWorklet, [otherProgress], [], { flush: 'sync' });
+  host.addAnimatedStyle(scopedId);
+  otherProgress.value = 0.5;
+  const styleOf = (element) => {
+    const values = context.ops
+      .filter((op) => op.op === 'setStyle' && op.id === element.viewTag)
+      .map((op) => op.value);
+    return values[values.length - 1];
+  };
+  assert.match(styleOf(other), /opacity: 0?\.5;/, 'scoped target updates');
+  // The scoped mapper runs while the harness' synchronous setTimeout is still
+  // inside startMapper (before addAnimatedStyle assigns the owner), so the
+  // sibling may carry the initial opacity; what matters is that later updates
+  // no longer reach it.
+  assert.doesNotMatch(styleOf(view) || '', /opacity: 0?\.5;/,
+                      'sibling component stays untouched');
+});

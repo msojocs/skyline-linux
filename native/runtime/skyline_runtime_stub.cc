@@ -2959,10 +2959,46 @@ struct NodeRectSnapshot {
 std::mutex g_rect_mutex;
 std::unordered_map<uint32_t, NodeRectSnapshot> g_rect_snapshot;
 
+// Scroll views translate their content at paint time; the C++ layout keeps
+// content coordinates.  Selector queries and the mirror hit test need viewport
+// coordinates, so subtract every scrolling ancestor's persisted offset (kept
+// current by the native scroll callbacks).  `position: fixed` boxes and sticky
+// headers are anchored differently, so leave them in their laid-out frame.
+bool IsScrollAnchored(const AppNode* node) {
+  for (const AppNode* current = node; current != nullptr;
+       current = current->parent) {
+    if (current->style.position == 2 || current->style.position == 3) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void ScrollAncestorOffset(const AppNode* node, float* dx, float* dy) {
+  *dx = 0.0f;
+  *dy = 0.0f;
+  for (const AppNode* ancestor = node->parent; ancestor != nullptr;
+       ancestor = ancestor->parent) {
+    // Only real scroll widgets translate their content.  A `<scroll-view>`
+    // component wrapper can mirror the same `scrollTop` attribute without
+    // owning a scrollable; counting it would shift the rect twice.
+    if (ancestor->scroll_view_p == nullptr) continue;
+    const auto top = ancestor->attrs.find("scrollTop");
+    if (top != ancestor->attrs.end()) {
+      *dy += static_cast<float>(std::atof(top->second.c_str()));
+    }
+    const auto left = ancestor->attrs.find("scrollLeft");
+    if (left != ancestor->attrs.end()) {
+      *dx += static_cast<float>(std::atof(left->second.c_str()));
+    }
+  }
+}
+
 void PublishNodeRects() {
   std::lock_guard<std::mutex> lock(g_rect_mutex);
   g_rect_snapshot.clear();
   if (g_page == nullptr) return;
+  const bool debug = std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr;
   for (auto& entry : g_page->nodes) {
     const AppNode* node = entry.second;
     if (node == nullptr || node->released) continue;
@@ -2979,10 +3015,24 @@ void PublishNodeRects() {
     if (!std::isnan(style.translate_percent_y)) {
       ty += style.translate_percent_y * node->measured_h;
     }
+    float scroll_x = 0.0f;
+    float scroll_y = 0.0f;
+    if (!IsScrollAnchored(node)) {
+      ScrollAncestorOffset(node, &scroll_x, &scroll_y);
+    }
+    const float left = node->abs_x + tx - scroll_x;
+    const float top = node->abs_y + ty - scroll_y;
     g_rect_snapshot[node->id] = NodeRectSnapshot{
-        node->abs_x + tx, node->abs_y + ty, node->measured_w,
-        node->measured_h, static_cast<float>(style.z_index),
+        left, top, node->measured_w, node->measured_h,
+        static_cast<float>(style.z_index),
         style.pointer_events_none ? 1.0f : 0.0f};
+    if (debug) {
+      std::fprintf(stderr,
+                   "[ops-debug] rect #%u left=%g top=%g w=%g h=%g\n", node->id,
+                   static_cast<double>(left), static_cast<double>(top),
+                   static_cast<double>(node->measured_w),
+                   static_cast<double>(node->measured_h));
+    }
   }
 }
 // Captured on the UI thread; the host keyboard channel is called from the
@@ -6457,6 +6507,51 @@ float EffectiveFlexShrink(const AppStyle& style, bool in_scroll_view) {
   return style.has_flex_shrink ? style.flex_shrink : 0.0f;
 }
 
+// Defined with the widget builders below; the page-wide layout pass needs the
+// same grid packing Flutter applies so published rects match the painted cards.
+bool GridIsMasonry(const AppNode* node);
+double GridMainGap(const AppNode* node);
+double GridCrossGap(const AppNode* node);
+double AttrNumber(const AppNode* node, const char* key, double fallback);
+bool IsGridViewName(const std::string& name);
+void CollectListItems(AppNode* parent, std::vector<AppNode*>* out);
+
+// Available width inside a node's border box (padding included in the box).
+float ContentBoxWidth(const AppNode* node) {
+  return std::max(0.0f, node->measured_w - BorderBoxExtra(node->style, true));
+}
+
+// `<grid-view>` column count.  Flutter's `SkylineGridView` uses a fixed
+// `crossAxisCount` unless `maxCrossAxisExtent` is set, in which case
+// SliverSimpleGridDelegateWithMaxCrossAxisExtent selects
+// `ceil(crossExtent / (maxExtent + spacing))`.
+int GridColumnCount(const AppNode* node, float cross_extent) {
+  const double max_extent = AttrNumber(node, "maxCrossAxisExtent", 0.0);
+  if (max_extent > 0.0 && cross_extent > 0.0f) {
+    const double stride = max_extent + GridCrossGap(node);
+    if (stride > 0.0) {
+      return std::max(
+          1, static_cast<int>(std::ceil(
+                 static_cast<double>(cross_extent) / stride)));
+    }
+  }
+  return std::max(1, static_cast<int>(AttrNumber(
+                          node, "crossAxisCount",
+                          AttrNumber(node, "cross-axis-count", 2.0))));
+}
+
+float GridSlotWidth(const AppNode* node, int columns) {
+  const float content_w = ContentBoxWidth(node);
+  if (columns <= 0 || content_w <= 0.0f) {
+    return std::max(0.0f, node->measured_w);
+  }
+  const float gap = static_cast<float>(GridCrossGap(node));
+  const float slot =
+      (content_w - gap * static_cast<float>(columns - 1)) /
+      static_cast<float>(columns);
+  return slot > 0.0f ? slot : node->measured_w;
+}
+
 // Collects the final rects instead of writing through cached typed-data
 // pointers: Dart's GC may move typed data between API calls, so each buffer is
 // acquired only for the duration of its own write.
@@ -6532,6 +6627,76 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
                  abs_x + child_x, abs_y + content_y, cb_abs_x, cb_abs_y, cb_w,
                  cb_h);
       index += 1;
+    }
+    return;
+  }
+
+  // Builtin `<grid-view>`: Flutter's SkylineGridView packs the items into
+  // masonry columns (each item goes to the shortest column) or aligned rows.
+  // The page-wide pass must publish the same per-item rects, otherwise every
+  // card is stacked in a single column at x≈0 and the mirrored hit test never
+  // reaches the right-hand column.
+  if (IsGridViewName(node->name)) {
+    std::vector<AppNode*> items;
+    CollectListItems(node, &items);
+    if (!items.empty()) {
+      const bool masonry = GridIsMasonry(node);
+      const int columns = GridColumnCount(node, content_w);
+      const float cross_gap = static_cast<float>(GridCrossGap(node));
+      const float main_gap = static_cast<float>(GridMainGap(node));
+      const float slot_w = GridSlotWidth(node, columns);
+      std::vector<int> item_column(items.size(), 0);
+      std::vector<float> item_main(items.size(), 0.0f);
+      std::vector<float> item_height(items.size(), 0.0f);
+      for (size_t i = 0; i < items.size(); i++) {
+        MeasureNode(items[i], slot_w, true, kInf, false);
+        item_height[i] = items[i]->measured_h;
+      }
+      if (masonry) {
+        std::vector<float> column_main(static_cast<size_t>(columns), 0.0f);
+        for (size_t i = 0; i < items.size(); i++) {
+          // Smallest column, first index wins ties (findSmallestIndexWithMinimumValue).
+          int best = 0;
+          for (int c = 1; c < columns; c++) {
+            if (column_main[static_cast<size_t>(c)] <
+                column_main[static_cast<size_t>(best)]) {
+              best = c;
+            }
+          }
+          item_column[i] = best;
+          item_main[i] = column_main[static_cast<size_t>(best)];
+          column_main[static_cast<size_t>(best)] =
+              item_main[i] + item_height[i] + main_gap;
+        }
+      } else {
+        float row_main = 0.0f;
+        for (size_t start = 0; start < items.size();
+             start += static_cast<size_t>(columns)) {
+          const size_t end =
+              std::min(items.size(), start + static_cast<size_t>(columns));
+          float row_height = 0.0f;
+          for (size_t i = start; i < end; i++) {
+            row_height = std::max(row_height, item_height[i]);
+          }
+          for (size_t i = start; i < end; i++) {
+            item_column[i] = static_cast<int>(i - start);
+            item_main[i] = row_main;
+          }
+          row_main += row_height + main_gap;
+        }
+      }
+      for (size_t i = 0; i < items.size(); i++) {
+        AppNode* item = items[i];
+        const float item_x =
+            content_x + static_cast<float>(item_column[i]) *
+                            (slot_w + cross_gap);
+        const float item_y = content_y + item_main[i];
+        // Item widths/heights were measured above with the slot width; keep the
+        // absolute coordinates so descendants publish matching rects.
+        LayoutNode(item, item_x, item_y, item->measured_w, item->measured_h,
+                   metrics, abs_x + item_x, abs_y + item_y, cb_abs_x, cb_abs_y,
+                   cb_w, cb_h);
+      }
     }
     return;
   }
@@ -7131,6 +7296,11 @@ void DispatchScrollEvent(intptr_t ptr, int32_t phase, double top, double left,
       char buffer[64];
       std::snprintf(buffer, sizeof(buffer), "%g", top);
       node->attrs["scrollTop"] = buffer;
+      std::snprintf(buffer, sizeof(buffer), "%g", left);
+      node->attrs["scrollLeft"] = buffer;
+      // Published rects are viewport coordinates; republish so hit testing and
+      // selector queries follow the scroll (grid cards must stay tappable).
+      PublishNodeRects();
     }
   }
   SkylineScrollEventSink sink = g_scroll_event_sink.load();
@@ -9280,6 +9450,11 @@ Dart_Handle WrapSnapshot(AppNode* node, Dart_Handle inner) {
   return snapshot;
 }
 
+// The Skyline widget constructors (`YGConnector`, `Swiper`, ...) mutate their
+// `children` list (custom routes call `connector.children.clear()` and
+// `add(...)` in `buildTransitions`).  `Dart_NewList` creates a fixed-length
+// list, so `SkylineMultiChildRenderObjectWidget` (Dart side) copies it into a
+// growable list.
 Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         NewYGConnectorFn newYGConnector, NewTextFn newText,
                         NewTextSpanFn newTextSpan,
@@ -9658,16 +9833,16 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       std::vector<AppNode*> items;
       CollectListItems(node, &items);
       const int grid_type = GridIsMasonry(node) ? 0 : 1;
-      const int cross_axis_count = std::max(
+      int cross_axis_count = std::max(
           1, static_cast<int>(AttrNumber(node, "crossAxisCount", 2.0)));
       const double grid_main_spacing = GridMainGap(node);
       const double grid_cross_spacing = GridCrossGap(node);
       float slot_width = node->measured_w > 0.0f ? node->measured_w : 0.0f;
-      if (is_grid_view && cross_axis_count > 1 && slot_width > 0.0f) {
-        slot_width =
-            (slot_width - static_cast<float>(grid_cross_spacing) *
-                             static_cast<float>(cross_axis_count - 1)) /
-            static_cast<float>(cross_axis_count);
+      if (is_grid_view) {
+        // Match Flutter's delegate (fixed count, or derived from
+        // maxCrossAxisExtent) and the page-wide packing pass.
+        cross_axis_count = GridColumnCount(node, ContentBoxWidth(node));
+        slot_width = GridSlotWidth(node, cross_axis_count);
         if (slot_width <= 0.0f) slot_width = node->measured_w;
       }
       std::vector<Dart_Handle> item_widgets;
@@ -13371,27 +13546,14 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   g_node_address_ids.clear();
   g_intersection_unique_nodes.clear();
   g_intersection_node_observers.clear();
+  bool attach_pending = false;
   for (const rapidjson::Value& op : ops_member->value.GetArray()) {
     ApplyOperation(op);
     const char* kind = MemberText(op, "op");
     if (std::strcmp(kind, "attach") == 0) {
-      // Match the live path: detached root-portal content is hoisted to the
-      // page root and late-filled fragments are flattened before building.
-      if (AppNode* root = FindNode(g_page->root_id)) {
-        AttachDetachedPortalContent(root);
-        FlattenFragments(root);
-      }
-      const uint8_t open_type = g_page->pending_open_type != 0
-                                    ? g_page->pending_open_type
-                                    : (g_page->page_count == 0 ? 0 : 4);
-      const int32_t page_id =
-          g_page->pending_page_id != 0 ? g_page->pending_page_id
-                                       : (g_page->page_count == 0 ? 0 : 1);
-      MaterializeAttachedPage(holder, builders, g_page->root_id, open_type,
-                              page_id, g_page->pending_callback_id);
-      g_page->pending_open_type = 0;
-      g_page->pending_page_id = 0;
-      g_page->pending_callback_id = 0;
+      // `attachCustomRoute` follows `attach` in the SDK's op stream; defer the
+      // build until the whole batch is applied so the config is visible.
+      attach_pending = true;
     } else if (std::strcmp(kind, "notifyNavigateBack") == 0) {
       if (g_page->page_count > 0 && navigateBack != nullptr) {
         navigateBack(g_page->pending_back_delta,
@@ -13410,6 +13572,25 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
         g_page->pending_open_type = 0;
       }
     }
+  }
+  if (attach_pending) {
+    // The whole batch is applied now, including the trailing custom route
+    // config; hoist detached portals and flatten late fragments first.
+    if (AppNode* root = FindNode(g_page->root_id)) {
+      AttachDetachedPortalContent(root);
+      FlattenFragments(root);
+    }
+    const uint8_t open_type = g_page->pending_open_type != 0
+                                  ? g_page->pending_open_type
+                                  : (g_page->page_count == 0 ? 0 : 4);
+    const int32_t page_id =
+        g_page->pending_page_id != 0 ? g_page->pending_page_id
+                                     : (g_page->page_count == 0 ? 0 : 1);
+    MaterializeAttachedPage(holder, builders, g_page->root_id, open_type,
+                            page_id, g_page->pending_callback_id);
+    g_page->pending_open_type = 0;
+    g_page->pending_page_id = 0;
+    g_page->pending_callback_id = 0;
   }
   if (g_page->page_count == 0 && g_page->root_id != 0) {
     if (AppNode* root = FindNode(g_page->root_id)) {
@@ -13487,25 +13668,19 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
             bool created_route = false;
             bool builder_structural_only = true;
             bool general_dirty = false;
+            bool attach_pending = false;
             for (const rapidjson::Value& op : ops->GetArray()) {
               ApplyOperation(op);
               const auto kind = op.FindMember("op");
               if (kind == op.MemberEnd() || !kind->value.IsString()) continue;
               const char* name = kind->value.GetString();
               if (std::strcmp(name, "attach") == 0) {
-                const uint8_t open_type = g_page->pending_open_type != 0
-                                              ? g_page->pending_open_type
-                                              : 4;
-                const int32_t page_id =
-                    g_page->pending_page_id != 0 ? g_page->pending_page_id : 1;
-                if (MaterializeAttachedPage(holder, builders, g_page->root_id,
-                                            open_type, page_id,
-                                            g_page->pending_callback_id)) {
-                  created_route = true;
-                }
-                g_page->pending_open_type = 0;
-                g_page->pending_page_id = 0;
-                g_page->pending_callback_id = 0;
+                // The SDK emits `attachCustomRoute` *after* `attach` in the
+                // same batch.  Materialising inside the loop would build a
+                // plain route and leave the custom config pending for the next
+                // navigation (stale host + broken second page).  Defer until
+                // the whole batch has been applied.
+                attach_pending = true;
               } else if (std::strcmp(name, "notifyNavigateBack") == 0) {
                 if (navigateBack != nullptr && g_page->page_count > 0) {
                   navigateBack(g_page->pending_back_delta,
@@ -13546,6 +13721,21 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
                 }
                 needs_flush = true;
               }
+            }
+            if (attach_pending) {
+              const uint8_t open_type = g_page->pending_open_type != 0
+                                            ? g_page->pending_open_type
+                                            : 4;
+              const int32_t page_id =
+                  g_page->pending_page_id != 0 ? g_page->pending_page_id : 1;
+              if (MaterializeAttachedPage(holder, builders, g_page->root_id,
+                                          open_type, page_id,
+                                          g_page->pending_callback_id)) {
+                created_route = true;
+              }
+              g_page->pending_open_type = 0;
+              g_page->pending_page_id = 0;
+              g_page->pending_callback_id = 0;
             }
             const bool synced = SyncAppServiceBuilders(holder);
             if (g_page->force_rebuild) {
@@ -13638,30 +13828,17 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
   bool needs_flush = false;
   bool created_route = false;
   bool general_dirty = false;
+  bool attach_pending = false;
   for (const rapidjson::Value& op : ops_member->value.GetArray()) {
     ApplyOperation(op);
     const char* kind = MemberText(op, "op");
     if (kind == nullptr) continue;
     if (std::strcmp(kind, "attach") == 0) {
-      // Match the live path: detached root-portal content is hoisted to the
-      // page root and late-filled fragments are flattened before building.
-      if (AppNode* root = FindNode(g_page->root_id)) {
-        AttachDetachedPortalContent(root);
-        FlattenFragments(root);
-      }
-      const uint8_t open_type = g_page->pending_open_type != 0
-                                    ? g_page->pending_open_type
-                                    : (g_page->page_count == 0 ? 0 : 4);
-      const int32_t page_id =
-          g_page->pending_page_id != 0 ? g_page->pending_page_id
-                                       : (g_page->page_count == 0 ? 0 : 1);
-      if (MaterializeAttachedPage(holder, builders, g_page->root_id, open_type,
-                                  page_id, g_page->pending_callback_id)) {
-        created_route = true;
-      }
-      g_page->pending_open_type = 0;
-      g_page->pending_page_id = 0;
-      g_page->pending_callback_id = 0;
+      // The SDK emits `attachCustomRoute` *after* `attach` in the same flush
+      // batch.  Materialising here would build a plain route and leave the
+      // custom config pending, so the next navigation would reuse this page's
+      // stale host and render nothing.  Defer until the batch is applied.
+      attach_pending = true;
     } else if (std::strcmp(kind, "notifyNavigateBack") == 0) {
       auto* navigateBack = reinterpret_cast<NavigateBackFn>(
           FindCallback(holder->ffi_table, kNavigateBackHash));
@@ -13686,6 +13863,30 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
         general_dirty = true;
       }
     }
+  }
+
+  if (attach_pending) {
+    // The whole batch is applied now, including a trailing
+    // `attachCustomRoute`, so a custom route sees its config and host.
+    // Detached root-portal content is hoisted to the page root and late-filled
+    // fragments are flattened before building.
+    if (AppNode* root = FindNode(g_page->root_id)) {
+      AttachDetachedPortalContent(root);
+      FlattenFragments(root);
+    }
+    const uint8_t open_type = g_page->pending_open_type != 0
+                                  ? g_page->pending_open_type
+                                  : (g_page->page_count == 0 ? 0 : 4);
+    const int32_t page_id =
+        g_page->pending_page_id != 0 ? g_page->pending_page_id
+                                     : (g_page->page_count == 0 ? 0 : 1);
+    if (MaterializeAttachedPage(holder, builders, g_page->root_id, open_type,
+                                page_id, g_page->pending_callback_id)) {
+      created_route = true;
+    }
+    g_page->pending_open_type = 0;
+    g_page->pending_page_id = 0;
+    g_page->pending_callback_id = 0;
   }
 
   if (g_page->force_rebuild) {
@@ -13754,6 +13955,9 @@ void ScrollNodeTo(uint32_t node_id, double top) {
                  top);
   }
   update(Dart_HandleFromPersistent(node->scroll_view_p), top);
+  // The native scroll callback may not fire for a programmatic jump on every
+  // host; republish the viewport rects here as well.
+  PublishNodeRects();
 }
 
 void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,

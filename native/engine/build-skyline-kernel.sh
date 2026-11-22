@@ -75,6 +75,9 @@ if [ "$check_only" -eq 1 ]; then
     || die "native view hit-test patch missing; run without --check"
   grep -q 'Headless Linux' "$app/packages/skyline/lib/widgets/texture.dart" \
     || die "native view compat patch missing; run without --check"
+  grep -q 'List<Widget>.of(children)' \
+    "$app/packages/skyline/lib/widgets/multi_child_render_object_widget.dart" \
+    || die "growable widget children patch missing (custom routes); run without --check"
   log "kernel ok: $out"
   exit 0
 fi
