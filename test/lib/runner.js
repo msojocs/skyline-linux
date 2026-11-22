@@ -4,8 +4,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { resultsDir, toWindowsPath, wineBinary } = require('./env');
+const { ensureShim } = require('./win-shim');
 
 const driverPath = path.resolve(__dirname, '..', 'driver.js');
+const oracleAppDir = path.resolve(__dirname, '..', '..', 'tools', 'win-oracle-app');
+const oracleShimDir = path.resolve(__dirname, '..', '..', 'tmp', 'win-oracle');
 
 function safeName(id) {
   return id.replace(/[^A-Za-z0-9_.-]+/g, '_');
@@ -23,6 +26,43 @@ function tailFile(file, maxLines = 25) {
 function buildInvocation(options, resultPath, logPath) {
   const { platform, caseId, paths, allowEngine } = options;
   if (platform === 'win32') {
+    // Engine-context cases must run in a real Electron renderer: the official
+    // module aborts in NodePlatform::ForIsolate when ELECTRON_RUN_AS_NODE
+    // starts a Flutter engine.  tools/win-oracle-app reuses the same renderer
+    // host as the L5 collector and writes the driver's result JSON.
+    if (options.allowEngineContext) {
+      const env = {
+        ...process.env,
+        WINEDEBUG: '-all',
+        ORACLE_CASE: caseId,
+        ORACLE_OUT: toWindowsPath(resultPath),
+        ORACLE_DRIVER: toWindowsPath(driverPath),
+        ORACLE_ALLOW_ENGINE: allowEngine ? '1' : '0',
+        ORACLE_ALLOW_ENGINE_CONTEXT: '1',
+      };
+      if (!caseId.startsWith('create.') || caseId === 'create.destroyUnknownAfterAttempt') {
+        env.ORACLE_CONTEXT_WINDOW = '1';
+      }
+      const optional = {
+        ORACLE_MODULE: paths.addon,
+        ORACLE_SHARED: paths.shared,
+        ORACLE_RESOURCES: paths.resources,
+        ORACLE_BUNDLE: paths.bundle,
+        ORACLE_ADDON_PATH: paths.addon,
+      };
+      for (const [key, value] of Object.entries(optional)) {
+        if (value) env[key] = toWindowsPath(value);
+      }
+      // The DevTools Electron is a packaged app; replace resources/app with
+      // the oracle host instead of passing an app path on the command line.
+      const shimElectron = ensureShim(paths.electron, oracleAppDir, oracleShimDir);
+      return {
+        command: wineBinary(),
+        args: [shimElectron, '--no-sandbox'],
+        env,
+        logPath,
+      };
+    }
     const args = [
       toWindowsPath(driverPath),
       '--case', caseId,
@@ -104,6 +144,14 @@ function runOnce(options) {
         payload = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
       } catch {}
       if (payload) {
+        if (payload.status === 'crash' || payload.status === 'timeout') {
+          const fileTail = tailFile(logPath);
+          if (Array.isArray(payload.logTail) && payload.logTail.length) {
+            payload.consoleTail = payload.logTail;
+          }
+          if (fileTail.length) payload.logTail = fileTail;
+          else if (!Array.isArray(payload.logTail)) payload.logTail = [];
+        }
         resolve(payload);
         return;
       }

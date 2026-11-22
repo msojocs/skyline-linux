@@ -13,20 +13,34 @@ const path = require('node:path');
 const { specPath, oraclePaths, linuxSharedMemoryDefault } = require('./lib/env');
 const { runOnce } = require('./lib/runner');
 const { compareCase } = require('./lib/compare');
+const { byId } = require('./cases');
 
 const spec = fs.existsSync(specPath()) ? JSON.parse(fs.readFileSync(specPath(), 'utf8')) : null;
 const oracle = oraclePaths();
 const linuxShared = linuxSharedMemoryDefault();
 // Without an explicit implementation the repository's reference module is the
 // target.  It implements the JS-visible contract but has no engine backend.
-const linuxAddon = process.env.SKYLINE_LINUX_SKYLINE_ADDON
-  || path.resolve(__dirname, '..', 'reference', 'skyline-node.js');
+const referenceAddon = path.resolve(__dirname, '..', 'reference', 'skyline-node.js');
+const linuxAddon = process.env.SKYLINE_LINUX_SKYLINE_ADDON || referenceAddon;
+const repoRoot = path.resolve(__dirname, '..');
+const aotStageBundle = path.resolve(repoRoot, '..', 'wechat-web-devtools-linux',
+  'resources', 'app.asar.unpacked', 'node_modules', 'skyline-addon', 'bundle');
+const linuxBundle = process.env.SKYLINE_LINUX_BUNDLE || (linuxAddon.includes('build-release') &&
+  fs.existsSync(path.join(aotStageBundle, 'libapp.so'))
+  ? aotStageBundle
+  : [
+    path.resolve(repoRoot, 'native', 'engine', 'work', 'skyline-app', 'build'),
+    path.resolve(repoRoot, 'apps', 'empty-page', 'build'),
+  ].find((candidate) => fs.existsSync(path.join(candidate, 'flutter_assets'))) || null);
+// Engine-context cases (create/notify/brightness/destroy) can only run against
+// the native addon; the reference implementation intentionally has no engine.
+const hasEngineBackend = linuxAddon !== referenceAddon;
 
 const linuxPaths = {
   addon: linuxAddon,
   shared: linuxShared,
-  resources: process.env.SKYLINE_LINUX_RESOURCES || null,
-  bundle: process.env.SKYLINE_LINUX_RESOURCES || null,
+  resources: process.env.SKYLINE_LINUX_RESOURCES || linuxBundle,
+  bundle: linuxBundle,
 };
 
 const comparisonPaths = [oracle, linuxPaths].filter(Boolean);
@@ -35,6 +49,10 @@ function linuxSkipFor(caseId) {
   if (!spec) return `oracle spec missing: ${specPath()} (run npm run spec:record)`;
   const entry = spec.cases[caseId];
   if (!entry) return 'case was not recorded from the Windows oracle';
+  const definition = byId(caseId);
+  if (definition && (definition.engine || definition.engineContext) && !hasEngineBackend) {
+    return 'target module has no engine backend';
+  }
   if (entry.status === 'skip') return `oracle skipped: ${entry.reason}`;
   if (entry.status === 'crash' || entry.status === 'timeout') {
     return `oracle process did not survive this case (${entry.status}); engine baseline unavailable`;
@@ -83,6 +101,7 @@ for (const caseId of cases) {
       caseId,
       paths: linuxPaths,
       timeoutMs: 30000,
+      allowEngineContext: hasEngineBackend,
     });
     const comparison = compareCase(caseId, spec.cases[caseId], result, comparisonPaths);
     if (!comparison.ok) {

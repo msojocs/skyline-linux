@@ -33,7 +33,9 @@ function setterNames() {
 
 function makeShell(ctx) {
   if (!ctx.addon) throw new Error('skyline addon module is not available');
-  return new global.SkylineShell();
+  // The Windows oracle may create an engine window before the case runs; reuse
+  // that shell so the observation targets the same runtime instance.
+  return ctx.shell || new global.SkylineShell();
 }
 
 

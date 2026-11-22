@@ -227,6 +227,27 @@ C1 原先按“需要完整官方 DevTools 环境”阻塞。实际验证表明�
 完整官方 DevTools UI 在 Wine 下启动后卡在登录/主线程同步 IPC；这不是 L5 采集的
 必要条件，`tools/l5-windows.js` 的渲染进程路径已覆盖 C1 的“官方引擎真实帧”目标。
 
+### 3.2 2026-11-22：engine-context 契约用例补录
+
+`spec:record` 原先用 `ELECTRON_RUN_AS_NODE`，官方模块在 `createWindow` 启动引擎时
+会命中 `NodePlatform::ForIsolate` 断言，因此 24 个 engine-context 用例只能标为
+`skip`。现在复用 §3.1 的渲染进程宿主：
+
+1. `tools/win-oracle-app/` 在官方 Windows Electron 渲染进程中加载官方
+   `skyline.node`；`test/lib/win-shim.js` 把 `resources/app` 指向该宿主（官方
+   Electron 是打包应用，会忽略 CLI 传入的 app 路径）。
+2. 对 brightness/destroy/notify 这类不建窗口的用例，先用
+   `setMemory` + `createWindow(424242, …, dpr=2)` 建一个上下文窗口，并注册
+   `LoadResource/LoadResourceAsync/HttpRequest` 等回调（缺少这些回调时官方引擎
+   会在初始化期间崩溃）。
+3. 用例仍由 `test/driver.js#executeCase` 执行，主进程把结果写回原来的
+   `--out` JSON，因此 `test/lib/runner.js` 不需要第二条结果通道。
+
+结果：60 个用例中 50 个可观测，10 个官方进程崩溃（FATAL/访问违例；快照只记录
+归一化 `reason`，完整日志留在 `tmp/results/`）；新增 14 个 Linux/Windows 可直接
+对比的用例。`test:native` 现在为 53 通过 / 10 跳过 / 0 失败。崩溃用例（如
+`dpr=0/1/3`、无效 descriptor）仍由契约测试跳过，因为官方进程无法生成稳定基准。
+
 ## 4. 原生移植的可行性
 
 ### 方案 A：Wine 托管官方引擎 + Linux 兼容层（可落地）
@@ -257,7 +278,9 @@ C1 原先按“需要完整官方 DevTools 环境”阻塞。实际验证表明�
 - 已实现 `reference/skyline-node.js`：精确复刻官方 JS 可见契约（全局对象、方法顺序、
   描述符、参数校验、错误消息），但不含引擎；L1/L2 差分测试默认以它为被测目标。
 - 已实现共享内存 L3/L4 与跨平台字节级互通测试。
-- 当前结果：`npm test` 76 项，52 通过、0 失败、24 跳过（引擎上下文用例）。
+- 当前结果：reference 目标（无引擎）跳过引擎上下文用例；`npm run test:native`
+  在原生 addon 上为 53 通过 / 10 跳过（官方进程崩溃、无稳定基准）/ 0 失败，
+  其中 14 个 engine-context 用例由 Wine 渲染进程 oracle 补录。
 
 ## 5. 测试策略
 

@@ -1,6 +1,6 @@
 # 阶段 3 任务清单
 
-> 最后更新：2026-11-21
+> 最后更新：2026-11-22
 > 分支：`feature/phase3-gesture-list-image-channels`
 > 进度格式：**x / y** = 已完成任务 / 总任务
 >
@@ -211,6 +211,48 @@
   - JSON 页面描述符的 text 节点支持 `fontFamily`。
   - `test:ops` 新增真实系统字体加载 + 定位重排用例，并扩展伪字体用例覆盖
     pending/relayout 状态（64 / 64）。
+
+## D. Windows 原版对照缺口（后续任务，未计入阶段 3 总数）
+
+> 入口：`npm run gaps`（`tools/conformance-gaps.js`）生成当前缺口报告。
+> 这些任务把“静态候选/固定夹具”升级为可判定的 Windows 差分。
+
+- [x] **D1** 补录 24 个 engine-context 契约用例（Wine 渲染进程 oracle）
+  - 新增 `tools/win-oracle-app/`：在 Wine 官方 Electron 的渲染进程中加载官方
+    `skyline.node`，复用 `tools/l5-win-app` 的窗口初始化流程（共享内存句柄、
+    `notifyAppLaunch`、全套回调）。`test/lib/win-shim.js` 把
+    `resources/app` 替换为 oracle 宿主，绕过官方 Electron “已打包应用忽略
+    CLI app 路径”的限制。
+  - `test/lib/runner.js` 的 win32 分支在 `allowEngineContext` 时走渲染进程，
+    其余用例仍用 `ELECTRON_RUN_AS_NODE` + `test/driver.js`；`test/driver.js`
+    导出 `executeCase()` 供渲染进程复用。
+  - `spec/skyline-node.win32.json` 现为 60 个用例：50 ok，10 官方进程崩溃
+    （`device_pixel_ratio == 2`、AOT 路径、无效 descriptor 等；记录归一化
+    `reason`，完整日志留在 `tmp/results/`）。新增 14 个可比用例
+    （brightness/destroy/notify/create 数值字符串等）。
+  - 顺带修正 addon 行为以匹配官方：`createWindow` 对 windowId/width/height/dpr
+    做 `Number()` 化；`destroyWindow` 校验 1 个参数并对未知窗口抛
+    `window_id: N not found`；`onPlatformBrightnessChanged` 校验 1 个参数。
+  - 结果：`native/build/skyline.node` 契约 **53 pass / 10 skip / 0 fail**
+    （10 个 skip 是官方进程崩溃、无稳定基准的用例）。
+- [ ] **D2** 为候选 CSS/内置标签生成 L5 探针夹具
+  - 当前候选（示例使用、运行时无解析分支）：`aspect-ratio`、`pointer-events`、
+    `text-overflow`、`vertical-align`、`white-space`、`will-change`、`map`。
+  - 每个特性一个 `test/fixtures/appservice-*.ops.json`，用
+    `npm run l5:windows` 采集官方帧，再把 `compare=false` 的条目转为逐像素对比。
+- [ ] **D3** 候选回调行为探针
+  - 重点：`ScrollViewUpdateOnScroll/OnScrollStart/OnScrollEnd`、
+    `SwiperUpdateOnChange/OnScroll`、`InputFocusManually/BlurManually`、
+    `YGNode*IntersectionObserver`、`Selection*`、`Snapshot*`、`Semantics*`、
+    `MeasureText/Input`、`Start/StopUserGesture`、`DumpElementTree`。
+  - 先区分“C++ 已直接实现”与真正缺失，再按 D2 的方式加 L5/行为夹具。
+- [ ] **D4** 真实页面 ops 录制与整页差分
+  - Linux DevTools 与 Windows 原版使用同一份官方 renderer bundle；把 Linux
+    侧 `applyPageOps` 的真实 ops 录下来，喂给 Wine 官方引擎与 Linux 引擎，
+    对 `awesome-skyline/examples` 做整页像素/树结构对比。
+- [ ] **D5** 把 `npm run gaps` 纳入基线
+  - 固定报告格式，加入 CI：或提交 `docs/conformance-gaps.md` 基线，
+    在契约/L5 结果变化时显式更新。
 
 ## 测试基线（x / y）
 

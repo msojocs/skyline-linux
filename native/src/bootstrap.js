@@ -505,11 +505,21 @@
         throw new Error('invalid shared memory handle');
       }
       installCreateWindowResponseGate();
-      const created = native.createWindow(args);
-      const windowId = args[0];
-      if (Number.isFinite(args[2]) && Number.isFinite(args[3]) &&
-          args[2] > 0 && args[3] > 0) {
-        windowSizes.set(windowId, { width: args[2], height: args[3] });
+      // The official devtools_shell.cc applies Number() to the numeric
+      // arguments; the DevTools passes some of them as strings.
+      const normalized = args.slice();
+      for (const index of [0, 2, 3, 4]) {
+        const value = normalized[index];
+        if (typeof value === 'string' && value.trim() !== '') {
+          const number = Number(value);
+          if (Number.isFinite(number)) normalized[index] = number;
+        }
+      }
+      const created = native.createWindow(normalized);
+      const windowId = normalized[0];
+      if (Number.isFinite(normalized[2]) && Number.isFinite(normalized[3]) &&
+          normalized[2] > 0 && normalized[3] > 0) {
+        windowSizes.set(windowId, { width: normalized[2], height: normalized[3] });
       }
       // Resolve the extension's createWindow promise immediately so it emits
       // requireRenderContext; the response gate holds CREATE_WINDOW_RESPONSE
@@ -521,7 +531,18 @@
       }, 0);
       return created;
     }],    ['destroyWindow', function (...args) {
-      const windowId = args.length > 0 ? args[0] : 0;
+      // Match the official module: exactly one window id, and an unknown id is
+      // an error rather than a silent no-op.  Number('x') is NaN, which the
+      // official error message renders as 0.
+      if (args.length !== 1) {
+        throw new Error('shell.destroy expects 1 arguments: windowId, ');
+      }
+      const numeric = Number(args[0]);
+      const windowId = Number.isFinite(numeric) ? numeric : 0;
+      if (!windowSizes.has(windowId)) {
+        throw new Error(`window_id: ${windowId} not found`);
+      }
+      windowSizes.delete(windowId);
       rasterizedCallbacks.delete(windowId);
       if (rasterizedCallbacks.size === 0) stopFramePump();
       return native.destroyWindow(windowId);
@@ -650,7 +671,12 @@
       completeRoute(0);
       return undefined;
     }],
-    ['onPlatformBrightnessChanged', function (...args) { return native.brightness(args.length > 0 ? args[0] : undefined); }],
+    ['onPlatformBrightnessChanged', function (...args) {
+      if (args.length !== 1) {
+        throw new Error('OnPlatformBrightnessChanged expects 1 argument');
+      }
+      return native.brightness(args[0]);
+    }],
   ];
 
   for (const [name, implementation] of definitions) defineMethod(name, implementation);

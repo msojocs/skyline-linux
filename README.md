@@ -79,6 +79,11 @@ L1–L4 可在本仓库直接运行；L5 已有 Linux 基线与**官方 Windows 
 `transform3d`/`transform-origin-z` 为已知 3D/官方引擎差异，`gridview`/`listview`
 不可比；详见 `docs/feasibility.md` §3.1。
 
+汇总缺口报告：`npm run gaps`（`tools/conformance-gaps.js`）把 Windows API oracle
+覆盖率、L5 逐像素结果、官方符号清单、原生运行时未接线的回调，以及
+`awesome-skyline/examples` 里用到但运行时未解析的 CSS/内置标签汇总成 Markdown。
+报告中的“未解析”是候选缺口，是否与官方 Windows 行为不同仍需用 L5 探针夹具确认。
+
 ## 快速开始
 
 ```bash
@@ -184,7 +189,7 @@ npm run test:l5: 2 tests, 2 pass (Linux 确定性基线 + Windows 逐像素容�
 ```
 
 - 通过：L1/L2 契约对比（默认目标 `reference/skyline-node.js`；`native/build/skyline.node`
-  同样 39/39 通过）、L3/L4 共享内存与帧协议、跨进程可见性、Windows ↔ Linux
+  同样 53/53 通过，含 14 个引擎上下文用例；10 个官方进程崩溃用例跳过）、L3/L4 共享内存与帧协议、跨进程可见性、Windows ↔ Linux
   数据区互通、阶段 2 符号清单（73 个 FFI lookup、375 个回调、275 个引擎 native 符号），
   `native/test/engine-smoke.test.js`（引擎启动 → 一帧 128×96 RGBA 写入
   `/dev/shm`，首像素 `[255,0,0,255]`），阶段 3 的

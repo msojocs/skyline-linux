@@ -11,15 +11,40 @@ const { oraclePaths, specPath, resultsDir } = require('../lib/env');
 const { runOnce } = require('../lib/runner');
 
 function parseArgs(argv) {
-  const args = { engine: false, engineContext: false, only: null, timeout: 30000 };
+  const args = { engine: false, engineContext: false, only: null, onlyEngineContext: false, timeout: 30000 };
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
     if (token === '--engine') args.engine = true;
     else if (token === '--engine-context') args.engineContext = true;
+    else if (token === '--only-engine-context') {
+      args.engineContext = true;
+      args.onlyEngineContext = true;
+    }
     else if (token === '--only') args.only = argv[++index];
     else if (token === '--timeout') args.timeout = Number(argv[++index]) || 30000;
   }
   return args;
+}
+
+// Crash logs are useful evidence but contain absolute Wine paths and
+// per-process timestamps.  Keep only a stable, path-free reason in the
+// committed spec; the full log stays under tmp/results for local debugging.
+function sanitizeLogLine(line) {
+  return String(line)
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .replace(/[A-Za-z]:\\[^\s"';]*/g, '<winpath>')
+    .trim();
+}
+
+function crashReason(result) {
+  const lines = (Array.isArray(result.logTail) ? result.logTail : [])
+    .map(sanitizeLogLine)
+    .filter(Boolean);
+  const fatal = lines.find((line) =>
+    /FATAL|Check failed|Unable to start engine|Can't load AOT data/.test(line));
+  if (fatal) return fatal.slice(0, 240);
+  const exitCode = Number.isInteger(result.exitCode) ? result.exitCode : null;
+  return exitCode === null ? 'process crashed' : `process crashed (exit ${exitCode})`;
 }
 
 async function main() {
@@ -39,6 +64,7 @@ async function main() {
   }
 
   const selected = allCases.filter(item => {
+    if (args.onlyEngineContext && !item.engineContext) return false;
     if (item.engine && !args.engine) return false;
     if (args.only) return item.id.includes(args.only) || item.group === args.only;
     return true;
@@ -70,7 +96,11 @@ async function main() {
     });
     const status = result.status;
     if (status === 'crash' || status === 'timeout' || status === 'spawn-error') {
-      spec.cases[item.id] = { status: status === 'spawn-error' ? 'crash' : status, exitCode: result.exitCode ?? null };
+      spec.cases[item.id] = {
+        status: status === 'spawn-error' ? 'crash' : status,
+        exitCode: result.exitCode ?? null,
+        reason: crashReason(result),
+      };
       counts[status === 'spawn-error' ? 'crash' : status]++;
       process.stderr.write(`${status}${result.exitCode !== undefined ? ` (exit ${result.exitCode})` : ''}\n`);
     } else if (status === 'skip') {

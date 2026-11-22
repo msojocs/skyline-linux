@@ -42,6 +42,80 @@ function loadModule(modulePath, label) {
   }
 }
 
+async function executeCase(options) {
+  const id = options.caseId;
+  const platform = options.platform || (process.platform === 'win32' ? 'win32' : 'linux');
+  const result = { id, platform, runtime: {
+    platform: process.platform,
+    arch: process.arch,
+    node: process.versions.node,
+    electron: process.versions.electron || null,
+    modules: process.versions.modules,
+  } };
+
+  const caseDefinition = byId(id);
+  if (!caseDefinition) return { ...result, status: 'unknown-case' };
+  if (caseDefinition.engine && !options.allowEngine) {
+    return { ...result, status: 'skip', reason: 'engine-case-disabled' };
+  }
+  if (caseDefinition.engineContext && !options.allowEngineContext && !options.allowEngine) {
+    return { ...result, status: 'skip', reason: 'engine-context-required' };
+  }
+
+  let shared = null;
+  let addon = null;
+  try {
+    shared = loadModule(options.sharedPath, 'sharedMemory');
+    addon = loadModule(options.modulePath, 'skyline addon');
+  } catch (error) {
+    return {
+      ...result,
+      status: 'skip',
+      reason: 'module-unavailable',
+      error: { name: error.name, message: String(error.message || error) },
+    };
+  }
+
+  if (caseDefinition.group === 'shared-memory' && !shared) {
+    return { ...result, status: 'skip', reason: 'shared-memory-unavailable' };
+  }
+  if (caseDefinition.group !== 'shared-memory' && !addon) {
+    return { ...result, status: 'skip', reason: 'skyline-addon-unavailable' };
+  }
+
+  // The official loader require()s sharedMemory first and the addon second.
+  globalThis.__skyline_addon_keys__ = addon && typeof addon === 'object'
+    ? Object.keys(addon).sort()
+    : null;
+  globalThis.__skyline_addon_loaded__ = !!addon;
+
+  const context = {
+    addon,
+    shared,
+    shell: options.shell || null,
+    resources: options.resources || null,
+    bundle: options.bundle || null,
+    addonPath: options.addonPath || null,
+    platform,
+    allowEngine: !!options.allowEngine,
+  };
+
+  try {
+    const value = await caseDefinition.run(context);
+    return { ...result, status: 'ok', value: stabilize(value) };
+  } catch (error) {
+    return {
+      ...result,
+      status: 'error',
+      error: {
+        name: error && error.name || typeof error,
+        message: String(error && error.message !== undefined ? error.message : error),
+        stack: error && error.stack,
+      },
+    };
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.list) {
@@ -56,85 +130,17 @@ async function main() {
     process.exit(2);
   }
 
-  const caseDefinition = byId(id);
-  if (!caseDefinition) {
-    writeResult(out, { id, status: 'unknown-case' });
-    process.exit(0);
-  }
-
-  const platform = args.platform || (process.platform === 'win32' ? 'win32' : 'linux');
-  const result = { id, platform, runtime: {
-    platform: process.platform,
-    arch: process.arch,
-    node: process.versions.node,
-    electron: process.versions.electron || null,
-    modules: process.versions.modules,
-  } };
-
-  if (caseDefinition.engine && !args['allow-engine']) {
-    writeResult(out, { ...result, status: 'skip', reason: 'engine-case-disabled' });
-    process.exit(0);
-  }
-  if (caseDefinition.engineContext && !args['allow-engine-context'] && !args['allow-engine']) {
-    writeResult(out, { ...result, status: 'skip', reason: 'engine-context-required' });
-    process.exit(0);
-  }
-
-  let shared = null;
-  let addon = null;
-  try {
-    shared = loadModule(args.shared, 'sharedMemory');
-    addon = loadModule(args.module, 'skyline addon');
-  } catch (error) {
-    writeResult(out, {
-      ...result,
-      status: 'skip',
-      reason: 'module-unavailable',
-      error: { name: error.name, message: String(error.message || error) },
-    });
-    process.exit(0);
-  }
-
-  if (caseDefinition.group === 'shared-memory' && !shared) {
-    writeResult(out, { ...result, status: 'skip', reason: 'shared-memory-unavailable' });
-    process.exit(0);
-  }
-  if (caseDefinition.group !== 'shared-memory' && !addon) {
-    writeResult(out, { ...result, status: 'skip', reason: 'skyline-addon-unavailable' });
-    process.exit(0);
-  }
-
-  // The official loader require()s sharedMemory first and the addon second.
-  globalThis.__skyline_addon_keys__ = addon && typeof addon === 'object'
-    ? Object.keys(addon).sort()
-    : null;
-  globalThis.__skyline_addon_loaded__ = !!addon;
-
-  const context = {
-    addon,
-    shared,
+  const payload = await executeCase({
+    caseId: id,
+    platform: args.platform,
+    modulePath: args.module,
+    sharedPath: args.shared,
     resources: args.resources || null,
     bundle: args.bundle || null,
     addonPath: args['addon-path'] || null,
-    platform,
     allowEngine: !!args['allow-engine'],
-  };
-
-  let payload;
-  try {
-    const value = await caseDefinition.run(context);
-    payload = { ...result, status: 'ok', value: stabilize(value) };
-  } catch (error) {
-    payload = {
-      ...result,
-      status: 'error',
-      error: {
-        name: error && error.name || typeof error,
-        message: String(error && error.message !== undefined ? error.message : error),
-        stack: error && error.stack,
-      },
-    };
-  }
+    allowEngineContext: !!args['allow-engine-context'],
+  });
 
   writeResult(out, payload);
   // The native module starts message loops and worker threads; an explicit
@@ -142,16 +148,20 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(error => {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.out) {
-    try {
-      writeResult(args.out, {
-        id: args.case || null,
-        status: 'driver-error',
-        error: { name: error && error.name, message: String(error && error.message || error), stack: error && error.stack },
-      });
-    } catch {}
-  }
-  process.exit(3);
-});
+if (require.main === module) {
+  main().catch(error => {
+    const args = parseArgs(process.argv.slice(2));
+    if (args.out) {
+      try {
+        writeResult(args.out, {
+          id: args.case || null,
+          status: 'driver-error',
+          error: { name: error && error.name, message: String(error && error.message || error), stack: error && error.stack },
+        });
+      } catch {}
+    }
+    process.exit(3);
+  });
+}
+
+module.exports = { executeCase, writeResult };

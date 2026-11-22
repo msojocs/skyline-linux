@@ -1,11 +1,11 @@
 {
   "meta": {
-    "generatedAt": "2026-11-19T01:34:39.346Z",
+    "generatedAt": "2026-11-22T02:47:11.923Z",
     "source": "official-wechat-devtools-win32-x64",
     "devtoolsVersion": "2.02.2609250",
     "electronVersion": "36.6.0",
     "engineCases": false,
-    "engineContextCases": false
+    "engineContextCases": true
   },
   "cases": {
     "module.exports": {
@@ -798,12 +798,95 @@
       }
     },
     "brightness.validation": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "dark": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "float": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "light": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "negative": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "noArgs": {
+          "error": {
+            "message": "OnPlatformBrightnessChanged expects 1 argument",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "nul": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "string": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "three": {
+          "ok": true,
+          "value": "<undefined>"
+        },
+        "zero": {
+          "ok": true,
+          "value": "<undefined>"
+        }
+      }
     },
     "destroy.validation": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "extra": {
+          "error": {
+            "message": "shell.destroy expects 1 arguments: windowId, ",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "negative": {
+          "error": {
+            "message": "window_id: -1 not found",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "noArgs": {
+          "error": {
+            "message": "shell.destroy expects 1 arguments: windowId, ",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "string": {
+          "error": {
+            "message": "window_id: 0 not found",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "unknown": {
+          "error": {
+            "message": "window_id: 99 not found",
+            "name": "Error"
+          },
+          "ok": false
+        },
+        "zero": {
+          "error": {
+            "message": "window_id: 0 not found",
+            "name": "Error"
+          },
+          "ok": false
+        }
+      }
     },
     "raster.validation": {
       "status": "ok",
@@ -912,32 +995,53 @@
       }
     },
     "notify.navigateTo": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "notify.redirectTo": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "notify.navigateBack": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "notify.appLaunch": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "notify.reLaunch": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "notify.autoReLaunch": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "notify.switchTab": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "notify.resourceLoad": {
       "status": "ok",
@@ -947,8 +1051,9 @@
       }
     },
     "notify.httpRequestComplete": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -36861,
+      "reason": "process crashed (exit -36861)"
     },
     "create.argumentCount": {
       "status": "ok",
@@ -1012,40 +1117,57 @@
       }
     },
     "create.dprString": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "create.dprZero": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -1073740791,
+      "reason": "[FATAL:skyline/platform/devtools/flutter_window.cc(97)] Check failed: device_pixel_ratio == 2."
     },
     "create.dprOne": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -1073740791,
+      "reason": "[FATAL:skyline/platform/devtools/flutter_window.cc(97)] Check failed: device_pixel_ratio == 2."
     },
     "create.dprThree": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -1073740791,
+      "reason": "[FATAL:skyline/platform/devtools/flutter_window.cc(97)] Check failed: device_pixel_ratio == 2."
     },
     "create.dprNaN": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -1073740791,
+      "reason": "[FATAL:skyline/platform/devtools/flutter_window.cc(97)] Check failed: device_pixel_ratio == 2."
     },
     "create.widthString": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "create.windowIdString": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "create.showWindowString": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "create.bundleNumber": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -1073740791,
+      "reason": "Can't load AOT data from <winpath>; no such file."
     },
     "create.addonMissing": {
       "status": "ok",
@@ -1058,24 +1180,31 @@
       }
     },
     "create.descriptorString": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -36861,
+      "reason": "process crashed (exit -36861)"
     },
     "create.descriptorShort": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "ok",
+      "value": {
+        "ok": true,
+        "value": "<undefined>"
+      }
     },
     "create.descriptorArray": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -36861,
+      "reason": "process crashed (exit -36861)"
     },
     "create.noDescriptor": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -36861,
+      "reason": "process crashed (exit -36861)"
     },
     "create.destroyUnknownAfterAttempt": {
-      "status": "skip",
-      "reason": "engine-context-required"
+      "status": "crash",
+      "exitCode": -1073740791,
+      "reason": "Can't load AOT data from <winpath>; no such file."
     },
     "shm.exports": {
       "status": "ok",
