@@ -1571,6 +1571,71 @@ test('appservice ops: grid-view lays out a 2-column aligned grid', {
   assert.deepEqual(pixelAt(pixels, 240, 90), [255, 255, 0, 255]);
 });
 
+test('appservice ops: grid-view masonry packs columns without blank rows', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors the ops the SDK sends for `<grid-view type="masonry">`: camelCase
+  // `type` string + `mainAxisGap`/`crossAxisGap` in a bulk setAttributes op.
+  const ops = [
+    { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+    { op: 'setStyle', id: 2, value: 'width:320px;height:240px;background:#FFFFFF;' },
+    { op: 'createElement', id: 3, tag: 'empty', name: 'scrollview' },
+    { op: 'setStyle', id: 3, value: 'width:320px;height:240px;' },
+    { op: 'setAttributes', id: 3, attrs: { scrollY: true, scrollEnabled: true } },
+    { op: 'createElement', id: 4, tag: 'empty', name: 'gridview' },
+    { op: 'setAttributes', id: 4, attrs: { type: 'masonry' } },
+    { op: 'setAttributes', id: 4, attrs: { crossAxisGap: 4, mainAxisGap: 4 } },
+    { op: 'createElement', id: 5, tag: 'empty', name: 'view' },
+    { op: 'setStyle', id: 5, value: 'width:100%;height:100px;background:#FF0000;' },
+    { op: 'createElement', id: 6, tag: 'empty', name: 'view' },
+    { op: 'setStyle', id: 6, value: 'width:100%;height:60px;background:#00FF00;' },
+    { op: 'createElement', id: 7, tag: 'empty', name: 'view' },
+    { op: 'setStyle', id: 7, value: 'width:100%;height:100px;background:#0000FF;' },
+    { op: 'createElement', id: 8, tag: 'empty', name: 'view' },
+    { op: 'setStyle', id: 8, value: 'width:100%;height:100px;background:#FFFF00;' },
+    { op: 'appendChild', id: 4, child: 5 },
+    { op: 'appendChild', id: 4, child: 6 },
+    { op: 'appendChild', id: 4, child: 7 },
+    { op: 'appendChild', id: 4, child: 8 },
+    { op: 'appendChild', id: 3, child: 4 },
+    { op: 'appendChild', id: 2, child: 3 },
+    { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+    { op: 'appendChild', id: 1, child: 2 },
+    { op: 'attach', root: 1 },
+    { op: 'startRender' },
+  ];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-masonry-'));
+  const fixture = path.join(dir, 'masonry.ops.json');
+  fs.writeFileSync(fixture, JSON.stringify({ ops }));
+  try {
+    const { result, logs, pixels } = runHost(fixture, {
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /gridview #4: 4 items/);
+    assert.ok(pixels, 'no frame was captured');
+    // Masonry fills the shortest column: red 0..99 (col 0), green 0..59
+    // (col 1), blue 64..163 (col 1, shortest), yellow 104..203 (col 0).  An
+    // aligned grid would leave a blank 60..103 band in column 1 and start row
+    // 1 at y=104 in both columns, so (240,80) would be white instead of blue.
+    assert.deepEqual(pixelAt(pixels, 80, 30), [255, 0, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 240, 30), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 240, 80), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(pixels, 80, 150), [255, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 240, 150), [0, 0, 255, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('appservice ops: image nodes paint through NewDirectRenderWidget', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
@@ -3565,6 +3630,124 @@ test('appservice ops: transform-origin z updates repaint in place', {
     assert.deepEqual(pixelAt(pixels, 60, 125), [255, 255, 255, 255]);
     assert.deepEqual(pixelAt(pixels, 60, 185), [0, 170, 0, 255]);
     assert.deepEqual(pixelAt(pixels, 60, 210), [0, 170, 0, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: custom route attach configures CreatePageRoute', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-custom-route-'));
+  const ops = path.join(dir, 'custom-route.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1,
+        css: '.page{width:320px;height:240px;background:#FFFFFF;}' },
+      // Custom routes attach a `host` wrapper that contains the page root.
+      { op: 'createElement', id: 2, tag: 'empty', name: 'host' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'page' },
+      { op: 'addClass', id: 3, prefix: 'page', name: 1 },
+      { op: 'createElement', id: 4, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 4,
+        value: 'width:320px;height:240px;background:#22AA22;' },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'appendChild', id: 2, child: 3 },
+      // rConfig order from assets/app.js attachCustomRoute().
+      { op: 'attachCustomRoute', args: [
+        true, true, true, 300, 300, '', false, '', true, true,
+        'onAnimationChange-2', 'onSecondaryAnimationChange-2',
+      ] },
+      { op: 'attach', root: 3, host: 2 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(ops, {
+      timeoutMs: 3000,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.doesNotMatch(logs, /Incorrect use of ParentDataWidget/);
+    assert.doesNotMatch(logs, /Unhandled exception/);
+    assert.match(logs, /attachCustomRoute custom=1 opaque=1 transition=300\/300/);
+    assert.match(logs,
+      /appservice page 1 -> CreatePageRoute \(openType=0, 320x240, custom=1\)/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: left-edge swipe pops a plain navigateTo route', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-edge-back-'));
+  const ops = path.join(dir, 'edge-back.ops.json');
+  const script = path.join(dir, 'edge-back.pointer.txt');
+  // Home page (blue) pushes a red page via notifyNavigateTo.  No
+  // attachCustomRoute: this is the Flutter DismissiblePage edge gesture.
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#0000FF;' },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 300, ops: [
+        { op: 'notifyNavigateTo', args: [0, 2] },
+        { op: 'createElement', id: 20, tag: 'empty', name: 'page' },
+        { op: 'setStyle', id: 20,
+          value: 'width:320px;height:240px;background:#FF0000;' },
+        { op: 'attach', root: 20 },
+        { op: 'startRender' },
+      ] },
+    ],
+  }));
+  // Pass the 50% dismiss threshold (or fling faster than one screen width
+  // per second) so the Cupertino back controller commits the pop.
+  fs.writeFileSync(script, [
+    '1300 add 5 120 1',
+    '1400 down 5 120 1',
+    '1450 move 60 120 1',
+    '1500 move 120 120 1',
+    '1550 move 180 120 1',
+    '1600 move 240 120 1',
+    '1700 up 260 120 1',
+    '',
+  ].join('\n'));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2600,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+      args: ['--pointer-script', script],
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /appservice page 2 -> CreatePageRoute \(openType=4/);
+    assert.match(logs, /NotifyNavigateBackByGesture: .* popped=1/);
+    assert.ok(pixels, 'no frame was captured');
+    assert.deepEqual(pixelAt(pixels, 160, 120), [0, 0, 255, 255]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -67,6 +67,12 @@ extern "C" void SkylineTakeAppSnapshot(uint32_t request_id, double scale,
 extern "C" void SkylineSnapshotNode(uint32_t node_id, uint8_t format,
                                     uint32_t request_id);
 extern "C" void SkylineSetUserGesture(uint8_t in_progress);
+// Custom-route gesture worklets (`workletUIModule`) drive the Flutter route
+// through the Dart callbacks registered in the runtime FFI table.
+extern "C" void SkylineNavigatorPop(int32_t page_id);
+extern "C" void SkylineStartUserGesture();
+extern "C" void SkylineStopUserGesture();
+extern "C" void SkylineUpdateAnimationController(int32_t page_id, double value);
 extern "C" void SkylineRelaunchApp(uint8_t open_type);
 extern "C" void SkylineShutdownApplication();
 // DevTools Network bridge: image/font HTTP requests are proxied through the
@@ -1250,6 +1256,59 @@ napi_value SetUserGesture(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
+// Route gesture bridge used by the appservice `workletUIModule` stub.  Custom
+// route worklets run in the appservice realm, so `didPop`/`startUserGesture`
+// can only pop the Flutter route through these N-API calls.
+napi_value NavigatorPop(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 2) {
+    return Throw(env, napi_invalid_arg,
+                 "navigatorPop expects (windowId, pageId)");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineNavigatorPop(static_cast<int32_t>(ReadNumber(env, argv[1])));
+#endif
+  return Undefined(env);
+}
+
+napi_value StartUserGesture(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineStartUserGesture();
+#endif
+  return Undefined(env);
+}
+
+napi_value StopUserGesture(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineStopUserGesture();
+#endif
+  return Undefined(env);
+}
+
+napi_value UpdateAnimationController(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 3) {
+    return Throw(env, napi_invalid_arg,
+                 "updateAnimationController expects (windowId, pageId, value)");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineUpdateAnimationController(
+      static_cast<int32_t>(ReadNumber(env, argv[1])),
+      ReadNumber(env, argv[2]));
+#endif
+  return Undefined(env);
+}
+
 napi_value RelaunchApp(napi_env env, napi_callback_info info) {
   size_t argc = 2;
   napi_value argv[2] = {nullptr, nullptr};
@@ -1457,6 +1516,10 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "takeAppSnapshot", TakeAppSnapshot);
   Define(env, bridge, "snapshotNode", SnapshotNode);
   Define(env, bridge, "setUserGesture", SetUserGesture);
+  Define(env, bridge, "navigatorPop", NavigatorPop);
+  Define(env, bridge, "startUserGesture", StartUserGesture);
+  Define(env, bridge, "stopUserGesture", StopUserGesture);
+  Define(env, bridge, "updateAnimationController", UpdateAnimationController);
   Define(env, bridge, "relaunchApp", RelaunchApp);
   Define(env, bridge, "shutdownApplication", ShutdownApplication);
   Define(env, bridge, "setSafeArea", Noop);

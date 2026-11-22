@@ -58,6 +58,8 @@ D10 之后不再有行为性缺口：用户手势、无障碍语义与自动化/
 | 快照 | `SceneToImage` CPU 光栅化（`LayerTree::Flatten` + `DlSkCanvasDispatcher` + `SkPngEncoder`）；`<snapshot>` + `NewSnapshot`/`SnapshotTakeSnapshot`；`TakeAppSnapshot`；`YGNodeTakeSnapshot`（按需 repaint boundary） | `test:ops`：app/node PNG 快照写入 `SKYLINE_SNAPSHOT_DIR`，JSON `appSnapshot`/`nodeSnapshot`；bootstrap 单测：`snapshotEvents` |
 | DevTools 自动化 | `DumpElementTree`/`DumpRenderTree`/`CollectGarbage`/`SendMessageToRunner`/`RelaunchApp`/`ShutdownApplication`/`StartUserGesture`/`StopUserGesture` 经 `FindCallback` 调用；addon 暴露 `__skylineDebug.*` | `test:ops`：dump 输出 `YGNodeRenderObject`、GC/runner/gesture 日志；bootstrap 单测：全部调试方法转发 |
 | DevTools Network 面板 | 图片/字体 HTTP 经 `SkylineShell.setHttpRequestCallback`（appservice `window.fetch`）代理，`native.setHttpRequestSink`/`httpRequestComplete` 双向桥；空响应或 2 s 超时回退 `dart:io` | bootstrap 单测：sink → shell callback → `notifyHttpRequestComplete`；真机 Network 面板显示 album 26 张图片（status 200/fetch） |
+| 自定义路由手势返回 | `attachCustomRoute` op → `CreatePageRoute(isCustomRoute, animationHash, host, root)`；`SkylineGlobal.GestureHandlerModule` 在 JS 侧识别 pan/tap/drag（`onGestureHandlerEvent-<tag>` worklet）；`workletUIModule.navigatorPop/startUserGesture/stopUserGesture/updateAnimationController` 经 addon 转入 Dart FFI；`workletMutable` 驱动 `timing()` 动画并执行完成回调；`NotifyNavigateBackByGesture/Done` 调用 `setNavigateBackCallback/Done` 让 DevTools 路由栈跟随，并同步回退运行时页栈 | bootstrap 单测：手势 worklet、`navigatorPop` 桥、`pageRoute` 动画事件、timing 完成回调；`test:ops`：`attachCustomRoute ... custom=1` + `CreatePageRoute (custom=1)`；`test:ops`：普通 `notifyNavigateTo` 页从左边 20px 内滑过 50% 宽度后 pop（`NotifyNavigateBackByGesture ... popped=1` + 像素回到上一页）；真机 card_transition 详情页右滑退出，`getCurrentPages` 与模拟器页面路径同时回到 `pages/list/list` |
+| `grid-view` 瀑布流 | SDK 以批量 `setAttributes` 发送 camelCase 属性：`type: "masonry"`、`mainAxisGap`、`crossAxisGap`（旧运行时按数值解析 `type` 并只读 `*Spacing`，导致所有网格都走 aligned 布局，较矮卡片下方留出整行空白）。运行时新增 `GridIsMasonry`/`GridMainGap`/`GridCrossGap`：`<grid-view>` 的 `GridViewType` 为 masonry=0/aligned=1，`<grid-builder>` 的 `GridBuilderType` 为 aligned=0/masonry=1 | `test:ops`：`grid-view masonry packs columns without blank rows`（4 个不同高度卡片，断言最短列续排；aligned 会在 (240,80) 留白） |
 
 ## 5. 后续修复任务
 
@@ -76,6 +78,13 @@ D10 之后不再有行为性缺口：用户手势、无障碍语义与自动化/
   `YGNodeTakeSnapshot`、`DumpElementTree`/`DumpRenderTree`/`CollectGarbage`/
   `SendMessageToRunner`/`RelaunchApp`/`ShutdownApplication`/`Start/StopUserGesture`
   均已接入，并通过 `__skylineDebug` 暴露给 DevTools。
+- ~~**D11** Skyline 自定义路由与手势返回~~ 已完成：appservice 的
+  `attachCustomRoute` 配置透传到 `CreatePageRoute`（custom route、动画 hash、
+  host/root），`GestureHandlerModule` 识别 pan/tap/drag 并分发
+  `onGestureHandlerEvent-<tag>` worklet，`navigatorPop`/`startUserGesture`/
+  `stopUserGesture`/`updateAnimationController` 经 addon 调 Dart 路由回调，
+  `workletMutable` 执行 `timing()` 完成回调，`NotifyNavigateBackByGesture/Done`
+  驱动 DevTools 路由栈。card_transition 详情页右滑返回已验证。
 
 新增探针时沿用 D2 的方式：静态行为夹具优先放在 `test:ops`（可断言日志/像素），
 需要官方 Windows 基准时再用 `tools/l5-windows.js --only <name>` 采集。

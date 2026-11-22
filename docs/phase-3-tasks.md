@@ -411,6 +411,58 @@
     bootstrap 单测覆盖全部 `__skylineDebug` 自动化方法、JSON 事件分发与
     HTTP 代理（含缺失回调/空 payload 回退）；`npm test` **177 / 201**
     （24 skipped）。
+- [x] **D11** Skyline 自定义路由与手势返回
+  - **自定义路由**：`attachCustomRoute` op（`[isCustomRoute, opaque,
+    maintainState, transitionDuration, reverseTransitionDuration,
+    barrierColor, barrierDismissible, barrierLabel, canTransitionTo,
+    canTransitionFrom, animationHash, secondaryAnimationHash]`）解析为
+    `OpPage::custom_route` 并透传给 `CreatePageRoute`（`isCustomRoute=1`、
+    `popGestureEnabled=1`、host/root、动画 hash）。custom route 的 `host`
+    元素是动画载体（`SkylineCupertinoPageTransition` 会强转 YGNode 并替换其
+    connector 子节点），`root` 仍是增量更新重建的页面树；先构建 host，再构建
+    root。
+  - **手势模块**：`SkylineGlobal.GestureHandlerModule`（大写 G）此前未暴露，
+    `<pan/tap/*-drag-gesture-handler>` 全部静默失效。bootstrap 现在用镜像树
+    在 `dispatchTouch` 中识别单指 pan/tap/vertical-drag/horizontal-drag，
+    向 `onGestureHandlerEvent-<handlerTag>` worklet 分发
+    `{state,absoluteX,absoluteY,deltaX,deltaY,velocityX,velocityY,...}`，并
+    调用可选的 `shouldResponseOnMove`/`shouldAcceptGesture` worklet。
+  - **路由回调**：`workletUIModule.navigatorPop/startUserGesture/
+    stopUserGesture/updateAnimationController` 经 addon
+    `native.navigatorPop/startUserGesture/stopUserGesture/
+    updateAnimationController` → `SkylineNavigatorPop/StartUserGesture/
+    StopUserGesture/UpdateAnimationController` → UI runner 上的 Dart FFI
+    回调（`NavigatorPop` 399219931、`UpdateAnimationController` 519424339）。
+    `workletMutable` 需真正驱动 `timing()`/`spring()`：调用 updater、按 16 ms
+    执行 `onFrame`、结束时执行 `callback`，否则拖拽释放后的 `didPop()`
+    永不触发（card_transition 详情页即卡在这里）。
+  - **DevTools 路由同步**：`NotifyNavigateBackByGesture/Done` 回退运行时页栈
+    （按 `current_page_id` 防重复）并经 JSON → bootstrap
+    `setNavigateBackCallback/Done`（`{window_id,page_id}`）通知 DevTools；
+    `HandlePageRoute` 转 `pageRoute` JSON 给 `onAnimationChange-<tag>` worklet。
+  - 验证：`test:ops` 新增 `attachCustomRoute` 用例与普通 `navigateTo` 页的
+    左缘侧滑返回用例（78 / 78；Cupertino 返回需滑过 50% 宽度或 >1 屏宽/秒
+    的 fling，短距离滑动会回弹属正常行为）；bootstrap 新增手势 worklet、
+    `navigatorPop` 桥、`pageRoute` 事件、timing 完成回调测试（`npm test`
+    **182 / 206**，24 skipped）。真机 card_transition 详情页右滑退出后
+    `getCurrentPages()` 与模拟器页面路径同时回到 `pages/list/list`；普通
+    `wx.navigateTo` 页的 Flutter 左缘侧滑同样可返回。
+
+- [x] **D12** `grid-view` 瀑布流布局
+  - SDK 的 builtin `<grid-view>` 通过 `setAttributes` 发送 camelCase 属性
+    `type: "masonry"`、`mainAxisGap`、`crossAxisGap`；运行时原来按数值解析
+    `type`（字符串回退为 1 = aligned），且只读取 `mainAxisSpacing`/
+    `crossAxisSpacing`，因此所有 `<grid-view>` 都按 aligned 排布，短卡片下方
+    出现整行空白（card_transition 列表尤为明显）。
+  - 新增 `GridIsMasonry`/`GridMainGap`/`GridCrossGap`：同时接受字符串
+    `masonry`/`aligned` 与旧数值 `0/1`，gap 同时读取 `*Gap`（SDK）与
+    `*Spacing`（旧夹具）；注意 `<grid-view>` 的 `GridViewType` 为
+    masonry=0/aligned=1，而 `<grid-builder>` 的 `GridBuilderType` 为
+    aligned=0/masonry=1，需要分别映射。
+  - 回归：`test:ops` 新增 `grid-view masonry packs columns without blank rows`
+    （4 个不同高度卡片，按最短列续排；aligned 会在右侧列 60..103px 留白）；
+    `test:ops` 79 / 79，`npm test` **184 / 208**（24 skipped）。真机
+    card_transition 列表滚动多屏，两列独立紧凑排列，不再出现整行空白。
 
 ## 测试基线（x / y）
 

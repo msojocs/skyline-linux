@@ -77,6 +77,12 @@ function loadBootstrap() {
     takeAppSnapshot(...args) { calls.push(['takeAppSnapshot', ...args]); },
     snapshotNode(...args) { calls.push(['snapshotNode', ...args]); },
     setUserGesture(...args) { calls.push(['setUserGesture', ...args]); },
+    navigatorPop(...args) { calls.push(['navigatorPop', ...args]); },
+    startUserGesture(...args) { calls.push(['startUserGesture', ...args]); },
+    stopUserGesture(...args) { calls.push(['stopUserGesture', ...args]); },
+    updateAnimationController(...args) {
+      calls.push(['updateAnimationController', ...args]);
+    },
     relaunchApp(...args) { calls.push(['relaunchApp', ...args]); },
     shutdownApplication(...args) {
       calls.push(['shutdownApplication', ...args]);
@@ -390,4 +396,140 @@ test('bootstrap: HTTP requests proxy through the SkylineShell callback', async (
   second.httpSink.value({ requestId: 43, url: 'https://example.invalid/b.jpg' });
   assert.deepEqual(second.httpCompletions,
     [{ requestId: 43, length: 0 }]);
+});
+
+test('bootstrap: custom-route worklets pop and animate the Flutter route', () => {
+  const { sandbox, jsonSink, calls } = loadBootstrap();
+  const module = sandbox.workletUIModule;
+  assert.ok(module, 'workletUIModule is installed');
+
+  // `wx.router.getRouteContext()` worklets call these before/while dragging and
+  // when they finish (`didPop`).  They must reach the native addon, otherwise
+  // the page cannot be swiped away.
+  module.navigatorPop(4, 63);
+  module.startUserGesture(4);
+  module.stopUserGesture(4);
+  module.updateAnimationController(4, 63, 0.5);
+  // assets/app.js worklets reference bare `_`-prefixed globals.
+  sandbox._navigatorPop(4, 64);
+  sandbox._startUserGesture(4);
+  sandbox._stopUserGesture(4);
+  sandbox._updateAnimationController(4, 64, 0.25);
+  assert.deepEqual(calls, [
+    ['navigatorPop', 4, 63],
+    ['startUserGesture', 4],
+    ['stopUserGesture', 4],
+    ['updateAnimationController', 4, 63, 0.5],
+    ['navigatorPop', 4, 64],
+    ['startUserGesture', 4],
+    ['stopUserGesture', 4],
+    ['updateAnimationController', 4, 64, 0.25],
+  ]);
+
+  // Gesture pops are reported to the shell so the DevTools simulator route
+  // stack follows the renderer, and the JS mirror pops with it.
+  const shell = new sandbox.SkylineShell();
+  const backEvents = [];
+  const doneEvents = [];
+  shell.setNavigateBackCallback((event) => backEvents.push(event));
+  shell.setNavigateBackDoneCallback((event) => doneEvents.push(event));
+  const context = new sandbox.SkylineGlobal.PageContext(4, 4);
+  const first = context.createElement('empty', 'view');
+  const second = context.createElement('empty', 'view');
+  context.attach(first);
+  context.attach(second);
+  assert.equal(sandbox.__skylineDebug.attachedRoots.get(4), second);
+
+  jsonSink.value(JSON.stringify(
+    { type: 'navigateBackByGesture', windowId: 4, pageId: 63 }));
+  assert.equal(JSON.stringify(backEvents), JSON.stringify(
+    [{ window_id: 4, page_id: 63 }]));
+  assert.equal(sandbox.__skylineDebug.attachedRoots.get(4), first,
+    'hit test follows the revealed page');
+
+  jsonSink.value(JSON.stringify(
+    { type: 'navigateBackDoneByGesture', windowId: 4, pageId: 63 }));
+  assert.equal(JSON.stringify(doneEvents), JSON.stringify(
+    [{ window_id: 4, page_id: 63 }]));
+});
+
+test('bootstrap: HandlePageRoute drives the custom-route animation worklet', () => {
+  const { sandbox, jsonSink } = loadBootstrap();
+  const updates = [];
+  sandbox.SkylineGlobal.ReanimatedModule.registerEventHandler(
+    'onAnimationChange-77', (controller) => updates.push(controller));
+
+  jsonSink.value(JSON.stringify({
+    type: 'pageRoute', name: 'onAnimationChange-77', value: 0.4, status: 1,
+  }));
+  // Status changes arrive with a `status-` prefix on the same handler name.
+  jsonSink.value(JSON.stringify({
+    type: 'pageRoute', name: 'status-onAnimationChange-77', value: 1, status: 3,
+  }));
+  assert.equal(JSON.stringify(updates), JSON.stringify([
+    { value: 0.4, status: 1 },
+    { value: 1, status: 3 },
+  ]));
+});
+
+test('bootstrap: gesture handlers dispatch drag worklets for custom routes', () => {
+  const { sandbox } = loadBootstrap();
+  // Every node covers the whole simulator page; the fallback handler lookup
+  // uses the published rects.
+  sandbox.__skylineNative.getNodeRect = () => ({
+    left: 0, top: 0, right: 390, bottom: 844, width: 390, height: 844,
+    zIndex: 0, pointerEvents: 0,
+  });
+  const SkylineGlobal = sandbox.SkylineGlobal;
+  assert.ok(SkylineGlobal.GestureHandlerModule,
+    'SkylineGlobal exposes GestureHandlerModule');
+  const context = new SkylineGlobal.PageContext(4, 4);
+  const target = context.createElement('empty', 'view');
+  context.attach(target);
+
+  const events = [];
+  SkylineGlobal.ReanimatedModule.registerEventHandler(
+    'onGestureHandlerEvent-7', (event) => events.push(event));
+  SkylineGlobal.GestureHandlerModule.attachGestureHandler(7, 3, {}, target);
+
+  const shell = new sandbox.SkylineShell();
+  shell.dispatchTouchStartEvent(4, 10, 400);
+  shell.dispatchTouchMoveEvent(4, 40, 400);
+  shell.dispatchTouchMoveEvent(4, 200, 404);
+  shell.dispatchTouchEndEvent(4, 320, 404);
+
+  // possible -> begin -> active -> end.  The rightward drag is what the
+  // card-transition detail page turns into `didPop()`.
+  const states = events.map((event) => event.state);
+  assert.deepEqual(states, [0, 1, 2, 2, 3]);
+  assert.equal(events[1].absoluteX, 40);
+  assert.ok(events[2].deltaX > 0, 'active event carries the frame delta');
+  assert.ok(events[4].velocityX > 0, 'end event carries the fling velocity');
+
+  SkylineGlobal.GestureHandlerModule.dropGestureHandler(7);
+  const dropped = events.length;
+  shell.dispatchTouchStartEvent(4, 10, 400);
+  shell.dispatchTouchEndEvent(4, 10, 400);
+  assert.equal(events.length, dropped, 'dropped handlers stop receiving events');
+});
+
+test('bootstrap: shared values drive timing animations to completion', () => {
+  const { sandbox } = loadBootstrap();
+  const mutable = sandbox.SkylineGlobal.ReanimatedModule.makeMutable(1);
+  let callbacks = 0;
+  const updater = function () {
+    return {
+      current: 1,
+      onStart() {},
+      onFrame() {
+        this.current -= 0.5;
+        return this.current <= 0;
+      },
+      callback() { callbacks += 1; },
+    };
+  };
+  updater.__worklet = true;
+  mutable.value = updater;
+  assert.equal(callbacks, 1, 'animation callback runs when onFrame finishes');
+  assert.equal(mutable.value, 0, 'final value is the animation current');
 });

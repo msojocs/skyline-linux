@@ -251,20 +251,24 @@ SKYLINE_EXPORT extern "C" intptr_t ShareRuntimeFromRuntimeShell(void* holder_ptr
 }
 
 SKYLINE_EXPORT extern "C" intptr_t CreateWindow(
-    void* /*runtime_ptr*/, int32_t /*id*/, void* /*ffi_table_ptr*/,
+    void* /*runtime_ptr*/, int32_t id, void* /*ffi_table_ptr*/,
     double window_width, double window_height, double /*padding_top*/,
     double /*padding_right*/, double /*padding_bottom*/,
     double /*padding_left*/, double /*device_pixel_ratio*/,
     void* /*window_holder*/) {
   g_viewport_width = window_width;
   g_viewport_height = window_height;
-  return AsHandle(new Window());
+  auto* window = new Window();
+  window->id = id;
+  return AsHandle(window);
 }
 
 SKYLINE_EXPORT extern "C" intptr_t CreateEmptyWindow(
-    void* /*runtime_ptr*/, int32_t /*id*/, void* /*ffi_table_ptr*/,
+    void* /*runtime_ptr*/, int32_t id, void* /*ffi_table_ptr*/,
     void* /*window_holder*/) {
-  return AsHandle(new Window());
+  auto* window = new Window();
+  window->id = id;
+  return AsHandle(window);
 }
 
 SKYLINE_EXPORT extern "C" void SetCurrentDartIsolate(void* holder_ptr) {
@@ -651,6 +655,9 @@ using BuilderUpdatePaddingFn = void (*)(Dart_Handle builder, double top,
 using BuilderUpdateColorFn = void (*)(Dart_Handle builder, uint32_t color);
 using NavigateBackFn = void (*)(int32_t delta, uint8_t animated,
                                 int32_t callback_id);
+using NavigatorPopFn = void (*)(int32_t page_id);
+using UserGestureCallbackFn = void (*)();
+using UpdateAnimationControllerFn = void (*)(int32_t page_id, double value);
 using SwitchTabFn = void (*)(int32_t page_id, int32_t callback_id);
 using UpdateKeyboardStatusFn = void (*)(int32_t input_key, double height);
 using InputValueFn = void (*)(Dart_Handle input, Dart_Handle value);
@@ -1063,6 +1070,11 @@ constexpr uint32_t kRelaunchAppHash = 390635245u;
 constexpr uint32_t kShutdownApplicationHash = 539287559u;
 constexpr uint32_t kStartUserGestureHash = 662129673u;
 constexpr uint32_t kStopUserGestureHash = 638807572u;
+// stringHash('NavigatorPop') / stringHash('UpdateAnimationController'): the
+// Dart route callbacks the custom-route worklets drive through
+// `workletUIModule` (see native/src/bootstrap.js).
+constexpr uint32_t kNavigatorPopHash = 399219931u;
+constexpr uint32_t kUpdateAnimationControllerHash = 519424339u;
 
 enum class DemoMode { kStripes, kText, kCard };
 DemoMode g_demo_mode = DemoMode::kStripes;
@@ -2771,9 +2783,35 @@ struct OpPage {
   int32_t pending_callback_id = 0;
   // Root id that was active before the current `attach` op replaced root_id.
   uint32_t attach_previous_root_id = 0;
+  // Custom routes attach a `host` wrapper that contains the page root.  The
+  // host is the animation carrier handed to `CreatePageRoute`; the content
+  // root stays the node that incremental updates rebuild.
+  uint32_t attach_host_id = 0;
+  // `attachCustomRoute` precedes `attach`; the config configures the
+  // CreatePageRoute call for the page being attached.
+  struct CustomRouteConfig {
+    bool pending = false;
+    bool is_custom = false;
+    bool opaque = true;
+    bool maintain_state = true;
+    int transition_ms = 0;
+    int reverse_transition_ms = 0;
+    bool barrier_dismissible = false;
+    bool has_barrier_color = false;
+    uint32_t barrier_color = 0;
+    std::string barrier_label;
+    bool can_transition_to = true;
+    bool can_transition_from = true;
+    std::string animation_hash;
+    std::string secondary_animation_hash;
+  };
+  CustomRouteConfig custom_route;
   int pending_back_delta = 1;
   bool pending_back_animated = true;
   int page_count = 0;
+  // Page id of the route currently materialized (used to ignore a second
+  // didPop for the same gesture).
+  int32_t current_page_id = 0;
   // Synthetic input focus used by the host keyboard channel.
   uint32_t focused_input_id = 0;
   double keyboard_height = 0.0;
@@ -2790,6 +2828,7 @@ struct OpPage {
     uint32_t root_id = 0;
     Dart_PersistentHandle root_node = nullptr;
     Dart_PersistentHandle root_connector = nullptr;
+    int32_t page_id = 0;
   };
   std::vector<PageEntry> page_stack;
   RuntimeHolder* holder = nullptr;
@@ -7699,6 +7738,28 @@ std::string AttrText(const AppNode* node,
   return found->second;
 }
 
+// `<grid-view>` properties arrive as camelCase attributes: `type` is the
+// string "masonry"/"aligned" (the SDK sends `type: "masonry"` in a bulk
+// setAttributes op), and the gaps are `mainAxisGap`/`crossAxisGap`.  The older
+// numeric `0 = masonry, 1 = aligned` form is still accepted for recorded
+// fixtures.
+bool GridIsMasonry(const AppNode* node) {
+  const std::string type = AttrText(node, "type", "");
+  if (type == "masonry") return true;
+  if (type == "aligned") return false;
+  return AttrNumber(node, "type", 1.0) == 0.0;
+}
+
+double GridMainGap(const AppNode* node) {
+  return AttrNumber(node, "mainAxisGap",
+                    AttrNumber(node, "mainAxisSpacing", 0.0));
+}
+
+double GridCrossGap(const AppNode* node) {
+  return AttrNumber(node, "crossAxisGap",
+                    AttrNumber(node, "crossAxisSpacing", 0.0));
+}
+
 void DeletePersistent(Dart_PersistentHandle* handle) {
   if (*handle != nullptr) {
     Dart_DeletePersistentHandle(*handle);
@@ -9346,9 +9407,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     node->builder_cross_axis_count = std::max(
         1, static_cast<int>(AttrNumber(node, "crossAxisCount", 2.0)));
     node->builder_main_spacing =
-        static_cast<float>(AttrNumber(node, "mainAxisSpacing", 0.0));
+        static_cast<float>(GridMainGap(node));
     node->builder_cross_spacing =
-        static_cast<float>(AttrNumber(node, "crossAxisSpacing", 0.0));
+        static_cast<float>(GridCrossGap(node));
     node->builder_max_cross_extent =
         static_cast<float>(AttrNumber(node, "maxCrossAxisExtent", 0.0));
     node->builder_background = style.has_background ? style.background : 0u;
@@ -9362,9 +9423,10 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     Dart_Handle empty = Dart_NewList(0);
     Dart_Handle builder = Dart_Null();
     if (node->builder_kind == 1) {
+      // GridBuilderType: aligned = 0, masonry = 1 (opposite of GridViewType).
       builder = newGridBuilder(
           node->address, empty,
-          static_cast<uint8_t>(AttrNumber(node, "type", 0.0)),
+          static_cast<uint8_t>(GridIsMasonry(node) ? 1 : 0),
           node->builder_child_count, node->builder_cross_axis_count,
           node->builder_main_spacing, node->builder_cross_spacing,
           node->builder_max_cross_extent, style.padding[0], style.padding[1],
@@ -9595,13 +9657,11 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       // are top-level YGNodes (a sliver cannot host a ParentDataWidget).
       std::vector<AppNode*> items;
       CollectListItems(node, &items);
-      const int grid_type =
-          static_cast<int>(AttrNumber(node, "type", 1.0));  // 1 = aligned
+      const int grid_type = GridIsMasonry(node) ? 0 : 1;
       const int cross_axis_count = std::max(
           1, static_cast<int>(AttrNumber(node, "crossAxisCount", 2.0)));
-      const double grid_main_spacing = AttrNumber(node, "mainAxisSpacing", 0.0);
-      const double grid_cross_spacing =
-          AttrNumber(node, "crossAxisSpacing", 0.0);
+      const double grid_main_spacing = GridMainGap(node);
+      const double grid_cross_spacing = GridCrossGap(node);
       float slot_width = node->measured_w > 0.0f ? node->measured_w : 0.0f;
       if (is_grid_view && cross_axis_count > 1 && slot_width > 0.0f) {
         slot_width =
@@ -10611,7 +10671,7 @@ bool SyncAppServiceBuilders(RuntimeHolder* holder) {
         }
       }
       const float main_spacing =
-          static_cast<float>(AttrNumber(builder, "mainAxisSpacing", 0.0));
+          static_cast<float>(GridMainGap(builder));
       if (std::fabs(main_spacing - builder->builder_synced_main_spacing) > 0.01f) {
         auto* update = reinterpret_cast<BuilderUpdateFloatFn>(FindCallback(
             holder->ffi_table, kGridBuilderUpdateMainAxisSpacingHash));
@@ -10623,7 +10683,7 @@ bool SyncAppServiceBuilders(RuntimeHolder* holder) {
         }
       }
       const float cross_spacing =
-          static_cast<float>(AttrNumber(builder, "crossAxisSpacing", 0.0));
+          static_cast<float>(GridCrossGap(builder));
       if (std::fabs(cross_spacing - builder->builder_synced_cross_spacing) >
           0.01f) {
         auto* update = reinterpret_cast<BuilderUpdateFloatFn>(FindCallback(
@@ -11408,6 +11468,74 @@ bool IsAutomationOpKind(const char* kind) {
           std::strcmp(kind, "shutdownApplication") == 0);
 }
 
+// `attachCustomRoute` is emitted by the SkylineJS runtime right before the
+// page's `attach` op.  Arguments (see assets/app.js `attachCustomRoute`):
+//   isCustomRoute, opaque, maintainState, transitionDuration,
+//   reverseTransitionDuration, barrierColor, barrierDismissible, barrierLabel,
+//   canTransitionTo, canTransitionFrom, animationHash, secondaryAnimationHash.
+// They are handed to Dart's `CreatePageRoute`, which is what makes the route
+// expose `wx.router.getRouteContext` animations and gesture pop.
+void ApplyAttachCustomRoute(const rapidjson::Value& op) {
+  if (g_page == nullptr) return;
+  const auto args = op.FindMember("args");
+  if (args == op.MemberEnd() || !args->value.IsArray()) return;
+  const rapidjson::Value& values = args->value;
+  auto at = [&](rapidjson::SizeType index) -> const rapidjson::Value* {
+    return index < values.Size() ? &values[index] : nullptr;
+  };
+  auto as_bool = [&](rapidjson::SizeType index, bool fallback) {
+    const rapidjson::Value* value = at(index);
+    if (value == nullptr) return fallback;
+    if (value->IsBool()) return value->GetBool();
+    if (value->IsNumber()) return value->GetDouble() != 0.0;
+    if (value->IsString()) {
+      const char* text = value->GetString();
+      return std::strcmp(text, "true") == 0 || std::strcmp(text, "1") == 0;
+    }
+    return fallback;
+  };
+  auto as_int = [&](rapidjson::SizeType index, int fallback) {
+    const rapidjson::Value* value = at(index);
+    if (value == nullptr) return fallback;
+    if (value->IsNumber()) return static_cast<int>(value->GetDouble());
+    if (value->IsString()) return std::atoi(value->GetString());
+    return fallback;
+  };
+  auto as_string = [&](rapidjson::SizeType index) -> std::string {
+    const rapidjson::Value* value = at(index);
+    if (value != nullptr && value->IsString()) return value->GetString();
+    return std::string();
+  };
+
+  auto& config = g_page->custom_route;
+  config.pending = true;
+  config.is_custom = as_bool(0, false);
+  config.opaque = as_bool(1, true);
+  config.maintain_state = as_bool(2, true);
+  config.transition_ms = as_int(3, 300);
+  config.reverse_transition_ms = as_int(4, 300);
+  const std::string barrier_color = as_string(5);
+  config.has_barrier_color = !barrier_color.empty();
+  config.barrier_color =
+      config.has_barrier_color ? ParseColorString(barrier_color.c_str(), 0u)
+                               : 0u;
+  config.barrier_dismissible = as_bool(6, false);
+  config.barrier_label = as_string(7);
+  config.can_transition_to = as_bool(8, true);
+  config.can_transition_from = as_bool(9, true);
+  config.animation_hash = as_string(10);
+  config.secondary_animation_hash = as_string(11);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] attachCustomRoute custom=%d opaque=%d "
+                 "transition=%d/%d anim=%s secondary=%s\n",
+                 config.is_custom ? 1 : 0, config.opaque ? 1 : 0,
+                 config.transition_ms, config.reverse_transition_ms,
+                 config.animation_hash.c_str(),
+                 config.secondary_animation_hash.c_str());
+  }
+}
+
 void ApplyOperation(const rapidjson::Value& op) {
   if (g_page == nullptr || !op.IsObject()) return;
   const char* kind = MemberText(op, "op");
@@ -11856,12 +11984,15 @@ void ApplyOperation(const rapidjson::Value& op) {
     }
   } else if (std::strcmp(kind, "addAnimatedStyle") == 0) {
     CollectAnimatedStyles(op, FindNode(MemberUint(op, "id", 0)));
+  } else if (std::strcmp(kind, "attachCustomRoute") == 0) {
+    ApplyAttachCustomRoute(op);
   } else if (std::strcmp(kind, "attach") == 0) {
     // Remember the previously attached page before the new root replaces it;
     // MaterializeAttachedPage pushes it onto the page stack so navigateBack can
     // restore the covered page's connector.
     g_page->attach_previous_root_id = g_page->root_id;
     g_page->root_id = MemberUint(op, "root", 0);
+    g_page->attach_host_id = MemberUint(op, "host", 0);
   } else if (std::strcmp(kind, "startRender") == 0) {
     g_page->started = true;
   } else if (std::strcmp(kind, "accessibility") == 0) {
@@ -13038,28 +13169,62 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
     return false;
   }
 
-  ResolveStyles(root, nullptr);
+  // Custom routes (`wx.router.addRouteBuilder` + `routeType`) attach a `host`
+  // wrapper containing the page root.  `SkylineCupertinoPageTransition` casts
+  // the host to a YGNode, replaces its connector children with the route
+  // `child` (built from `root`), and registers the JS route builder's animation
+  // worklets on the host view tag.  So the host widget is the animation carrier
+  // and `root` stays the page tree that incremental updates rebuild.
+  OpPage::CustomRouteConfig& custom = g_page->custom_route;
+  AppNode* host = custom.pending ? FindNode(g_page->attach_host_id) : nullptr;
+  const bool is_custom = custom.pending && custom.is_custom && host != nullptr;
+
+  // The host contains the root, so laying out the host also lays out the page.
+  AppNode* layout_root = is_custom ? host : root;
+  ResolveStyles(layout_root, nullptr);
   ClearSliverLayoutMarks();
   const float viewport_w =
       g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
   const float viewport_h =
       g_viewport_height > 0.0 ? static_cast<float>(g_viewport_height) : 240.0f;
-  PrepareLayoutBuffers(root);
-  MeasureNode(root, viewport_w, true, viewport_h, true);
-  root->measured_w = viewport_w;
-  root->measured_h = viewport_h;
+  PrepareLayoutBuffers(layout_root);
+  MeasureNode(layout_root, viewport_w, true, viewport_h, true);
+  layout_root->measured_w = viewport_w;
+  layout_root->measured_h = viewport_h;
   std::vector<NodeMetric> metrics;
-  LayoutNode(root, 0.0f, 0.0f, viewport_w, viewport_h, &metrics);
+  LayoutNode(layout_root, 0.0f, 0.0f, viewport_w, viewport_h, &metrics);
   WriteLayoutMetrics(metrics);
+
+  Dart_Handle host_widget = Dart_Null();
+  if (is_custom) {
+    // Built first: the host connector must exist for the transition; the
+    // route replaces its children with the (second) root build below.
+    ResetDeferredFixedNodes();
+    g_fixed_root_node = root;
+    g_collect_fixed_nodes = true;
+    host_widget =
+        BuildWidget(host, builders.yg_node, builders.yg_connector, builders.text,
+                    builders.text_span, builders.decorated, builders.opacity,
+                    builders.scroll, builders.list, builders.grid,
+                    builders.direct, builders.list_builder,
+                    builders.grid_builder, true);
+    g_collect_fixed_nodes = false;
+    ResetDeferredFixedNodes();
+    if (host_widget == nullptr || Dart_IsError(host_widget)) {
+      std::fprintf(stderr, "[skyline-runtime] appservice ops: host build failed\n");
+      return false;
+    }
+  }
 
   ResetDeferredFixedNodes();
   g_fixed_root_node = root;
   g_collect_fixed_nodes = true;
   Dart_Handle root_widget =
-      BuildWidget(root, builders.yg_node, builders.yg_connector, builders.text,
-                  builders.text_span, builders.decorated, builders.opacity,
-                  builders.scroll, builders.list, builders.grid, builders.direct,
-                  builders.list_builder, builders.grid_builder, true);
+      BuildWidget(root, builders.yg_node, builders.yg_connector,
+                  builders.text, builders.text_span, builders.decorated,
+                  builders.opacity, builders.scroll, builders.list,
+                  builders.grid, builders.direct, builders.list_builder,
+                  builders.grid_builder, true);
   g_collect_fixed_nodes = false;
   ResetDeferredFixedNodes();
   if (root_widget == nullptr || Dart_IsError(root_widget)) {
@@ -13072,25 +13237,67 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   config.backgroundColorContent = 0xFFFFFFFFu;
   config.pageUrl = page_url;
   const uint32_t previous_root_id = g_page->attach_previous_root_id;
+  const int32_t previous_page_id = g_page->current_page_id;
   Dart_Handle empty = Dart_NewStringFromCString("");
-  g_page->root_id = root_id;
+  Dart_Handle animation_hash = empty;
+  Dart_Handle secondary_animation_hash = empty;
+  Dart_Handle barrier_label = empty;
+  uint32_t barrier_color = 0;
+  uint8_t has_barrier_color = 0;
+  if (is_custom) {
+    if (!custom.animation_hash.empty()) {
+      animation_hash = Dart_NewStringFromCString(custom.animation_hash.c_str());
+    }
+    if (!custom.secondary_animation_hash.empty()) {
+      secondary_animation_hash =
+          Dart_NewStringFromCString(custom.secondary_animation_hash.c_str());
+    }
+    if (!custom.barrier_label.empty()) {
+      barrier_label = Dart_NewStringFromCString(custom.barrier_label.c_str());
+    }
+    barrier_color = custom.barrier_color;
+    has_barrier_color = custom.has_barrier_color ? 1 : 0;
+  }
+  g_page->root_id = root->id;
+  g_page->current_page_id = page_id;
   g_page->page_count++;
   std::fprintf(stderr,
                "[skyline-runtime] appservice page %d -> CreatePageRoute "
-               "(openType=%u, %gx%g)\n",
+               "(openType=%u, %gx%g, custom=%d)\n",
                g_page->page_count, static_cast<unsigned>(open_type),
-               static_cast<double>(viewport_w), static_cast<double>(viewport_h));
-  builders.create_route(callback_id, open_type, 0,
-                        open_type == 1 /* kSwitchTab */ ? 1 : 0, page_id,
-                        1, 1, 0, 0, 0, 0, 0, empty, 1, 1, 0, 0, 0, 0, 0, 0,
-                        empty, empty, Dart_Null(), root_widget, &config);
+               static_cast<double>(viewport_w), static_cast<double>(viewport_h),
+               is_custom ? 1 : 0);
+  builders.create_route(
+      callback_id, open_type,
+      is_custom ? 1 : 0,
+      open_type == 1 /* kSwitchTab */ ? 1 : 0, page_id,
+      is_custom ? (custom.opaque ? 1 : 0) : 1,
+      is_custom ? (custom.maintain_state ? 1 : 0) : 1,
+      is_custom ? static_cast<uint32_t>(custom.transition_ms) : 0u,
+      is_custom ? static_cast<uint32_t>(custom.reverse_transition_ms) : 0u,
+      barrier_color, has_barrier_color,
+      is_custom && custom.barrier_dismissible ? 1 : 0, barrier_label,
+      is_custom ? (custom.can_transition_to ? 1 : 0) : 1,
+      is_custom ? (custom.can_transition_from ? 1 : 0) : 1,
+      0 /* forceSecondaryAnimation */,
+      is_custom ? 1 : 0 /* popGestureEnabled */,
+      0 /* allowEnterRouteSnapshotting */,
+      0 /* allowExitRouteSnapshotting */,
+      0 /* fullscreenDrag */,
+      0 /* dismissDirection (horizontal) */,
+      animation_hash, secondary_animation_hash, host_widget, root_widget,
+      &config);
+
+  // The config only applies to the page being attached.
+  custom = OpPage::CustomRouteConfig();
 
   // Keep the covered page's widget handles so `navigateBack` can rebuild the
   // route that becomes visible again.  Only the newest page's handles are
   // cleared for the next materialize call.
   if (g_page->root_node != nullptr || g_page->root_connector != nullptr) {
     g_page->page_stack.push_back(OpPage::PageEntry{
-        previous_root_id, g_page->root_node, g_page->root_connector});
+        previous_root_id, g_page->root_node, g_page->root_connector,
+        previous_page_id});
     g_page->root_node = nullptr;
     g_page->root_connector = nullptr;
   }
@@ -13101,7 +13308,7 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   PublishNodeRects();
   SnapshotNode(root);
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
-    DebugDumpNode(root, 0);
+    DebugDumpNode(layout_root, 0);
     for (const NodeMetric& metric : metrics) {
       std::fprintf(stderr,
                    "[ops-debug] metrics #%u -> top=%g left=%g w=%g h=%g\n",
@@ -14062,6 +14269,60 @@ void PostToUiIfReady(Fn fn) {
   });
 }
 
+// Route callbacks driven from the appservice worklet runtime
+// (`workletUIModule.navigatorPop` / `startUserGesture` / `stopUserGesture` /
+// `updateAnimationController`).  They arrive on the addon's JS thread, so the
+// Dart FFI callbacks must be invoked on the UI task runner.
+SKYLINE_EXPORT extern "C" void SkylineNavigatorPop(int32_t page_id) {
+  PostToUiIfReady([page_id]() {
+    if (appservice::g_page == nullptr || appservice::g_page->holder == nullptr) {
+      return;
+    }
+    auto* callback = reinterpret_cast<NavigatorPopFn>(FindCallback(
+        appservice::g_page->holder->ffi_table, kNavigatorPopHash));
+    if (callback != nullptr) {
+      std::fprintf(stderr, "[skyline-runtime] NavigatorPop page=%d\n", page_id);
+      callback(page_id);
+    }
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineStartUserGesture() {
+  PostToUiIfReady([]() {
+    if (appservice::g_page == nullptr || appservice::g_page->holder == nullptr) {
+      return;
+    }
+    auto* callback = reinterpret_cast<UserGestureCallbackFn>(FindCallback(
+        appservice::g_page->holder->ffi_table, kStartUserGestureHash));
+    if (callback != nullptr) callback();
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineStopUserGesture() {
+  PostToUiIfReady([]() {
+    if (appservice::g_page == nullptr || appservice::g_page->holder == nullptr) {
+      return;
+    }
+    auto* callback = reinterpret_cast<UserGestureCallbackFn>(FindCallback(
+        appservice::g_page->holder->ffi_table, kStopUserGestureHash));
+    if (callback != nullptr) callback();
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineUpdateAnimationController(int32_t page_id,
+                                                                double value) {
+  PostToUiIfReady([page_id, value]() {
+    if (appservice::g_page == nullptr || appservice::g_page->holder == nullptr) {
+      return;
+    }
+    auto* callback = reinterpret_cast<UpdateAnimationControllerFn>(FindCallback(
+        appservice::g_page->holder->ffi_table, kUpdateAnimationControllerHash));
+    if (callback != nullptr) {
+      callback(page_id, value);
+    }
+  });
+}
+
 SKYLINE_EXPORT extern "C" void SkylineSwiperTo(uint32_t node_id, uint32_t page,
                                                uint8_t animated) {
   PostToUiIfReady([node_id, page, animated]() {
@@ -14352,12 +14613,100 @@ SKYLINE_EXPORT extern "C" void HandleNativeViewPointerEvent(
 SKYLINE_EXPORT extern "C" void HandlePageRoute(void* /*runtime_ptr*/,
                                                void* name, double duration,
                                                uint8_t route_type) {
-  if (!DebugChannels()) return;
   const char* text = DartStringOrNull(static_cast<SkylineHandle>(name));
+  if (text == nullptr || text[0] == '\0') return;
+  if (DebugChannels()) {
+    std::fprintf(
+        stderr, "[skyline-runtime] HandlePageRoute: name=%s duration=%g type=%u\n",
+        text, duration, static_cast<unsigned>(route_type));
+  }
+  // The custom-route builder registered a worklet for `<eventName>-<viewTag>`
+  // (`onAnimationChange-…` / `onSecondaryAnimationChange-…`, with a `status-`
+  // prefix for status changes).  Forward the controller value so the JS route
+  // can drive its animated styles.  (The DL-only library has no appservice
+  // namespace/replay, so it only logs.)
+#ifdef SKYLINE_EMBEDDED
+  char tail[96];
+  std::snprintf(tail, sizeof(tail), "\",\"value\":%.6f,\"status\":%u}",
+                duration, static_cast<unsigned>(route_type));
+  std::string json = "{\"type\":\"pageRoute\",\"name\":\"";
+  json += appservice::JsonEscapeString(text);
+  json += tail;
+  appservice::EmitJsonEvent(json);
+#endif
+}
+
+#ifdef SKYLINE_EMBEDDED
+// Called by the Dart route when a gesture-driven pop starts/finishes.  The
+// runtime's page stack mirrors what the Flutter route just did, and the shell
+// is told so the DevTools simulator route stack follows (this is the
+// `setNavigateBackCallback`/`setNavigateBackDoneCallback` contract).
+bool PopPageEntryForGesture(int32_t page_id) {
+  if (appservice::g_page == nullptr || appservice::g_page->page_stack.empty()) {
+    return false;
+  }
+  if (page_id != 0 && appservice::g_page->current_page_id != 0 &&
+      appservice::g_page->current_page_id != page_id) {
+    return false;
+  }
+  appservice::DeletePersistent(&appservice::g_page->root_node);
+  appservice::DeletePersistent(&appservice::g_page->root_connector);
+  appservice::OpPage::PageEntry entry =
+      appservice::g_page->page_stack.back();
+  appservice::g_page->page_stack.pop_back();
+  appservice::g_page->root_id = entry.root_id;
+  appservice::g_page->root_node = entry.root_node;
+  appservice::g_page->root_connector = entry.root_connector;
+  appservice::g_page->current_page_id = entry.page_id;
+  if (appservice::g_page->page_count > 0) appservice::g_page->page_count--;
+  if (appservice::g_page->root_id != 0 &&
+      appservice::g_page->root_connector != nullptr) {
+    appservice::g_page->force_rebuild = true;
+  }
+  return true;
+}
+#endif
+
+SKYLINE_EXPORT extern "C" void NotifyNavigateBackByGesture(
+    void* /*runtime_ptr*/, void* window_ptr, int32_t page_id) {
+  auto* window = static_cast<Window*>(window_ptr);
+  const int32_t window_id = window != nullptr ? window->id : 0;
+#ifdef SKYLINE_EMBEDDED
+  const bool popped = PopPageEntryForGesture(page_id);
   std::fprintf(stderr,
-               "[skyline-runtime] HandlePageRoute: name=%s duration=%g type=%u\n",
-               text != nullptr ? text : "?", duration,
-               static_cast<unsigned>(route_type));
+               "[skyline-runtime] NotifyNavigateBackByGesture: window=%d "
+               "page=%d popped=%d\n",
+               window_id, page_id, popped ? 1 : 0);
+  char buffer[128];
+  std::snprintf(
+      buffer, sizeof(buffer),
+      "{\"type\":\"navigateBackByGesture\",\"windowId\":%d,\"pageId\":%d}",
+      window_id, page_id);
+  appservice::EmitJsonEvent(buffer);
+#else
+  std::fprintf(stderr,
+               "[skyline-runtime] NotifyNavigateBackByGesture: window=%d "
+               "page=%d\n",
+               window_id, page_id);
+#endif
+}
+
+SKYLINE_EXPORT extern "C" void NotifyNavigateBackDoneByGesture(
+    void* /*runtime_ptr*/, void* window_ptr, int32_t page_id) {
+  auto* window = static_cast<Window*>(window_ptr);
+  const int32_t window_id = window != nullptr ? window->id : 0;
+  std::fprintf(stderr,
+               "[skyline-runtime] NotifyNavigateBackDoneByGesture: window=%d "
+               "page=%d\n",
+               window_id, page_id);
+#ifdef SKYLINE_EMBEDDED
+  char buffer[128];
+  std::snprintf(
+      buffer, sizeof(buffer),
+      "{\"type\":\"navigateBackDoneByGesture\",\"windowId\":%d,\"pageId\":%d}",
+      window_id, page_id);
+  appservice::EmitJsonEvent(buffer);
+#endif
 }
 
 SKYLINE_EXPORT extern "C" void HandlePageRouteDone(void* /*runtime_ptr*/,
@@ -14900,8 +15249,6 @@ SKYLINE_VOID_STUB(LayoutParagraphPaint)
 SKYLINE_VOID_STUB(LoadResourceAsync)
 SKYLINE_VOID_STUB(NotifyFontFaceLoad)
 #endif
-SKYLINE_VOID_STUB(NotifyNavigateBackByGesture)
-SKYLINE_VOID_STUB(NotifyNavigateBackDoneByGesture)
 SKYLINE_VOID_STUB(NotifyWindowReady)
 SKYLINE_VOID_STUB(OnLayoutFinished)
 SKYLINE_VOID_STUB(OnViewportChanged)
