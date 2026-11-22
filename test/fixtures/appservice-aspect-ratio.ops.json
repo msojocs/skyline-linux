@@ -1,0 +1,84 @@
+{
+  "ops": [
+    {
+      "op": "appendStyleSheet",
+      "index": 1,
+      "css": ".row { display: flex; flex-direction: row; align-items: flex-start; width: 200px; height: 80px; } .ratio { width: 100px; aspect-ratio: 2 / 1; background: #FF3366; } .fixed { width: 60px; height: 50px; background: #33CC66; }"
+    },
+    {
+      "op": "createElement",
+      "id": 2,
+      "tag": "empty",
+      "name": "page"
+    },
+    {
+      "op": "createElement",
+      "id": 3,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 3,
+      "prefix": "row",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 4,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 4,
+      "prefix": "ratio",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 5,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 5,
+      "prefix": "fixed",
+      "name": 1
+    },
+    {
+      "op": "appendChild",
+      "id": 3,
+      "child": 4
+    },
+    {
+      "op": "appendChild",
+      "id": 3,
+      "child": 5
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 3
+    },
+    {
+      "op": "createElement",
+      "id": 1,
+      "tag": "empty",
+      "name": "body"
+    },
+    {
+      "op": "appendChild",
+      "id": 1,
+      "child": 2
+    },
+    {
+      "op": "attach",
+      "root": 1
+    },
+    {
+      "op": "startRender"
+    }
+  ]
+}

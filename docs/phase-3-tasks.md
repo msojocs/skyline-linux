@@ -70,14 +70,15 @@
   - `tools/l5-windows.js` 在 Wine + 官方 Windows Electron 中以 dpr=2 运行
     `skyline.node`，窗口就绪后经 `notifyAppLaunch` + `PageContext` 回放夹具操作，
     从共享内存读取 640x480 帧。原始 Windows 帧为 BGRA，工具统一转为 RGBA。
-  - `spec/l5-baseline.win32.json` 保存 20 个夹具的 zlib 压缩帧、样本点与容差；
+  - `spec/l5-baseline.win32.json` 保存 25 个夹具的 zlib 压缩帧、样本点与容差；
     `npm run test:l5` 在 Linux 以 dpr=2 重放同一夹具并逐像素比较。
-  - 结果：12 个夹具逐像素完全一致，`shadow`/`radial-conic`/`background-size`
+  - 结果：13 个夹具逐像素完全一致，`shadow`/`radial-conic`/`background-size`
     最大差 1；`overflow`
     失配率 < 0.2%（裁剪边缘），`fixed-scroll` 已完全一致；`transform3d` 存在 3D 变换保真差异；
     `transform-origin-z` 因官方引擎忽略 origin z 分量而失配率约 10%（已知差异）；
-    `gridview`/`listview` 的合成 op 流无法触发官方 native builder 回调，标记为
-    不可比。详见 `docs/feasibility.md` §3.1。
+    D2 探针新增的 `aspect-ratio`/`vertical-align`/`text-overflow`/`white-space`
+    为已知差异，`map` 逐像素一致；`gridview`/`listview` 的合成 op 流无法触发
+    官方 native builder 回调，标记为不可比。详见 `docs/feasibility.md` §3.1。
   - 采集命令：`npm run l5:windows`；复用已采集帧：`npm run l5:windows:reuse`。
 - [x] **C2** 私有 `dart:ui` 文本标志
   - `dart:ui` 按官方恢复源码的位布局编码：TextStyle bit 20–22
@@ -235,16 +236,29 @@
     `window_id: N not found`；`onPlatformBrightnessChanged` 校验 1 个参数。
   - 结果：`native/build/skyline.node` 契约 **53 pass / 10 skip / 0 fail**
     （10 个 skip 是官方进程崩溃、无稳定基准的用例）。
-- [ ] **D2** 为候选 CSS/内置标签生成 L5 探针夹具
-  - 当前候选（示例使用、运行时无解析分支）：`aspect-ratio`、`pointer-events`、
-    `text-overflow`、`vertical-align`、`white-space`、`will-change`、`map`。
-  - 每个特性一个 `test/fixtures/appservice-*.ops.json`，用
-    `npm run l5:windows` 采集官方帧，再把 `compare=false` 的条目转为逐像素对比。
+- [x] **D2** 为候选 CSS/内置标签生成 L5 探针夹具
+  - 新增 5 个夹具：`appservice-aspect-ratio`、`appservice-vertical-align`、
+    `appservice-text-overflow`、`appservice-white-space`、`appservice-map`，
+    加入 `tools/l5-baseline.js` FIXTURES 与 Linux/Windows 基线。
+  - `tools/l5-windows.js` 增加 `--only name1,name2` 合并模式：只采集新夹具并保留
+    已有 Windows 帧，避免整份基线重采。
+  - 实测差异（官方帧 vs Linux，dpr=2）：
+    - `aspect-ratio`：官方 100x50，Linux 高度 0，失配 3.48%；
+    - `vertical-align`：官方 inline-block 按 top/bottom/middle 排一行，Linux 竖排，
+      失配 6.31%；
+    - `text-overflow`：官方 `nowrap + ellipsis`，失配 1.37%；
+    - `white-space`：官方区分 `nowrap`/`normal`，失配 1.93%；
+    - `map`：maxDelta=0（该 op 流下两边都是空白占位，原生地图内容未被覆盖）。
+  - 四个文本/布局差异已写入 `KNOWN_DIVERGENCES`（带说明与 0.5% headroom），
+    `npm run test:l5` 仍为 2/2 通过。`pointer-events`/`will-change` 无静态像素差异，
+    移入 D3 行为探针。
 - [ ] **D3** 候选回调行为探针
   - 重点：`ScrollViewUpdateOnScroll/OnScrollStart/OnScrollEnd`、
     `SwiperUpdateOnChange/OnScroll`、`InputFocusManually/BlurManually`、
     `YGNode*IntersectionObserver`、`Selection*`、`Snapshot*`、`Semantics*`、
     `MeasureText/Input`、`Start/StopUserGesture`、`DumpElementTree`。
+  - 另需行为探针的非像素 CSS：`pointer-events`（覆盖层命中测试）与
+    `will-change`（渲染提示，无静态差异）。
   - 先区分“C++ 已直接实现”与真正缺失，再按 D2 的方式加 L5/行为夹具。
 - [ ] **D4** 真实页面 ops 录制与整页差分
   - Linux DevTools 与 Windows 原版使用同一份官方 renderer bundle；把 Linux

@@ -60,6 +60,12 @@ const FIXTURES = [
   'appservice-radial-conic.ops.json',
   'appservice-background-size.ops.json',
   'appservice-transform-origin-z.ops.json',
+  // D2 feature probes (candidate CSS/builtin gaps vs the Windows oracle).
+  'appservice-aspect-ratio.ops.json',
+  'appservice-vertical-align.ops.json',
+  'appservice-text-overflow.ops.json',
+  'appservice-white-space.ops.json',
+  'appservice-map.ops.json',
 ];
 
 function prerequisites() {

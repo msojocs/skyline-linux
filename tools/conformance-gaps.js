@@ -60,6 +60,18 @@ const SETTER_PREFIX = /^(New|Append|Insert|Remove|Replace|Update|Set|Mark|Layout
 // Event/observer/command names are much more likely to be user-visible gaps.
 const BEHAVIORAL = /(On[A-Z]|Observer|Gesture|Focus|Blur|Snapshot|Dump|Semantics|Selection|Notify|Request|Trigger|Navigate|Relaunch|Shutdown|CollectGarbage|SendMessage|HitTest|Measure|Take|Get[A-Z]|Evaluate|LoadResource|InstallJSEngine|Start|Stop|Report|Trace|UpdatePlatformBrightness|HandleNativeView|ForwardHttp|SceneToImage|YogaTrigger)/;
 
+// D2 probes: map a real-example candidate to the L5 fixture that exercises it.
+const PROBE_FOR_CSS = {
+  'aspect-ratio': 'appservice-aspect-ratio',
+  'vertical-align': 'appservice-vertical-align',
+  'text-overflow': 'appservice-text-overflow',
+  'white-space': 'appservice-white-space',
+};
+const PROBE_FOR_TAG = {
+  map: 'appservice-map',
+};
+const NON_PIXEL_CSS = new Set(['pointer-events', 'will-change']);
+
 function parseArgs(argv) {
   const options = {
     examples: process.env.SKYLINE_EXAMPLES || path.resolve(repoRoot, '..', 'awesome-skyline', 'examples'),
@@ -359,6 +371,7 @@ function exampleCoverage(examplesDir) {
 
 function renderMarkdown(report) {
   const lines = [];
+  const l5ByName = new Map((report.l5.fixtures || []).map((fixture) => [fixture.name, fixture]));
   lines.push('# Skyline Linux 对 Windows 原版一致性缺口报告', '');
   lines.push(`生成时间：${new Date().toISOString()}`, '');
 
@@ -454,16 +467,33 @@ function renderMarkdown(report) {
     if (examples.missingCss.length) {
       lines.push('### 5.1 示例使用但运行时无解析分支的 CSS 属性', '');
       for (const entry of examples.missingCss) {
+        let suffix = '';
+        const probeName = PROBE_FOR_CSS[entry.key];
+        const probe = probeName && l5ByName.get(probeName);
+        if (probe) {
+          suffix = ` — L5 探针 \`${probeName}\` ${probe.status}` +
+            (probe.mismatchRatio ? `，失配率 ${probe.mismatchRatio}` : '');
+        } else if (NON_PIXEL_CSS.has(entry.key)) {
+          suffix = ' — 无静态像素差异，待行为探针（D3）';
+        }
         lines.push(`- \`${entry.key}\` — ${entry.files.slice(0, 3).join('、')}` +
-          `${entry.files.length > 3 ? ` 等 ${entry.files.length} 个文件` : ''}`);
+          `${entry.files.length > 3 ? ` 等 ${entry.files.length} 个文件` : ''}${suffix}`);
       }
       lines.push('');
     }
     if (examples.missingTags.length) {
       lines.push('### 5.2 示例使用但运行时未识别的内置标签', '');
       for (const entry of examples.missingTags) {
+        const probeName = PROBE_FOR_TAG[entry.tag];
+        const probe = probeName && l5ByName.get(probeName);
+        const suffix = probe
+          ? ` — L5 探针 \`${probeName}\` ${probe.status}` +
+            (probe.mismatchRatio
+              ? `，失配率 ${probe.mismatchRatio}`
+              : '（合成 op 流未覆盖原生内容）')
+          : '';
         lines.push(`- \`${entry.tag}\` — ${entry.files.slice(0, 3).join('、')}` +
-          `${entry.files.length > 3 ? ` 等 ${entry.files.length} 个文件` : ''}`);
+          `${entry.files.length > 3 ? ` 等 ${entry.files.length} 个文件` : ''}${suffix}`);
       }
       lines.push('');
     }
@@ -472,7 +502,7 @@ function renderMarkdown(report) {
 
   lines.push('## 建议的下一步', '');
   lines.push('1. ~~用 Wine 渲染进程补录 24 个 engine-context 契约用例~~（已完成：60 个用例中 50 个可观测、10 个官方崩溃；`test:native` 53/53 通过）。');
-  lines.push('2. 为第 5 节的每个候选 CSS/标签生成一个 `test/fixtures/*.ops.json`，用 `tools/l5-windows.js --write` 采集官方帧，再把 `compare=false` 的条目转为逐像素对比。');
+  lines.push('2. D2 已完成可视 CSS/标签探针（aspect-ratio/vertical-align/text-overflow/white-space/map）；`pointer-events`/`will-change` 与候选回调由 D3 行为探针覆盖。');
   lines.push('3. 对第 4 节的候选回调逐一写探针（滚动事件、输入焦点、swiper/observer、snapshot/accessibility 等），确认是 C++ 已覆盖还是确实缺失。');
   lines.push('4. 录制真实页面的 ops 流，在 Wine 官方引擎和 Linux 引擎上重放并做整页对比。');
   lines.push('');

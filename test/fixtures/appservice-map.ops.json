@@ -1,0 +1,67 @@
+{
+  "ops": [
+    {
+      "op": "appendStyleSheet",
+      "index": 1,
+      "css": ".map { width: 200px; height: 120px; } .marker { width: 40px; height: 40px; background: #FF3366; }"
+    },
+    {
+      "op": "createElement",
+      "id": 2,
+      "tag": "empty",
+      "name": "page"
+    },
+    {
+      "op": "createElement",
+      "id": 3,
+      "tag": "empty",
+      "name": "map"
+    },
+    {
+      "op": "addClass",
+      "id": 3,
+      "prefix": "map",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 4,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 4,
+      "prefix": "marker",
+      "name": 1
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 3
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 4
+    },
+    {
+      "op": "createElement",
+      "id": 1,
+      "tag": "empty",
+      "name": "body"
+    },
+    {
+      "op": "appendChild",
+      "id": 1,
+      "child": 2
+    },
+    {
+      "op": "attach",
+      "root": 1
+    },
+    {
+      "op": "startRender"
+    }
+  ]
+}

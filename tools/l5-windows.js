@@ -72,6 +72,33 @@ const KNOWN_DIVERGENCES = {
     note: 'official engine requires a list builder callback; synthetic ops leave the list empty',
     compare: false,
   },
+  // D2 feature probes.  These are real Windows/Linux differences found by
+  // conformance-gaps; keep a small headroom so cross-run anti-aliasing noise
+  // does not flip the test, but leave the measured ratios in the baseline.
+  'appservice-aspect-ratio': {
+    note: 'official engine applies CSS aspect-ratio (100x50); Linux collapses the box to height 0',
+    compare: true,
+    headroom: 0.005,
+    samplesInformational: true,
+  },
+  'appservice-vertical-align': {
+    note: 'official engine lays out inline-block children with vertical-align top/bottom/middle; Linux stacks them as blocks',
+    compare: true,
+    headroom: 0.005,
+    samplesInformational: true,
+  },
+  'appservice-text-overflow': {
+    note: 'official engine applies white-space:nowrap + text-overflow:ellipsis; Linux clips at different text metrics',
+    compare: true,
+    headroom: 0.005,
+    samplesInformational: true,
+  },
+  'appservice-white-space': {
+    note: 'official engine applies white-space:nowrap/normal; Linux wraps/collapses text differently',
+    compare: true,
+    headroom: 0.005,
+    samplesInformational: true,
+  },
 };
 
 function missingPrerequisites() {
@@ -193,11 +220,22 @@ function measuredStats(win, linux) {
   return result;
 }
 
-function writeBaseline(electron, resources, reuse) {
+function writeBaseline(electron, resources, reuse, only = null) {
   fs.mkdirSync(frameDir, { recursive: true });
-  const fixtures = {};
-  let skyline = null;
-  for (const file of l5.FIXTURES) {
+  const selected = only
+    ? l5.FIXTURES.filter((file) => only.includes(file.replace(/\.ops\.json$/, '')))
+    : l5.FIXTURES;
+  if (selected.length === 0) {
+    throw new Error(`--only matched no fixtures: ${(only || []).join(',')}`);
+  }
+  // `--only` is a merge mode: keep the committed frames for untouched
+  // fixtures so adding a probe does not recapture (and churn) the baseline.
+  const existing = only && fs.existsSync(baselinePath)
+    ? JSON.parse(fs.readFileSync(baselinePath, 'utf8'))
+    : null;
+  const fixtures = existing && existing.fixtures ? { ...existing.fixtures } : {};
+  let skyline = existing && existing.skyline ? existing.skyline : null;
+  for (const file of selected) {
     const name = file.replace(/\.ops\.json$/, '');
     const frameFile = path.join(frameDir, `${name}.rgba`);
     let frame;
@@ -247,25 +285,37 @@ function writeBaseline(electron, resources, reuse) {
     fixtures[name] = entry;
   }
   const baseline = {
-    comment:
-      'Official Windows Skyline engine frames captured under Wine (Electron renderer, ' +
-      'dpr=2). Raw shared memory is BGRA on Windows and is stored here as RGBA. ' +
-      'Coordinates are device pixels. The debug banner of the Linux comparison ' +
-      'build is excluded via ignoreRects.',
-    source: 'official-wechat-devtools-win32-x64',
+    comment: existing && existing.comment
+      ? existing.comment
+      : 'Official Windows Skyline engine frames captured under Wine (Electron renderer, ' +
+        'dpr=2). Raw shared memory is BGRA on Windows and is stored here as RGBA. ' +
+        'Coordinates are device pixels. The debug banner of the Linux comparison ' +
+        'build is excluded via ignoreRects.',
+    source: existing && existing.source ? existing.source : 'official-wechat-devtools-win32-x64',
     captured_at: new Date().toISOString().slice(0, 10),
     skyline: skyline || { skyline_version: '1.4.21' },
-    width: LOGICAL_WIDTH,
-    height: LOGICAL_HEIGHT,
-    dpr: DPR,
-    frame_width: FRAME_WIDTH,
-    frame_height: FRAME_HEIGHT,
-    tolerance: TOLERANCE,
-    ignoreRects: IGNORE_RECTS,
+    width: existing && existing.width ? existing.width : LOGICAL_WIDTH,
+    height: existing && existing.height ? existing.height : LOGICAL_HEIGHT,
+    dpr: existing && existing.dpr ? existing.dpr : DPR,
+    frame_width: existing && existing.frame_width ? existing.frame_width : FRAME_WIDTH,
+    frame_height: existing && existing.frame_height ? existing.frame_height : FRAME_HEIGHT,
+    tolerance: existing && Number.isInteger(existing.tolerance) ? existing.tolerance : TOLERANCE,
+    ignoreRects: existing && existing.ignoreRects ? existing.ignoreRects : IGNORE_RECTS,
     fixtures,
   };
   fs.writeFileSync(baselinePath, JSON.stringify(baseline, null, 1) + '\n');
   console.error(`wrote ${baselinePath}`);
+}
+
+function parseOnly(argv) {
+  let raw = null;
+  const index = argv.indexOf('--only');
+  if (index >= 0) raw = argv[index + 1] || '';
+  const inline = argv.find((arg) => arg.startsWith('--only='));
+  if (inline) raw = inline.slice('--only='.length);
+  if (!raw) return null;
+  return raw.split(',').map((name) => name.trim()).filter(Boolean)
+    .map((name) => name.replace(/\.ops\.json$/, ''));
 }
 
 function compareBaseline() {
@@ -323,7 +373,7 @@ function main() {
   const electron = ensureShim(windowsElectron());
   const resources = windowsResources();
   if (process.argv.includes('--write')) {
-    writeBaseline(electron, resources, process.argv.includes('--reuse'));
+    writeBaseline(electron, resources, process.argv.includes('--reuse'), parseOnly(process.argv));
     return;
   }
   compareBaseline();

@@ -1,0 +1,117 @@
+{
+  "ops": [
+    {
+      "op": "appendStyleSheet",
+      "index": 1,
+      "css": ".line { display: block; width: 220px; height: 100px; background: #FFFFFF; border: 1px solid #000000; font-size: 16px; color: #000000; } .a { display: inline-block; width: 30px; height: 20px; background: #FF3366; vertical-align: top; } .b { display: inline-block; width: 30px; height: 60px; background: #33CC66; vertical-align: bottom; } .c { display: inline-block; width: 30px; height: 40px; background: #3366FF; vertical-align: middle; }"
+    },
+    {
+      "op": "createElement",
+      "id": 2,
+      "tag": "empty",
+      "name": "page"
+    },
+    {
+      "op": "createElement",
+      "id": 3,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 3,
+      "prefix": "line",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 4,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 4,
+      "prefix": "a",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 5,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 5,
+      "prefix": "b",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 6,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 6,
+      "prefix": "c",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 7,
+      "tag": "text",
+      "name": ""
+    },
+    {
+      "op": "setText",
+      "id": 7,
+      "text": "baseline text"
+    },
+    {
+      "op": "appendChild",
+      "id": 3,
+      "child": 4
+    },
+    {
+      "op": "appendChild",
+      "id": 3,
+      "child": 5
+    },
+    {
+      "op": "appendChild",
+      "id": 3,
+      "child": 6
+    },
+    {
+      "op": "appendChild",
+      "id": 3,
+      "child": 7
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 3
+    },
+    {
+      "op": "createElement",
+      "id": 1,
+      "tag": "empty",
+      "name": "body"
+    },
+    {
+      "op": "appendChild",
+      "id": 1,
+      "child": 2
+    },
+    {
+      "op": "attach",
+      "root": 1
+    },
+    {
+      "op": "startRender"
+    }
+  ]
+}

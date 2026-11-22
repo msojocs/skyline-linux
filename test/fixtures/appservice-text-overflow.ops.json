@@ -1,0 +1,105 @@
+{
+  "ops": [
+    {
+      "op": "appendStyleSheet",
+      "index": 1,
+      "css": ".box { width: 120px; height: 24px; font-size: 16px; color: #000000; background: #FFFFFF; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; margin-bottom: 6px; } .clip { text-overflow: clip; }"
+    },
+    {
+      "op": "createElement",
+      "id": 2,
+      "tag": "empty",
+      "name": "page"
+    },
+    {
+      "op": "createElement",
+      "id": 3,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 3,
+      "prefix": "box",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 4,
+      "tag": "text",
+      "name": ""
+    },
+    {
+      "op": "setText",
+      "id": 4,
+      "text": "AAAA BBBB CCCC DDDD EEEE FFFF"
+    },
+    {
+      "op": "appendChild",
+      "id": 3,
+      "child": 4
+    },
+    {
+      "op": "createElement",
+      "id": 5,
+      "tag": "empty",
+      "name": "view"
+    },
+    {
+      "op": "addClass",
+      "id": 5,
+      "prefix": "box",
+      "name": 1
+    },
+    {
+      "op": "addClass",
+      "id": 5,
+      "prefix": "clip",
+      "name": 1
+    },
+    {
+      "op": "createElement",
+      "id": 6,
+      "tag": "text",
+      "name": ""
+    },
+    {
+      "op": "setText",
+      "id": 6,
+      "text": "AAAA BBBB CCCC DDDD EEEE FFFF"
+    },
+    {
+      "op": "appendChild",
+      "id": 5,
+      "child": 6
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 3
+    },
+    {
+      "op": "appendChild",
+      "id": 2,
+      "child": 5
+    },
+    {
+      "op": "createElement",
+      "id": 1,
+      "tag": "empty",
+      "name": "body"
+    },
+    {
+      "op": "appendChild",
+      "id": 1,
+      "child": 2
+    },
+    {
+      "op": "attach",
+      "root": 1
+    },
+    {
+      "op": "startRender"
+    }
+  ]
+}
