@@ -1634,15 +1634,11 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
   }
   // Public engines do not apply the private TextStyle flags, but they do honour
   // the public `fontFamilyFallback` list.  The CSS families come first (the
-  // first is the preferred family); color emoji families follow before the
-  // monochrome CJK/system families.  Without this, U+2764 (`❤️`) is served by
-  // DejaVu Sans as a black glyph even though an emoji font is installed.
+  // first is the preferred family); common CJK/system families follow so
+  // Chinese text does not fall back to tofu when the host has them.
   Dart_Handle fallback = Dart_Null();
   {
-    static const char* kFallbackFamilies[] = {"Noto Color Emoji",
-                                              "Apple Color Emoji",
-                                              "Segoe UI Emoji",
-                                              "Noto Sans CJK SC",
+    static const char* kFallbackFamilies[] = {"Noto Sans CJK SC",
                                               "Noto Sans CJK",
                                               "Noto Sans",
                                               "DejaVu Sans"};
@@ -6404,8 +6400,14 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
     for (AppNode* child : OrderedFlowChildren(node)) {
       ++flow_children;
       const int child_align = EffectiveAlign(style, child->style);
+      // Block-flow text stretches to the parent's content box only when that
+      // width is definite.  While measuring an auto-width box for intrinsic
+      // sizing (e.g. a flex-row item's `flex-basis: auto`), stretching the
+      // child to the available width reports the whole row as the item's
+      // max-content size — the detail navigation bar's "关注" pill then ate
+      // the row and the `flex: 1` title collapsed to zero.
       const bool child_stretch_w =
-          !style.wrap && !style.row && child_align == 0 &&
+          width >= 0.0f && !style.wrap && !style.row && child_align == 0 &&
           !HasExplicitWidth(child->style);
       const bool child_stretch_h =
           !style.wrap && style.row && child_align == 0 &&

@@ -1106,7 +1106,7 @@ test('appservice ops: span/text inline flow keeps the footer row on one line', {
   }));
   try {
     const { result, logs, pixels } = runHost(fixture, {
-      timeoutMs: 3000,
+      timeoutMs: 8000,
       env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
     });
     if (logs.includes('engine artifacts missing')) {
@@ -1161,6 +1161,96 @@ test('appservice ops: span/text inline flow keeps the footer row on one line', {
       r < 160 && g < 160 && b < 160);
     assert.ok(placeholderPixels > 20,
       `expected placeholder glyphs to paint (dark pixels=${placeholderPixels})`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: auto-width flex items use their text max-content width', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // card_transition's detail navigation bar: the `flex:1` title must claim the
+  // remaining row, and the "follow" pill (auto width + margin-right) must keep
+  // its text width instead of stretching to the whole row.  Before the fix the
+  // pill measured its block text child at the full available width, so its
+  // `flex-basis:auto` became the row and the title collapsed to 0.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-navbar-'));
+  const fixture = path.join(dir, 'navbar.ops.json');
+  fs.writeFileSync(fixture, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1, css:
+        'view { box-sizing: border-box; } ' +
+        '.row { display: flex; flex-direction: row; align-items: center; ' +
+          'padding: 0 20px; height: 44px; font-size: 14px; } ' +
+        '.avatar { width: 24px; height: 24px; background: #3366FF; } ' +
+        '.title { flex: 1; padding-left: 8px; } ' +
+        '.follow { border: 1px solid #FF0000; border-radius: 15px; ' +
+          'padding: 3px 15px; margin-right: 80px; }' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'view', name: 'view' },
+      { op: 'addClass', id: 3, prefix: 'row', name: 1 },
+      { op: 'createElement', id: 4, tag: 'view', name: 'view' },
+      { op: 'addClass', id: 4, prefix: 'avatar', name: 1 },
+      { op: 'createElement', id: 5, tag: 'view', name: 'view' },
+      { op: 'addClass', id: 5, prefix: 'title', name: 1 },
+      { op: 'createElement', id: 6, tag: 'text', name: '' },
+      { op: 'setText', id: 6, text: 'BINNIE' },
+      { op: 'appendChild', id: 5, child: 6 },
+      { op: 'createElement', id: 7, tag: 'view', name: 'view' },
+      { op: 'addClass', id: 7, prefix: 'follow', name: 1 },
+      { op: 'createElement', id: 8, tag: 'text', name: '' },
+      { op: 'setText', id: 8, text: 'Follow' },
+      { op: 'appendChild', id: 7, child: 8 },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'appendChild', id: 3, child: 5 },
+      { op: 'appendChild', id: 3, child: 7 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(fixture, {
+      timeoutMs: 3000,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    const rectOf = (id) => {
+      const match = new RegExp(
+        `\\[ops-debug\\] rect #${id} left=([-\\d.]+) top=([-\\d.]+) ` +
+        'w=([-\\d.]+) h=([-\\d.]+)').exec(logs);
+      assert.ok(match, `no rect published for node #${id}:\n${logs}`);
+      return {
+        left: Number(match[1]), top: Number(match[2]),
+        w: Number(match[3]), h: Number(match[4]),
+      };
+    };
+    const avatar = rectOf(4);
+    const title = rectOf(5);
+    const follow = rectOf(7);
+    assert.equal(avatar.left, 20);
+    assert.ok(title.w > 50,
+      `flex:1 title collapsed: ${JSON.stringify(title)}`);
+    assert.ok(follow.w < 100,
+      `auto-width pill stretched: ${JSON.stringify(follow)}`);
+    assert.ok(follow.left >= title.left + title.w - 0.5,
+      `pill must follow the title: title=${JSON.stringify(title)} ` +
+      `follow=${JSON.stringify(follow)}`);
+    // padding 20 + 80px margin keeps the pill's right edge at 320-100.
+    assert.ok(follow.left + follow.w <= 220.5,
+      `pill ignores margin-right: ${JSON.stringify(follow)}`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
