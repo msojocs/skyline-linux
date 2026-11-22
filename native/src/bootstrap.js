@@ -445,6 +445,54 @@
     } catch (_error) {}
   }
 
+  // -- pageframe frame pump ---------------------------------------------------
+  // The pageframe only pulls a new frame after receiving
+  // SKYLINE_WINDOW_RASTERIZED.  That message crosses the appservice ->
+  // pageframe process boundary, and its arrival occasionally slips past a
+  // display animation-frame tick.  The pageframe then repeats the previous
+  // frame even though the engine already presented the next one, which is
+  // visible as a 33 ms stutter.  Replaying the registered rasterized callback
+  // from a timer keeps the pageframe's copy flag set, so every RAF consumes
+  // the newest shared-memory frame.  The pump idles out 250 ms after the last
+  // native present, so a static page does not keep sending messages.  Only the
+  // DevTools appservice has a pageframe to feed.
+  const rasterizedCallbacks = new Map();
+  let framePumpTimer = null;
+  const FRAME_PUMP_INTERVAL_MS = 8;
+  const FRAME_PUMP_IDLE_MS = 250;
+  function framePumpEligible() {
+    try {
+      return typeof window !== 'undefined' && !!window.__global &&
+        !!window.__global.contextFrameMaps;
+    } catch (_error) {
+      return false;
+    }
+  }
+  function ensureFramePump() {
+    if (framePumpTimer !== null || rasterizedCallbacks.size === 0 ||
+        !framePumpEligible()) {
+      return;
+    }
+    framePumpTimer = setInterval(() => {
+      const now = Date.now();
+      let active = false;
+      for (const [windowId, entry] of rasterizedCallbacks) {
+        if (now - entry.lastPresent > FRAME_PUMP_IDLE_MS) continue;
+        active = true;
+        try {
+          entry.callback({ window_id: windowId });
+        } catch (_error) {}
+      }
+      if (!active) stopFramePump();
+    }, FRAME_PUMP_INTERVAL_MS);
+  }
+  function stopFramePump() {
+    if (framePumpTimer !== null) {
+      clearInterval(framePumpTimer);
+      framePumpTimer = null;
+    }
+  }
+
   const definitions = [
     ['setNotifyBootstrapDoneCallback', setter('setNotifyBootstrapDoneCallback')],
     ['createWindow', function (...args) {
@@ -473,13 +521,38 @@
       }, 0);
       return created;
     }],    ['destroyWindow', function (...args) {
-      return native.destroyWindow(args.length > 0 ? args[0] : undefined);
+      const windowId = args.length > 0 ? args[0] : 0;
+      rasterizedCallbacks.delete(windowId);
+      if (rasterizedCallbacks.size === 0) stopFramePump();
+      return native.destroyWindow(windowId);
     }],
     ['onWindowRasterized', function (...args) {
       if (args.length !== 2) {
         throw new Error('shell.OnWindowRasterized expects 2 arguments: windowId, callback');
       }
-      return native.onWindowRasterized(args[0], args[1]);
+      const windowId = args[0];
+      const callback = args[1];
+      if (typeof callback !== 'function') {
+        return native.onWindowRasterized(windowId, callback);
+      }
+      const entry = { callback, lastPresent: Date.now() };
+      rasterizedCallbacks.set(windowId, entry);
+      // Native uses this wrapper for real presents; the pump calls `callback`
+      // directly so its own messages do not keep the pump alive.
+      const nativeCallback = function (event) {
+        entry.lastPresent = Date.now();
+        ensureFramePump();
+        return callback(event);
+      };
+      try {
+        const result = native.onWindowRasterized(windowId, nativeCallback);
+        ensureFramePump();
+        return result;
+      } catch (error) {
+        rasterizedCallbacks.delete(windowId);
+        if (rasterizedCallbacks.size === 0) stopFramePump();
+        throw error;
+      }
     }],
     ['setNotifyWindowReadyCallback', setter('setNotifyWindowReadyCallback')],
     ['setNotifyRouteDoneCallback', setter('setNotifyRouteDoneCallback')],

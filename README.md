@@ -135,14 +135,21 @@ npm run l5:windows                   # Wine 官方引擎采集 spec/l5-baseline.
 npm run test:l5                      # Linux 基线 + Windows 逐像素容差比较
 
 # 1f. 部署到微信开发者工具（复制文件后直接启动，无需环境变量）
-#     需要先完成 npm run native:build / engine:build / kernel:skyline，
-#     并在 ../skyline-shared-memory/build 中构建打过补丁的 sharedMemory.node。
+#     默认部署 release 引擎 + AOT 快照：debug 引擎以 -O0/_DEBUG/GLIBCXX_DEBUG
+#     编译软件光栅化，模拟器分辨率下滚动只有 ~25fps；release 引擎的引擎侧
+#     帧率可以稳定在 ~60fps。AOT 快照与 release 引擎 VM 配置绑定，修改 Dart
+#     运行时源码后需要重新生成。
 #     需要 patchelf 在 PATH 中（apt install patchelf 或 pip install patchelf）。
+bash native/engine/patch-skyline-runtime.sh --runtime-mode release
+npm run devtools:aot                 # native/engine/work/skyline-app/build/libapp.so
+npm run native:build:release          # native/build-release/skyline.node
 npm run devtools:stage
 ../wechat-web-devtools-linux/bin/wechat-devtools
-# 脚本会写入 skyline.node、libflutter_engine.so、libskyline.so、
-# icudtl.dat、重编译 kernel/assets 和 sharedMemory.node；启动参数中的
-# Dart 入口参数由 addon 根据 skyline-addon 路径自动识别。
+# 脚本会写入 skyline.node、libflutter_engine.so、libskyline.so、icudtl.dat、
+# bundle/libapp.so 和 flutter_assets（不含 JIT kernel_blob.bin），以及
+# sharedMemory.node；Dart 入口参数由 addon 根据 skyline-addon 路径自动识别。
+# 需要 JIT kernel（改 Dart 代码后免 AOT 的快速迭代）时：
+npm run devtools:stage:debug         # 对应 npm run native:build / engine:build / kernel:skyline
 npm run test:l5:windows              # 仅比较已提交的 Windows 基线
 
 # 2. 记录官方 Windows 模块的契约快照（需要 Wine 11 + Windows Electron）
