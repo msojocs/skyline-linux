@@ -1025,6 +1025,130 @@ test('appservice ops: programmatic input focus and blur', {
   }
 });
 
+test('appservice ops: refresher programmatic pull drives callbacks', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-refresher-'));
+  const ops = path.join(dir, 'refresher.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'scrollview' },
+      { op: 'setStyle', id: 3, value: 'width:320px;height:120px;' },
+      { op: 'setAttributes', id: 3, attrs: {
+        scrollY: true, scrollEnabled: true, refresherEnabled: true,
+        refresherThreshold: 50, refresherTriggered: false,
+        refresherDefaultStyle: 'black',
+      } },
+      { op: 'createElement', id: 4, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 4, value: 'height:400px;' },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 800, ops: [
+        { op: 'refresherTrigger', id: 3, open: true },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(ops, {
+      timeoutMs: 5000,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /refresher trigger: id=3 open=1 twoLevel=0/);
+    assert.match(logs, /refresher pulling: id=3 dy=[\d.]+/);
+    assert.match(logs, /refresher status: id=3 mode=2 dy=[\d.]+/);
+    assert.match(logs, /refresher refresh: id=3 dy=[\d.]+/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: intersection observer, selection range and back interception', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-observer-'));
+  const ops = path.join(dir, 'observer.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:10px;top:10px;width:300px;' +
+          'height:100px;background:#EEEEEE;' },
+      { op: 'createElement', id: 4, tag: 'text', name: '' },
+      { op: 'setText', id: 4, text: 'hello world' },
+      { op: 'setAttributes', id: 4, attrs: { userSelect: true } },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'createElement', id: 5, tag: 'selection', name: 'selection' },
+      { op: 'setAttributes', id: 5, attrs: {
+        disableContextMenu: true, selectionColor: '#3399FF80',
+      } },
+      { op: 'appendChild', id: 5, child: 3 },
+      { op: 'appendChild', id: 2, child: 5 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 700, ops: [
+        { op: 'addIntersectionObserver', id: 3, uniqueId: 7,
+          thresholds: [0, 0.5, 1] },
+        { op: 'intersect', id: 3, uniqueId: 7, ratio: 0.6,
+          intersecting: true },
+        { op: 'selectionRange', selectionId: 5, startId: 4, startOffset: 0,
+          endId: 4, endOffset: 5 },
+        { op: 'navigateBackIntercept', pageId: 1, enabled: true },
+        { op: 'triggerNavigateBackIntercept', pageId: 1 },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(ops, {
+      timeoutMs: 3000,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0, `skyline host failed (status ${result.status}):\n${logs}`);
+    assert.doesNotMatch(logs, /Incorrect use of ParentDataWidget/);
+    assert.match(logs,
+      /intersection add: node=#3 id=7 root=#0 thresholds=3/);
+    assert.match(logs,
+      /intersection trigger: node=#3 id=7 ratio=0\.6 intersecting=1/);
+    assert.match(logs, /selection callbacks installed #5/);
+    assert.match(logs, /selection setRange: selection=#5 start=#4:0 end=#4:5/);
+    assert.match(logs, /selection change: id=5 .* text="hello"/);
+    assert.match(logs, /navigate back interception: page=1 enabled=1/);
+    assert.match(logs, /OnNavigateBackIntercept: page=1 enabled=1/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('host pointer script reaches the Skyline hit test path', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

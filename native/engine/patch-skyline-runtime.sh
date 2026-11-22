@@ -124,6 +124,13 @@ names.append("SkylineSetWidgetEventSink")
 names.append("SkylineSwiperTo")
 names.append("SkylinePickerColumnSetCurrent")
 names.append("SkylineSetInputFocus")
+# D9: intersection observer / selection / refresher / back interception.
+names.append("SkylineSetJsonEventSink")
+names.append("SkylineAddIntersectionObserver")
+names.append("SkylineRemoveIntersectionObserver")
+names.append("SkylineSelectionSetRange")
+names.append("SkylineRefresherTriggered")
+names.append("SkylineSetNavigateBackInterception")
 missing = [name for name in names if f"    {name};" not in exports]
 if missing:
     anchor = "    kInternalFlutterGpu*;\n"

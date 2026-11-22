@@ -1042,6 +1042,18 @@
   // Picker/input events for CDP inspection and regression tests.
   const pickerEvents = [];
   const inputEvents = [];
+  const intersectionEvents = [];
+  const selectionEvents = [];
+  const refresherEvents = [];
+  const navigateBackIntercepts = [];
+  // Refresher callbacks registered by the builtin scroll-view component.
+  const refresherPullingCallbacks = new Map();
+  const refresherWillRefreshCallbacks = new Map();
+  const refresherRefreshCallbacks = new Map();
+  const refresherRestoreCallbacks = new Map();
+  const refresherAbortCallbacks = new Map();
+  const refresherStatusCallbacks = new Map();
+  let nextIntersectionId = 0;
   // All mirrored backend elements by view tag (native events carry the tag).
   const bridgeElements = new Map();
 
@@ -1314,8 +1326,21 @@
     preventSnapshot() {}
     setTouchEventNeedsLocalCoords() {}
     setLayoutCallback(callback) { this.layoutCallback = callback; }
-    setIntersectionListener() {}
-    createIntersectionObserver() { return { disconnect() {} }; }
+    // Appservice SDK selector result path: it calls
+    // `node.createIntersectionObserver(root, margins, thresholds, cb)` and
+    // expects `cb(entries)` with one entry.
+    createIntersectionObserver(root, margins, thresholds, callback) {
+      const self = this;
+      self.setIntersectionListener(
+        { root: root || null, rootMargin: margins || [0, 0, 0, 0],
+          thresholds: thresholds || [0] },
+        (entry) => {
+          if (typeof callback === 'function') callback([entry]);
+        });
+      return {
+        disconnect() { self.setIntersectionListener({}, null); },
+      };
+    }
     getBeforePseudoNode() { return null; }
     getAfterPseudoNode() { return null; }
     updateStyle(value) { this.setStyle(value); }
@@ -1371,8 +1396,16 @@
         native.log(`holdPosition id=${this.viewTag} args=${debugArgs(args)}`);
       }
     }
-    requestRefresherRefresh() {}
-    requestRefresherTwoLevel() {}
+    requestRefresherRefresh() {
+      if (typeof native.refresherTriggered === 'function') {
+        native.refresherTriggered(this.windowId, this.viewTag, true, false);
+      }
+    }
+    requestRefresherTwoLevel() {
+      if (typeof native.refresherTriggered === 'function') {
+        native.refresherTriggered(this.windowId, this.viewTag, true, true);
+      }
+    }
     getScrollPosition() { return 0; }
     onScrollStartEvent(callback) {
       if (typeof callback === 'function') {
@@ -1390,18 +1423,95 @@
     }
     onScrollToLowerEvent() {}
     onScrollToUpperEvent() {}
-    onRefresherPullingEvent() {}
-    onRefresherWillRefreshEvent() {}
-    onRefresherRefreshEvent() {}
-    onRefresherRestoreEvent() {}
-    onRefresherAbortEvent() {}
-    onRefresherStatusChangeEvent() {}
+    onRefresherPullingEvent(callback) {
+      if (typeof callback === 'function') {
+        refresherPullingCallbacks.set(this.viewTag, callback);
+      } else {
+        refresherPullingCallbacks.delete(this.viewTag);
+      }
+    }
+    onRefresherWillRefreshEvent(callback) {
+      if (typeof callback === 'function') {
+        refresherWillRefreshCallbacks.set(this.viewTag, callback);
+      } else {
+        refresherWillRefreshCallbacks.delete(this.viewTag);
+      }
+    }
+    onRefresherRefreshEvent(callback) {
+      if (typeof callback === 'function') {
+        refresherRefreshCallbacks.set(this.viewTag, callback);
+      } else {
+        refresherRefreshCallbacks.delete(this.viewTag);
+      }
+    }
+    onRefresherRestoreEvent(callback) {
+      if (typeof callback === 'function') {
+        refresherRestoreCallbacks.set(this.viewTag, callback);
+      } else {
+        refresherRestoreCallbacks.delete(this.viewTag);
+      }
+    }
+    onRefresherAbortEvent(callback) {
+      if (typeof callback === 'function') {
+        refresherAbortCallbacks.set(this.viewTag, callback);
+      } else {
+        refresherAbortCallbacks.delete(this.viewTag);
+      }
+    }
+    onRefresherStatusChangeEvent(callback) {
+      if (typeof callback === 'function') {
+        refresherStatusCallbacks.set(this.viewTag, callback);
+      } else {
+        refresherStatusCallbacks.delete(this.viewTag);
+      }
+    }
+    setIntersectionListener(options, callback) {
+      if (this._intersection && typeof native.removeIntersectionObserver === 'function') {
+        native.removeIntersectionObserver(this.windowId, this.viewTag,
+                                          this._intersection.uniqueId);
+      }
+      this._intersection = null;
+      if (typeof callback !== 'function') return;
+      const uniqueId = ++nextIntersectionId;
+      const opts = options || {};
+      const rootMargins = opts.rootMargin || [0, 0, 0, 0];
+      const thresholds = opts.thresholds || [0];
+      let rootId = 0;
+      if (opts.root && typeof opts.root === 'object') {
+        if (typeof opts.root.viewTag === 'number') {
+          rootId = opts.root.viewTag;
+        } else if (opts.root.$$ && typeof opts.root.$$.viewTag === 'number') {
+          rootId = opts.root.$$.viewTag;
+        }
+      } else if (typeof opts.root === 'number') {
+        rootId = opts.root;
+      }
+      this._intersection = { uniqueId, callback };
+      if (typeof native.addIntersectionObserver === 'function') {
+        native.addIntersectionObserver(
+          this.windowId, this.viewTag, uniqueId, rootId,
+          Number(rootMargins[0]) || 0, Number(rootMargins[1]) || 0,
+          Number(rootMargins[2]) || 0, Number(rootMargins[3]) || 0,
+          Array.isArray(thresholds) ? thresholds.map(Number) : [0]);
+      }
+    }
     release() {
       bridgeElements.delete(this.viewTag);
       scrollEventCallbacks.delete(this.viewTag);
       swiperScrollEventCallbacks.delete(this.viewTag);
       scrollStartEventCallbacks.delete(this.viewTag);
       scrollEndEventCallbacks.delete(this.viewTag);
+      refresherPullingCallbacks.delete(this.viewTag);
+      refresherWillRefreshCallbacks.delete(this.viewTag);
+      refresherRefreshCallbacks.delete(this.viewTag);
+      refresherRestoreCallbacks.delete(this.viewTag);
+      refresherAbortCallbacks.delete(this.viewTag);
+      refresherStatusCallbacks.delete(this.viewTag);
+      if (this._intersection && typeof native.removeIntersectionObserver === 'function') {
+        native.removeIntersectionObserver(this.windowId, this.viewTag,
+                                          this._intersection.uniqueId);
+      }
+      this._intersection = null;
       this.ops.push({ op: 'release', id: this.viewTag });
     }
   }
@@ -1631,9 +1741,32 @@
     scrollEndEventCallbacks,
     pickerEvents,
     inputEvents,
+    intersectionEvents,
+    selectionEvents,
+    refresherEvents,
+    navigateBackIntercepts,
     bridgeElements,
     rect: nodeRect,
     hit: hitTestElement,
+    selectionSetRange(windowId, selectionId, start, startOffset, end, endOffset) {
+      if (typeof native.selectionSetRange === 'function') {
+        return native.selectionSetRange(windowId, selectionId, start,
+                                        startOffset, end, endOffset);
+      }
+      return undefined;
+    },
+    refresherTriggered(windowId, nodeId, open, twoLevel) {
+      if (typeof native.refresherTriggered === 'function') {
+        return native.refresherTriggered(windowId, nodeId, !!open, !!twoLevel);
+      }
+      return undefined;
+    },
+    setNavigateBackInterception(windowId, pageId, enabled) {
+      if (typeof native.setNavigateBackInterception === 'function') {
+        return native.setNavigateBackInterception(windowId, pageId, !!enabled);
+      }
+      return undefined;
+    },
     swiperTo(windowId, nodeId, page, animated) {
       if (typeof native.swiperTo === 'function') {
         return native.swiperTo(windowId, nodeId, page, animated !== false);
@@ -2098,8 +2231,118 @@
         if (element) dispatchMirrorEvent(element, type, {});
         return;
       }
+      case 8:   // refresher pulling
+      case 9:   // will refresh
+      case 10:  // refresh
+      case 11:  // restore
+      case 12:  // abort
+      case 13: { // status change
+        const kind = Number(event.kind);
+        const names = ['pulling', 'willRefresh', 'refresh', 'restore',
+                       'abort', 'status'];
+        const maps = [refresherPullingCallbacks, refresherWillRefreshCallbacks,
+                      refresherRefreshCallbacks, refresherRestoreCallbacks,
+                      refresherAbortCallbacks, refresherStatusCallbacks];
+        const type = names[kind - 8];
+        refresherEvents.push({ type, nodeId: tag, value, extra });
+        const callback = maps[kind - 8].get(tag);
+        if (callback) {
+          try {
+            if (type === 'status') callback(value, extra);
+            else callback(value);
+          } catch (error) {
+            if (typeof native.log === 'function') {
+              native.log(`refresher ${type} callback failed: ${error && error.message}`);
+            }
+          }
+        }
+        return;
+      }
       default:
         return;
+    }
+  }
+
+  function rectPayload(rect) {
+    if (!rect) return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 };
+    return {
+      top: Number(rect.top) || 0,
+      left: Number(rect.left) || 0,
+      right: Number(rect.right) || 0,
+      bottom: Number(rect.bottom) || 0,
+      width: (Number(rect.right) || 0) - (Number(rect.left) || 0),
+      height: (Number(rect.bottom) || 0) - (Number(rect.top) || 0),
+    };
+  }
+
+  // JSON channel for intersection / selection / navigate-back events.
+  function dispatchNativeJsonEvent(payload) {
+    let event = null;
+    try {
+      event = JSON.parse(payload);
+    } catch (_error) {
+      return;
+    }
+    if (!event || typeof event.type !== 'string') return;
+    const tag = event.nodeId;
+    if (event.type === 'intersection') {
+      intersectionEvents.push(event);
+      const element = bridgeElements.get(tag);
+      const listener = element && element._intersection;
+      if (!listener || listener.uniqueId !== event.uniqueId) return;
+      const bounds = rectPayload(event.boundingClientRect);
+      const entry = {
+        boundingClientRect: bounds,
+        intersectionRect: rectPayload(event.intersectionRect),
+        rootBounds: rectPayload(event.rootBounds),
+        intersectionRatio: Number(event.intersectionRatio) || 0,
+        isIntersecting: !!event.isIntersecting,
+        target: element,
+        time: Date.now(),
+      };
+      try {
+        listener.callback(entry, undefined);
+      } catch (error) {
+        if (typeof native.log === 'function') {
+          native.log(`intersection callback failed: ${error && error.message}`);
+        }
+      }
+      return;
+    }
+    if (event.type === 'selection') {
+      selectionEvents.push(event);
+      const element = bridgeElements.get(tag);
+      if (element) {
+        dispatchMirrorEvent(element, 'selectionchange', {
+          selectedString: event.selectedString || '',
+          boundingSelectionRect: {
+            left: Number(event.left) || 0,
+            top: Number(event.top) || 0,
+            right: Number(event.right) || 0,
+            bottom: Number(event.bottom) || 0,
+            width: (Number(event.right) || 0) - (Number(event.left) || 0),
+            height: (Number(event.bottom) || 0) - (Number(event.top) || 0),
+          },
+        });
+      }
+      return;
+    }
+    if (event.type === 'navigateBack') {
+      navigateBackIntercepts.push(event);
+      // The DevTools appservice listens for `onNavigateBackIntercept`; replay
+      // it into the page world when the bridge exposes __triggerOnEvent.
+      try {
+        const win = typeof window !== 'undefined' ? window : globalThis;
+        const bridge = win && win.WeixinJSBridge;
+        if (bridge && typeof bridge.__triggerOnEvent === 'function') {
+          bridge.__triggerOnEvent('onNavigateBackIntercept', event, 0);
+        }
+      } catch (error) {
+        if (typeof native.log === 'function') {
+          native.log(`navigateBack intercept dispatch failed: ${error && error.message}`);
+        }
+      }
+      return;
     }
   }
 
@@ -2242,6 +2485,17 @@
       } catch (error) {
         if (typeof native.log === 'function') {
           native.log(`native widget dispatch failed: ${error && error.message}`);
+        }
+      }
+    });
+  }
+  if (typeof native.setJsonEventSink === 'function') {
+    native.setJsonEventSink(function (payload) {
+      try {
+        dispatchNativeJsonEvent(payload);
+      } catch (error) {
+        if (typeof native.log === 'function') {
+          native.log(`native json dispatch failed: ${error && error.message}`);
         }
       }
     });

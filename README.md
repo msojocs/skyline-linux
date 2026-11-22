@@ -186,8 +186,8 @@ npm run test:contract
 ### 当前结果（2026-11-22）
 
 ```
-npm test: 195 tests, 171 pass, 0 fail, 24 skipped
-npm run test:ops: 73 tests, 73 pass
+npm test: 198 tests, 174 pass, 0 fail, 24 skipped
+npm run test:ops: 75 tests, 75 pass
 npm run test:l5: 2 tests, 2 pass (Linux 确定性基线 + Windows 逐像素容差比较)
 ```
 

@@ -261,8 +261,8 @@
   - 新增两个 `test:ops` 行为探针：`pointer-events:none` 覆盖层可穿透滚动；
     同几何、无 `pointer-events` 的对照组覆盖层会拦截滚动。
   - `will-change` 确认无静态/行为差异，不解析、不设探针。
-  - 确认缺口（D7 已补齐滚动事件、D8 已补齐 Swiper/PickerView/Input；其余待
-    D9-D10）：下拉刷新、IntersectionObserver、Selection、返回拦截、用户手势、
+  - 确认缺口（D7/D8/D9 已分别补齐滚动、Swiper/PickerView/Input、
+    IntersectionObserver/Selection/Refresher/返回拦截；其余待 D10）：用户手势、
     无障碍语义、自动化快照/内存 API。
   - 回归：`test:ops` 70/70（含 2 个 pointer-events 探针）；顺带把
     “移除背景” 用例的 200ms 更新改为 600ms，消除初始物化竞态。
@@ -333,9 +333,39 @@
     bootstrap 单测覆盖三条 JS 分发路径。Linux DevTools `tab-indicator`：点击
     第二个 Tab 后 swiper 换页，`__skylineDebug.swiperTo(...,2)` 触发
     `bindchange` 使第三个 Tab 选中；album 预览页 swiper 正常渲染。
-- [ ] **D9** IntersectionObserver / Selection / Refresher / 返回拦截
-  - `YGNodeAdd/RemoveIntersectionObserver`、`SelectionSetRange`/选区事件、
-    `ScrollViewRequestRefresherRefresh/TwoLevel`、`SetNavigateBackInterception`。
+- [x] **D9** IntersectionObserver / Selection / Refresher / 返回拦截
+  - **IntersectionObserver**：`setIntersectionListener` 经
+    `native.addIntersectionObserver` 调用 `YGNodeAddIntersectionObserver`（真实
+    Dart YGNode），`unobserve/disconnect` 调
+    `YGNodeRemoveIntersectionObserver`；Dart 层阈值/可见性变化经导出的
+    `YogaTriggerIntersection(Observers)` 回传 rects/ratio/isIntersecting（注意这
+    三个导出在 kernel lookup 中使用 **Float**，不是 JSON typedef 里的 Double），
+    按 JSON 通道分发给 JS observer callback。支持 DOM 镜像与
+    `__skylineDebug.intersectionEvents`；同时实现 SDK 旧路径
+    `node.createIntersectionObserver(root, margins, thresholds, cb)`（cb 收到
+    单元素数组）。
+  - **Selection**：`<selection>` 节点创建真实 `NewSelection`（`disableContextMenu`、
+    句柄/选区颜色），安装 `SelectionUpdateOnSelectionChange`，change 事件携带
+    `selectedString` 与包围盒；`selectionSetRange`/`selectionRange` op 以文本 span
+    地址（`node->address`）调用 `SelectionSetRange`；selection 子树内文本自动
+    `userSelect=true`，因此原生长按选区可用。
+  - **Refresher**：`NewScrollView` 映射 `refresher-enabled/threshold/background/
+    default-style/triggered` 与二级阈值（`twoLevelThreshold` 默认 150 / close 80）；
+    接入 `onRefresherPulling/WillRefresh/Refresh/Restore/Abort/StatusChange` 原生
+    回调并分发给内置 scroll-view 的对应回调；`refresherTriggered` 属性变化、
+    `refresherTrigger` op、`native.refresherTriggered` 调用
+    `ScrollViewRequestRefresherRefresh/TwoLevel`。
+  - **返回拦截**：`setNavigateBackInterception`/`native.setNavigateBackInterception`
+    调用 `SetNavigateBackInterception(pageId, enabled)`；Dart 路由在拦截手势时
+    调用导出的 `OnNavigateBackIntercept`，经 JSON 通道通知 bootstrap
+    （`__skylineDebug.navigateBackIntercepts`，并尝试回放
+    `onNavigateBackIntercept` 事件）。
+  - 回归/验证：`test:ops` 新增 2 个用例（refresher 编程式下拉触发 pulling/
+    status/refresh；intersection 注册+阈值触发、selection setRange/change、返回
+    拦截）；bootstrap 单测覆盖 intersection/selection/refresher/navigate-back 分发。
+    真机（release）：`wx.createIntersectionObserver` 页面收到
+    `intersectionRatio=1/isIntersecting=true`（rootBounds 为 viewport）；
+    编程式 refresher 触发 `refreshCount=1`、status refreshing→restore。
 - [ ] **D10** 无障碍与 DevTools 自动化
   - `UpdateAccessibility`/`Semantics*`、`SnapshotTakeSnapshot`、
     `DumpElementTree`、`CollectGarbage`、`SendMessageToRunner` 等。
@@ -344,8 +374,8 @@
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **171 / 195** | 24 skipped，0 fail |
-| `npm run test:ops` | **73 / 73** | appservice 操作流回放 |
+| `npm test` | **174 / 198** | 24 skipped，0 fail |
+| `npm run test:ops` | **75 / 75** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

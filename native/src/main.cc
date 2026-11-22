@@ -38,6 +38,21 @@ extern "C" void SkylineSwiperTo(uint32_t node_id, uint32_t page,
 extern "C" void SkylinePickerColumnSetCurrent(uint32_t node_id,
                                               uint32_t current);
 extern "C" void SkylineSetInputFocus(uint32_t node_id, uint8_t focus);
+extern "C" void SkylineSetJsonEventSink(void (*sink)(const char* json));
+extern "C" void SkylineAddIntersectionObserver(
+    uint32_t node_id, uint32_t unique_id, uint32_t root_id, double margin_top,
+    double margin_right, double margin_bottom, double margin_left,
+    const double* thresholds, int32_t threshold_count);
+extern "C" void SkylineRemoveIntersectionObserver(uint32_t node_id,
+                                                  uint32_t unique_id);
+extern "C" void SkylineSelectionSetRange(uint32_t selection_id,
+                                         uint32_t start_id,
+                                         int32_t start_offset,
+                                         uint32_t end_id, int32_t end_offset);
+extern "C" void SkylineRefresherTriggered(uint32_t node_id, uint8_t open,
+                                          uint8_t two_level);
+extern "C" void SkylineSetNavigateBackInterception(int32_t page_id,
+                                                   uint8_t enabled);
 #endif
 
 namespace {
@@ -98,6 +113,7 @@ struct AddonState {
 // bootstrap (`native.setScrollSink`).
 std::atomic<napi_threadsafe_function> g_scroll_tsfn{nullptr};
 std::atomic<napi_threadsafe_function> g_widget_tsfn{nullptr};
+std::atomic<napi_threadsafe_function> g_json_tsfn{nullptr};
 
 struct ScrollEvent {
   uint32_t node_id = 0;
@@ -120,6 +136,10 @@ struct WidgetEvent {
   uint8_t flag = 0;
 };
 
+struct JsonEvent {
+  std::string json;
+};
+
 AddonState* State(napi_env env) {
   void* data = nullptr;
   if (napi_get_instance_data(env, &data) != napi_ok) return nullptr;
@@ -137,6 +157,7 @@ void CleanupCallbacks(void* argument) {
 #ifdef SKYLINE_HAVE_ENGINE
   SkylineSetScrollEventSink(nullptr);
   SkylineSetWidgetEventSink(nullptr);
+  SkylineSetJsonEventSink(nullptr);
 #endif
   napi_threadsafe_function scroll_tsfn = g_scroll_tsfn.exchange(nullptr);
   if (scroll_tsfn != nullptr) {
@@ -145,6 +166,10 @@ void CleanupCallbacks(void* argument) {
   napi_threadsafe_function widget_tsfn = g_widget_tsfn.exchange(nullptr);
   if (widget_tsfn != nullptr) {
     napi_release_threadsafe_function(widget_tsfn, napi_tsfn_abort);
+  }
+  napi_threadsafe_function json_tsfn = g_json_tsfn.exchange(nullptr);
+  if (json_tsfn != nullptr) {
+    napi_release_threadsafe_function(json_tsfn, napi_tsfn_abort);
   }
   for (auto& [window_id, tsfn] : state->frame_tsfns) {
     (void)window_id;
@@ -773,6 +798,195 @@ napi_value SetWidgetEventSink(napi_env env, napi_callback_info info) {
 }
 
 // `swiperTo(windowId, nodeId, page, animated)` — programmatic swiper paging.
+void CallJsonEvent(napi_env env, napi_value js_callback, void* /*context*/,
+                   void* data) {
+  auto* event = static_cast<JsonEvent*>(data);
+  if (env == nullptr || js_callback == nullptr || event == nullptr) {
+    delete event;
+    return;
+  }
+  napi_value json = nullptr;
+  napi_create_string_utf8(env, event->json.c_str(), NAPI_AUTO_LENGTH, &json);
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  napi_value result = nullptr;
+  napi_call_function(env, undefined, js_callback, 1, &json, &result);
+  delete event;
+}
+
+void AddonJsonEventSink(const char* json) {
+  napi_threadsafe_function tsfn = g_json_tsfn.load();
+  if (tsfn == nullptr || json == nullptr) return;
+  auto* event = new JsonEvent();
+  event->json = json;
+  if (napi_call_threadsafe_function(tsfn, event, napi_tsfn_nonblocking) !=
+      napi_ok) {
+    delete event;
+  }
+}
+
+napi_value SetJsonEventSink(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1 || !IsType(env, argv[0], napi_function)) {
+    return Throw(env, napi_invalid_arg, "setJsonEventSink expects a function");
+  }
+  napi_value resource_name = nullptr;
+  napi_create_string_utf8(env, "skyline_json_event", NAPI_AUTO_LENGTH,
+                          &resource_name);
+  napi_threadsafe_function tsfn = nullptr;
+  if (napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 64,
+                                      1, nullptr, nullptr, nullptr,
+                                      CallJsonEvent, &tsfn) != napi_ok) {
+    return Throw(env, napi_generic_failure,
+                 "Unable to create JSON event callback");
+  }
+  napi_unref_threadsafe_function(env, tsfn);
+  napi_threadsafe_function previous = g_json_tsfn.exchange(tsfn);
+  if (previous != nullptr) {
+    napi_release_threadsafe_function(previous, napi_tsfn_release);
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSetJsonEventSink(&AddonJsonEventSink);
+#endif
+  return Undefined(env);
+}
+
+// `addIntersectionObserver(windowId, nodeId, rootId, top, right, bottom,
+// left, thresholds[])`.
+napi_value AddIntersectionObserver(napi_env env, napi_callback_info info) {
+  size_t argc = 8;
+  napi_value argv[8] = {nullptr, nullptr, nullptr, nullptr,
+                        nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 8) {
+    return Throw(env, napi_invalid_arg,
+                 "addIntersectionObserver expects 8 arguments");
+  }
+  const double node_id = ReadNumber(env, argv[1]);
+  const double unique_id = ReadNumber(env, argv[2]);
+  const double root_id = ReadNumber(env, argv[3]);
+  const double top = ReadNumber(env, argv[4]);
+  const double right = ReadNumber(env, argv[5]);
+  const double bottom = ReadNumber(env, argv[6]);
+  const double left = ReadNumber(env, argv[7]);
+  std::vector<double> thresholds;
+  // The ninth argument (thresholds) is optional and arrives through `argc`
+  // only when the caller passes it; read it separately.
+  napi_value threshold_value = nullptr;
+  size_t full_argc = 9;
+  napi_value full_argv[9] = {nullptr};
+  napi_get_cb_info(env, info, &full_argc, full_argv, nullptr, nullptr);
+  if (full_argc >= 9) threshold_value = full_argv[8];
+  bool is_array = false;
+  if (threshold_value != nullptr &&
+      napi_is_array(env, threshold_value, &is_array) == napi_ok && is_array) {
+    uint32_t length = 0;
+    napi_get_array_length(env, threshold_value, &length);
+    for (uint32_t i = 0; i < length; i++) {
+      napi_value item = nullptr;
+      double value = 0.0;
+      if (napi_get_element(env, threshold_value, i, &item) == napi_ok &&
+          napi_get_value_double(env, item, &value) == napi_ok) {
+        thresholds.push_back(value);
+      }
+    }
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineAddIntersectionObserver(
+      static_cast<uint32_t>(node_id), static_cast<uint32_t>(unique_id),
+      static_cast<uint32_t>(root_id), top, right, bottom, left,
+      thresholds.empty() ? nullptr : thresholds.data(),
+      static_cast<int32_t>(thresholds.size()));
+#else
+  (void)node_id;
+  (void)unique_id;
+  (void)root_id;
+  (void)top;
+  (void)right;
+  (void)bottom;
+  (void)left;
+#endif
+  return Undefined(env);
+}
+
+napi_value RemoveIntersectionObserver(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 3) {
+    return Throw(env, napi_invalid_arg,
+                 "removeIntersectionObserver expects (windowId, nodeId, id)");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineRemoveIntersectionObserver(
+      static_cast<uint32_t>(ReadNumber(env, argv[1])),
+      static_cast<uint32_t>(ReadNumber(env, argv[2])));
+#endif
+  return Undefined(env);
+}
+
+// `selectionSetRange(windowId, selectionId, startId, startOffset, endId,
+// endOffset)`.
+napi_value SelectionSetRange(napi_env env, napi_callback_info info) {
+  size_t argc = 6;
+  napi_value argv[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 6) {
+    return Throw(env, napi_invalid_arg,
+                 "selectionSetRange expects 6 arguments");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSelectionSetRange(
+      static_cast<uint32_t>(ReadNumber(env, argv[1])),
+      static_cast<uint32_t>(ReadNumber(env, argv[2])),
+      static_cast<int32_t>(ReadNumber(env, argv[3])),
+      static_cast<uint32_t>(ReadNumber(env, argv[4])),
+      static_cast<int32_t>(ReadNumber(env, argv[5])));
+#endif
+  return Undefined(env);
+}
+
+// `refresherTriggered(windowId, nodeId, open[, twoLevel])`.
+napi_value RefresherTriggered(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 3) {
+    return Throw(env, napi_invalid_arg,
+                 "refresherTriggered expects (windowId, nodeId, open)");
+  }
+  const bool open = ReadBool(env, argv[2], false);
+  const bool two_level = argc > 3 && ReadBool(env, argv[3], false);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineRefresherTriggered(static_cast<uint32_t>(ReadNumber(env, argv[1])),
+                            open ? 1 : 0, two_level ? 1 : 0);
+#else
+  (void)open;
+  (void)two_level;
+#endif
+  return Undefined(env);
+}
+
+// `setNavigateBackInterception(windowId, pageId, enabled)`.
+napi_value SetNavigateBackInterception(napi_env env,
+                                       napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 3) {
+    return Throw(env, napi_invalid_arg,
+                 "setNavigateBackInterception expects (windowId, pageId, enabled)");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSetNavigateBackInterception(
+      static_cast<int32_t>(ReadNumber(env, argv[1])),
+      ReadBool(env, argv[2], false) ? 1 : 0);
+#endif
+  return Undefined(env);
+}
+
 napi_value SwiperTo(napi_env env, napi_callback_info info) {
   size_t argc = 4;
   napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
@@ -937,6 +1151,13 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "swiperTo", SwiperTo);
   Define(env, bridge, "pickerColumnSetCurrent", PickerColumnSetCurrent);
   Define(env, bridge, "inputFocus", InputFocus);
+  Define(env, bridge, "setJsonEventSink", SetJsonEventSink);
+  Define(env, bridge, "addIntersectionObserver", AddIntersectionObserver);
+  Define(env, bridge, "removeIntersectionObserver", RemoveIntersectionObserver);
+  Define(env, bridge, "selectionSetRange", SelectionSetRange);
+  Define(env, bridge, "refresherTriggered", RefresherTriggered);
+  Define(env, bridge, "setNavigateBackInterception",
+         SetNavigateBackInterception);
   Define(env, bridge, "setSafeArea", Noop);
   Define(env, bridge, "dispatch", Noop);
   Define(env, bridge, "notify", Noop);

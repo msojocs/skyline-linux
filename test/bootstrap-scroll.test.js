@@ -26,6 +26,7 @@ const bootstrapSource = fs.readFileSync(
 function loadBootstrap() {
   const sink = { value: null };
   const widgetSink = { value: null };
+  const jsonSink = { value: null };
   const calls = [];
   const appliedOps = [];
   const native = {
@@ -40,11 +41,25 @@ function loadBootstrap() {
     onWindowRasterized() {},
     setScrollSink(callback) { sink.value = callback; },
     setWidgetEventSink(callback) { widgetSink.value = callback; },
+    setJsonEventSink(callback) { jsonSink.value = callback; },
     swiperTo(...args) { calls.push(['swiperTo', ...args]); },
     pickerColumnSetCurrent(...args) {
       calls.push(['pickerColumnSetCurrent', ...args]);
     },
     inputFocus(...args) { calls.push(['inputFocus', ...args]); },
+    addIntersectionObserver(...args) {
+      calls.push(['addIntersectionObserver', ...args]);
+    },
+    removeIntersectionObserver(...args) {
+      calls.push(['removeIntersectionObserver', ...args]);
+    },
+    selectionSetRange(...args) { calls.push(['selectionSetRange', ...args]); },
+    refresherTriggered(...args) {
+      calls.push(['refresherTriggered', ...args]);
+    },
+    setNavigateBackInterception(...args) {
+      calls.push(['setNavigateBackInterception', ...args]);
+    },
   };
   const sandbox = {
     __skylineNative: native,
@@ -58,7 +73,7 @@ function loadBootstrap() {
   };
   vm.createContext(sandbox);
   vm.runInContext(bootstrapSource, sandbox, { filename: 'bootstrap.js' });
-  return { sandbox, sink, widgetSink, calls, appliedOps };
+  return { sandbox, sink, widgetSink, jsonSink, calls, appliedOps };
 }
 
 test('bootstrap: native scroll events dispatch to the window and worklet registrations', () => {
@@ -116,6 +131,101 @@ test('bootstrap: PageContext.render invokes the setData completion callback', ()
   assert.match(appliedOps[0].json, /createContext/);
 });
 
+test('bootstrap: intersection/selection/refresher/navigate-back events dispatch', () => {
+  const { sandbox, widgetSink, jsonSink, calls } = loadBootstrap();
+  assert.equal(typeof jsonSink.value, 'function',
+    'bootstrap installs setJsonEventSink');
+  const SkylineGlobal = sandbox.SkylineGlobal;
+  const context = new SkylineGlobal.PageContext(4, 4);
+
+  // IntersectionObserver: native registration + entry callback.
+  const target = context.createElement('empty', 'view');
+  const entries = [];
+  target.setIntersectionListener(
+    { rootMargin: [0, 0, 0, 0], thresholds: [0, 0.5, 1] },
+    (entry) => entries.push(entry));
+  const add = calls.find((call) => call[0] === 'addIntersectionObserver');
+  assert.ok(add, 'native intersection observer registered');
+  assert.equal(add[1], 4);
+  assert.equal(add[2], target.viewTag);
+  assert.equal(add[3], 1);
+  assert.equal(add[4], 0);
+  assert.equal(add[9].join(','), '0,0.5,1');
+  const uniqueId = add[3];
+  jsonSink.value(JSON.stringify({
+    type: 'intersection',
+    nodeId: target.viewTag,
+    uniqueId: uniqueId,
+    boundingClientRect: { top: 0, right: 100, bottom: 100, left: 0 },
+    intersectionRect: { top: 0, right: 100, bottom: 50, left: 0 },
+    rootBounds: { top: 0, right: 320, bottom: 240, left: 0 },
+    intersectionRatio: 0.5,
+    isIntersecting: true,
+  }));
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].intersectionRatio, 0.5);
+  assert.equal(entries[0].isIntersecting, true);
+  assert.equal(entries[0].boundingClientRect.width, 100);
+  target.setIntersectionListener({}, null);
+  assert.ok(calls.some((call) => call[0] === 'removeIntersectionObserver'));
+
+  // Appservice SDK path: node.createIntersectionObserver(...) gets entries as
+  // a one-element array.
+  const legacy = context.createElement('empty', 'view');
+  const legacyEntries = [];
+  const handle = legacy.createIntersectionObserver(
+    null, [0, 0, 0, 0], [0], (entries) => legacyEntries.push(entries));
+  const legacyAdd = calls.filter(
+    (call) => call[0] === 'addIntersectionObserver').pop();
+  jsonSink.value(JSON.stringify({
+    type: 'intersection', nodeId: legacy.viewTag, uniqueId: legacyAdd[3],
+    boundingClientRect: { top: 0, right: 10, bottom: 10, left: 0 },
+    intersectionRect: { top: 0, right: 10, bottom: 10, left: 0 },
+    rootBounds: { top: 0, right: 320, bottom: 240, left: 0 },
+    intersectionRatio: 1, isIntersecting: true,
+  }));
+  assert.equal(legacyEntries.length, 1);
+  assert.equal(legacyEntries[0][0].intersectionRatio, 1);
+  handle.disconnect();
+
+  // Refresher callbacks registered by wx-scroll-view.
+  const scrollView = context.createElement('empty', 'scrollview');
+  const refresh = [];
+  scrollView.onRefresherRefreshEvent((dy) => refresh.push(dy));
+  widgetSink.value({
+    nodeId: scrollView.viewTag, kind: 10, value: 55, extra: 0, flag: 0,
+  });
+  assert.deepEqual([...refresh], [55]);
+  assert.equal(sandbox.__skylineDebug.refresherEvents.pop().type, 'refresh');
+
+  // Selection change (DOM dispatch needs a live exparser; the event is
+  // recorded regardless).
+  const selection = context.createElement('selection', 'selection');
+  jsonSink.value(JSON.stringify({
+    type: 'selection', nodeId: selection.viewTag,
+    left: 1, top: 2, right: 3, bottom: 4, selectedString: 'hello',
+  }));
+  const selectionEvent = sandbox.__skylineDebug.selectionEvents.pop();
+  assert.equal(selectionEvent.selectedString, 'hello');
+
+  // Navigate-back interception is forwarded and recorded.
+  sandbox.__skylineDebug.setNavigateBackInterception(4, 1, true);
+  jsonSink.value(JSON.stringify({
+    type: 'navigateBack', pageId: 1, enabled: true,
+  }));
+  assert.equal(sandbox.__skylineDebug.navigateBackIntercepts.pop().pageId, 1);
+
+  // Programmatic helpers forward to the addon bridge.
+  sandbox.__skylineDebug.selectionSetRange(4, selection.viewTag, 4, 0, 4, 5);
+  sandbox.__skylineDebug.refresherTriggered(4, scrollView.viewTag, true, false);
+  const forwarded = calls.slice(-3);
+  assert.equal(JSON.stringify(forwarded[1]),
+    JSON.stringify(['selectionSetRange', 4, selection.viewTag, 4, 0, 4, 5]));
+  assert.equal(JSON.stringify(forwarded[2]),
+    JSON.stringify(['refresherTriggered', 4, scrollView.viewTag, true, false]));
+  assert.equal(JSON.stringify(forwarded[0]),
+    JSON.stringify(['setNavigateBackInterception', 4, 1, true]));
+});
 test('bootstrap: swiper/picker/input widget events reach their registrations', () => {
   const { sandbox, widgetSink, calls } = loadBootstrap();
   assert.equal(typeof widgetSink.value, 'function',

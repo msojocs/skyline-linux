@@ -742,6 +742,36 @@ using PickerViewColumnUpdateCurrentFn = void (*)(Dart_Handle column,
 // Programmatic focus/blur (input.dart focusManually/blurManually).
 using InputFocusManuallyFn = void (*)(Dart_Handle input);
 using InputBlurManuallyFn = void (*)(Dart_Handle input);
+
+// IntersectionObserver: native registers the observer on the Dart YGNode;
+// Dart's layer machinery calls the exported YogaTriggerIntersection* symbols.
+using YGNodeAddIntersectionObserverFn = void (*)(
+    Dart_Handle yoga_node, uint32_t unique_id, Dart_Handle root,
+    double root_margin_top, double root_margin_right,
+    double root_margin_bottom, double root_margin_left,
+    Dart_Handle thresholds);
+using YGNodeRemoveIntersectionObserverFn = void (*)(Dart_Handle yoga_node,
+                                                    uint32_t unique_id);
+
+// Selection (SkylineSelection widget).
+using NewSelectionFn = Dart_Handle (*)(
+    intptr_t ptr, uint8_t disable_context_menu, void* on_selection_change,
+    uint32_t selection_handle_color, uint32_t selection_color,
+    Dart_Handle child);
+using SelectionUpdateOnSelectionChangeFn = void (*)(Dart_Handle selection,
+                                                    intptr_t ptr,
+                                                    void* callback);
+using SelectionSetRangeFn = void (*)(Dart_Handle selection,
+                                     intptr_t start_span,
+                                     int32_t start_offset,
+                                     intptr_t end_span, int32_t end_offset);
+
+// Refresher programmatic open/close.
+using ScrollViewRequestRefresherFn = void (*)(Dart_Handle scroll_view,
+                                              uint8_t open, int32_t duration,
+                                              Dart_Handle easing);
+using SetNavigateBackInterceptionFn = void (*)(int32_t page_id,
+                                               uint8_t interception);
 using ConnectorUpdateChildrenFn = void (*)(Dart_Handle connector,
                                            uint8_t stackingPaint,
                                            Dart_Handle children);
@@ -892,6 +922,14 @@ constexpr uint32_t kPickerViewColumnUpdateOnEndHash = 711584966u;
 constexpr uint32_t kPickerViewColumnUpdateCurrentHash = 756271499u;
 constexpr uint32_t kInputFocusManuallyHash = 353543806u;
 constexpr uint32_t kInputBlurManuallyHash = 349711200u;
+constexpr uint32_t kYGNodeAddIntersectionObserverHash = 507061131u;
+constexpr uint32_t kYGNodeRemoveIntersectionObserverHash = 535482992u;
+constexpr uint32_t kNewSelectionHash = 552006557u;
+constexpr uint32_t kSelectionUpdateOnSelectionChangeHash = 648273072u;
+constexpr uint32_t kSelectionSetRangeHash = 656347875u;
+constexpr uint32_t kScrollViewRequestRefresherRefreshHash = 491884374u;
+constexpr uint32_t kScrollViewRequestRefresherTwoLevelHash = 685371207u;
+constexpr uint32_t kSetNavigateBackInterceptionHash = 562643095u;
 constexpr uint32_t kNewListBuilderHash = 526654284u;
 constexpr uint32_t kNewListBuilderItemHash = 629516111u;
 constexpr uint32_t kListBuilderAppendChildHash = 707989954u;
@@ -1481,6 +1519,7 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
                              int maxLines,
                              int overflow,
                              bool softWrap,
+                             bool userSelect,
                              const std::vector<std::string>& fontFamilies,
                              Dart_Handle* out_span = nullptr) {
   Dart_Handle text_handle = Dart_NewStringFromCString(value);
@@ -1542,7 +1581,8 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
                  reinterpret_cast<void*>(&DemoCreateParagraph),
                  static_cast<uint8_t>(textAlign), 1 /* ltr */,
                  static_cast<uint8_t>(overflow), softWrap ? 1 : 0,
-                 static_cast<uint32_t>(maxLines), 0, 0,
+                 static_cast<uint32_t>(maxLines), userSelect ? 1 : 0,
+                 userSelect ? 1 : 0,
                  0 /* Flutter text */, spans);
 }
 
@@ -1709,7 +1749,7 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
         MemberNumber(entry, "lineHeight", std::nan("")),
         static_cast<int>(MemberNumber(entry, "textAlign", 0.0f)),
         static_cast<int>(MemberNumber(entry, "maxLines", 0.0f)), 0, true,
-        families);
+        false, families);
     if (Dart_IsError(inner)) {
       std::fprintf(stderr, "[skyline-runtime] json page: text widget failed\n");
       return BuiltJsonNode();
@@ -2451,6 +2491,7 @@ struct AppNode {
   Dart_PersistentHandle scroll_view_p = nullptr;
   Dart_PersistentHandle swiper_p = nullptr;
   Dart_PersistentHandle picker_column_p = nullptr;
+  Dart_PersistentHandle selection_p = nullptr;
   // Float64List(16) backing YGNodeSetupTransform while the Matrix4 reads it.
   Dart_PersistentHandle transform_p = nullptr;
   // Decoded image backing a `<image>` node's direct-render paint callback.
@@ -2688,6 +2729,12 @@ enum : int32_t {
   kWidgetPickerEnd = 4,
   kWidgetInputFocus = 5,
   kWidgetInputBlur = 6,
+  kWidgetRefresherPulling = 8,
+  kWidgetRefresherWillRefresh = 9,
+  kWidgetRefresherRefresh = 10,
+  kWidgetRefresherRestore = 11,
+  kWidgetRefresherAbort = 12,
+  kWidgetRefresherStatus = 13,
 };
 using SkylineWidgetEventSink = void (*)(uint32_t node_id, int32_t kind,
                                         double value, double extra,
@@ -2698,6 +2745,62 @@ std::atomic<SkylineWidgetEventSink> g_widget_event_sink{nullptr};
 // opaque `ptr` we passed at construction.
 std::unordered_map<intptr_t, uint32_t> g_swiper_ids;
 std::unordered_map<intptr_t, uint32_t> g_picker_column_ids;
+std::unordered_map<intptr_t, uint32_t> g_selection_ids;
+// YGNode address -> appservice view tag (intersection callbacks use it).
+std::unordered_map<intptr_t, uint32_t> g_node_address_ids;
+
+// IntersectionObserver registrations: unique id -> view tag, and per node.
+std::unordered_map<uint32_t, uint32_t> g_intersection_unique_nodes;
+std::unordered_map<uint32_t, std::unordered_set<uint32_t>>
+    g_intersection_node_observers;
+
+// Per-page back interception flag (mirrored into the Dart route config).
+std::unordered_map<int32_t, bool> g_navigate_back_interception;
+
+// Rich events (intersection/selection/navigate-back) are forwarded as JSON to
+// the addon JS thread; the bootstrap parses and dispatches them.
+using SkylineJsonEventSink = void (*)(const char* json);
+std::atomic<SkylineJsonEventSink> g_json_event_sink{nullptr};
+
+void EmitJsonEvent(const std::string& json) {
+  SkylineJsonEventSink sink = g_json_event_sink.load();
+  if (sink != nullptr) sink(json.c_str());
+}
+
+std::string JsonEscapeString(const std::string& value) {
+  std::string out;
+  out.reserve(value.size() + 8);
+  for (char c : value) {
+    switch (c) {
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          char buffer[8];
+          std::snprintf(buffer, sizeof(buffer), "\\u%04x",
+                        static_cast<unsigned>(c));
+          out += buffer;
+        } else {
+          out.push_back(c);
+        }
+        break;
+    }
+  }
+  return out;
+}
 
 // Layout geometry published for the appservice selector-query APIs
 // (`createSelectorQuery().boundingClientRect`).  The appservice JS queries node
@@ -5348,6 +5451,7 @@ AppNode* NewNode(uint32_t id, const std::string& tag, const std::string& name) {
   node->name = name;
   node->address = g_next_address;
   g_next_address += 0x100;
+  g_node_address_ids[node->address] = id;
   if (g_page != nullptr) g_page->nodes[id] = node;
   return node;
 }
@@ -6915,8 +7019,6 @@ extern "C" void ScrollEvent(intptr_t ptr, double top, double left, double width,
                       drag, velocity);
 }
 extern "C" void ScrollNoopPtr(intptr_t) {}
-extern "C" void ScrollNoopDouble(intptr_t, double) {}
-extern "C" void ScrollNoopStatus(intptr_t, int32_t, double) {}
 
 // Register the native callbacks through the `ScrollViewUpdateOnScroll*` FFI
 // entry points.  NewScrollView already accepts the same pointers, but the
@@ -7188,6 +7290,294 @@ void SetInputFocus(uint32_t node_id, bool focus) {
                   0.0, 0);
 }
 
+// -- refresher callbacks -----------------------------------------------------
+
+extern "C" void RefresherPulling(intptr_t ptr, double dy) {
+  const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr, "[skyline-runtime] refresher pulling: id=%u dy=%g\n",
+                 id, dy);
+  }
+  EmitWidgetEvent(id, kWidgetRefresherPulling, dy, 0.0, 0);
+}
+extern "C" void RefresherWillRefresh(intptr_t ptr, double dy) {
+  const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr, "[skyline-runtime] refresher willRefresh: id=%u dy=%g\n",
+                 id, dy);
+  }
+  EmitWidgetEvent(id, kWidgetRefresherWillRefresh, dy, 0.0, 0);
+}
+extern "C" void RefresherRefresh(intptr_t ptr, double dy) {
+  const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
+  std::fprintf(stderr, "[skyline-runtime] refresher refresh: id=%u dy=%g\n", id,
+               dy);
+  EmitWidgetEvent(id, kWidgetRefresherRefresh, dy, 0.0, 0);
+}
+extern "C" void RefresherRestore(intptr_t ptr, double dy) {
+  const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr, "[skyline-runtime] refresher restore: id=%u dy=%g\n",
+                 id, dy);
+  }
+  EmitWidgetEvent(id, kWidgetRefresherRestore, dy, 0.0, 0);
+}
+extern "C" void RefresherAbort(intptr_t ptr, double dy) {
+  const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr, "[skyline-runtime] refresher abort: id=%u dy=%g\n", id,
+                 dy);
+  }
+  EmitWidgetEvent(id, kWidgetRefresherAbort, dy, 0.0, 0);
+}
+extern "C" void RefresherStatusChange(intptr_t ptr, int32_t mode, double yy) {
+  const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] refresher status: id=%u mode=%d dy=%g\n",
+                 id, mode, yy);
+  }
+  EmitWidgetEvent(id, kWidgetRefresherStatus, static_cast<double>(mode), yy, 0);
+}
+
+void SetRefresherTriggered(uint32_t node_id, bool open, bool two_level) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* node = FindNode(node_id);
+  if (node == nullptr || node->scroll_view_p == nullptr) return;
+  void* callback = FindCallback(
+      g_page->holder->ffi_table,
+      two_level ? kScrollViewRequestRefresherTwoLevelHash
+                : kScrollViewRequestRefresherRefreshHash);
+  if (callback == nullptr) return;
+  Dart_Handle easing = Dart_NewStringFromCString("default");
+  reinterpret_cast<ScrollViewRequestRefresherFn>(callback)(
+      Dart_HandleFromPersistent(node->scroll_view_p), open ? 1 : 0, 300, easing);
+  char buffer[16];
+  std::snprintf(buffer, sizeof(buffer), "%d", open ? 1 : 0);
+  node->attrs["refresherTriggered"] = buffer;
+  std::fprintf(stderr,
+               "[skyline-runtime] refresher trigger: id=%u open=%d twoLevel=%d\n",
+               node_id, open ? 1 : 0, two_level ? 1 : 0);
+}
+
+// -- IntersectionObserver ----------------------------------------------------
+
+void RegisterIntersectionObserver(uint32_t node_id, uint32_t unique_id,
+                                  uint32_t root_node_id, double top,
+                                  double right, double bottom, double left,
+                                  std::vector<double> thresholds) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* node = FindNode(node_id);
+  if (node == nullptr || node->yoga_node_p == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] intersection add: no yoga node #%u\n",
+                 node_id);
+    return;
+  }
+  void* callback = FindCallback(g_page->holder->ffi_table,
+                                kYGNodeAddIntersectionObserverHash);
+  if (callback == nullptr) return;
+  Dart_Handle yoga = Dart_HandleFromPersistent(node->yoga_node_p);
+  Dart_Handle root = Dart_Null();
+  AppNode* root_node = root_node_id != 0 ? FindNode(root_node_id) : nullptr;
+  if (root_node != nullptr && root_node->yoga_node_p != nullptr) {
+    root = Dart_HandleFromPersistent(root_node->yoga_node_p);
+  }
+  Dart_Handle list = Dart_NewList(static_cast<intptr_t>(thresholds.size()));
+  for (size_t i = 0; i < thresholds.size(); i++) {
+    Dart_ListSetAt(list, static_cast<intptr_t>(i), Dart_NewDouble(thresholds[i]));
+  }
+  reinterpret_cast<YGNodeAddIntersectionObserverFn>(callback)(
+      yoga, unique_id, root, top, right, bottom, left, list);
+  g_intersection_unique_nodes[unique_id] = node_id;
+  g_intersection_node_observers[node_id].insert(unique_id);
+  std::fprintf(stderr,
+               "[skyline-runtime] intersection add: node=#%u id=%u root=#%u "
+               "thresholds=%zu\n",
+               node_id, unique_id, root_node_id, thresholds.size());
+}
+
+void UnregisterIntersectionObserver(uint32_t node_id, uint32_t unique_id) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* node = FindNode(node_id);
+  void* callback = FindCallback(g_page->holder->ffi_table,
+                                kYGNodeRemoveIntersectionObserverHash);
+  if (node != nullptr && node->yoga_node_p != nullptr && callback != nullptr) {
+    reinterpret_cast<YGNodeRemoveIntersectionObserverFn>(callback)(
+        Dart_HandleFromPersistent(node->yoga_node_p), unique_id);
+  }
+  g_intersection_unique_nodes.erase(unique_id);
+  auto found = g_intersection_node_observers.find(node_id);
+  if (found != g_intersection_node_observers.end()) {
+    found->second.erase(unique_id);
+    if (found->second.empty()) g_intersection_node_observers.erase(found);
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] intersection remove: node=#%u id=%u\n",
+               node_id, unique_id);
+}
+
+void EmitIntersection(uint32_t node_id, uint32_t unique_id, double b_top,
+                      double b_right, double b_bottom, double b_left,
+                      double i_top, double i_right, double i_bottom,
+                      double i_left, double root_top, double root_right,
+                      double root_bottom, double root_left, double ratio,
+                      bool intersecting) {
+  char buffer[1024];
+  std::snprintf(
+      buffer, sizeof(buffer),
+      "{\"type\":\"intersection\",\"nodeId\":%u,\"uniqueId\":%u,"
+      "\"boundingClientRect\":{\"top\":%.6g,\"right\":%.6g,\"bottom\":%.6g,"
+      "\"left\":%.6g},\"intersectionRect\":{\"top\":%.6g,\"right\":%.6g,"
+      "\"bottom\":%.6g,\"left\":%.6g},\"rootBounds\":{\"top\":%.6g,"
+      "\"right\":%.6g,\"bottom\":%.6g,\"left\":%.6g},"
+      "\"intersectionRatio\":%.6g,\"isIntersecting\":%s}",
+      node_id, unique_id, b_top, b_right, b_bottom, b_left, i_top, i_right,
+      i_bottom, i_left, root_top, root_right, root_bottom, root_left, ratio,
+      intersecting ? "true" : "false");
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] intersection trigger: node=#%u id=%u "
+                 "ratio=%g intersecting=%d\n",
+                 node_id, unique_id, ratio, intersecting ? 1 : 0);
+  }
+  EmitJsonEvent(buffer);
+}
+
+void TriggerIntersectionForNode(uint32_t node_id, int32_t unique_id,
+                                double b_top, double b_right, double b_bottom,
+                                double b_left, double i_top, double i_right,
+                                double i_bottom, double i_left, double root_top,
+                                double root_right, double root_bottom,
+                                double root_left, double ratio,
+                                bool intersecting) {
+  auto found = g_intersection_node_observers.find(node_id);
+  if (found == g_intersection_node_observers.end()) return;
+  if (unique_id >= 0) {
+    const uint32_t uid = static_cast<uint32_t>(unique_id);
+    if (found->second.count(uid) != 0) {
+      EmitIntersection(node_id, uid, b_top, b_right, b_bottom, b_left, i_top,
+                       i_right, i_bottom, i_left, root_top, root_right,
+                       root_bottom, root_left, ratio, intersecting);
+    }
+    return;
+  }
+  for (uint32_t uid : found->second) {
+    EmitIntersection(node_id, uid, b_top, b_right, b_bottom, b_left, i_top,
+                     i_right, i_bottom, i_left, root_top, root_right,
+                     root_bottom, root_left, ratio, intersecting);
+  }
+}
+
+// -- Selection ---------------------------------------------------------------
+
+extern "C" void SelectionOnChangeCallback(intptr_t ptr, double left, double top,
+                                          double right, double bottom,
+                                          Dart_Handle selected) {
+  const uint32_t id = WidgetNodeId(g_selection_ids, ptr);
+  std::string text;
+#ifdef SKYLINE_EMBEDDED
+  if (selected != nullptr && Dart_IsString(selected)) {
+    const char* utf8 = nullptr;
+    if (!Dart_IsError(Dart_StringToCString(selected, &utf8)) &&
+        utf8 != nullptr) {
+      text = utf8;
+    }
+  }
+#else
+  (void)selected;
+#endif
+  std::fprintf(stderr,
+               "[skyline-runtime] selection change: id=%u rect=(%g,%g,%g,%g) "
+               "text=\"%s\"\n",
+               id, left, top, right, bottom, text.c_str());
+  std::string json =
+      "{\"type\":\"selection\",\"nodeId\":" + std::to_string(id) +
+      ",\"left\":" + std::to_string(left) + ",\"top\":" + std::to_string(top) +
+      ",\"right\":" + std::to_string(right) +
+      ",\"bottom\":" + std::to_string(bottom) +
+      ",\"selectedString\":\"" + JsonEscapeString(text) + "\"}";
+  EmitJsonEvent(json);
+}
+
+void InstallSelectionCallbacks(AppNode* node) {
+  if (node == nullptr || node->selection_p == nullptr || g_page == nullptr ||
+      g_page->holder == nullptr) {
+    return;
+  }
+  g_selection_ids[node->address] = node->id;
+  void* callback = FindCallback(g_page->holder->ffi_table,
+                                kSelectionUpdateOnSelectionChangeHash);
+  if (callback != nullptr) {
+    reinterpret_cast<SelectionUpdateOnSelectionChangeFn>(callback)(
+        Dart_HandleFromPersistent(node->selection_p), node->address,
+        reinterpret_cast<void*>(&SelectionOnChangeCallback));
+  }
+  std::fprintf(stderr, "[skyline-runtime] selection callbacks installed #%u\n",
+               node->id);
+}
+
+void SetSelectionRange(uint32_t selection_id, uint32_t start_id,
+                       int32_t start_offset, uint32_t end_id,
+                       int32_t end_offset) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* selection = FindNode(selection_id);
+  AppNode* start = FindNode(start_id);
+  AppNode* end = FindNode(end_id != 0 ? end_id : start_id);
+  if (selection == nullptr || selection->selection_p == nullptr ||
+      start == nullptr || end == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] selection setRange: missing node "
+                 "(selection=#%u start=#%u end=#%u)\n",
+                 selection_id, start_id, end_id);
+    return;
+  }
+  void* callback =
+      FindCallback(g_page->holder->ffi_table, kSelectionSetRangeHash);
+  if (callback == nullptr) return;
+  reinterpret_cast<SelectionSetRangeFn>(callback)(
+      Dart_HandleFromPersistent(selection->selection_p), start->address,
+      start_offset, end->address, end_offset);
+  std::fprintf(stderr,
+               "[skyline-runtime] selection setRange: selection=#%u start=#%u:%d "
+               "end=#%u:%d\n",
+               selection_id, start_id, start_offset, end_id != 0 ? end_id
+                                                                 : start_id,
+               end_offset);
+}
+
+// -- navigate-back interception ---------------------------------------------
+
+void SetPageNavigateBackInterception(int32_t page_id, bool enabled) {
+  g_navigate_back_interception[page_id] = enabled;
+  if (g_page != nullptr && g_page->holder != nullptr) {
+    void* callback = FindCallback(g_page->holder->ffi_table,
+                                  kSetNavigateBackInterceptionHash);
+    if (callback != nullptr) {
+      reinterpret_cast<SetNavigateBackInterceptionFn>(callback)(
+          page_id, enabled ? 1 : 0);
+    }
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] navigate back interception: page=%d "
+               "enabled=%d\n",
+               page_id, enabled ? 1 : 0);
+}
+
+void TriggerNavigateBackIntercept(int32_t page_id) {
+  bool enabled = false;
+  const auto found = g_navigate_back_interception.find(page_id);
+  if (found != g_navigate_back_interception.end()) enabled = found->second;
+  std::fprintf(stderr,
+               "[skyline-runtime] OnNavigateBackIntercept: page=%d enabled=%d\n",
+               page_id, enabled ? 1 : 0);
+  char buffer[256];
+  std::snprintf(buffer, sizeof(buffer),
+                "{\"type\":\"navigateBack\",\"pageId\":%d,\"enabled\":%s}",
+                page_id, enabled ? "true" : "false");
+  EmitJsonEvent(buffer);
+}
+
 bool AttrBool(const AppNode* node, const char* key, bool fallback) {
   const auto found = node->attrs.find(key);
   if (found == node->attrs.end()) return fallback;
@@ -7374,6 +7764,21 @@ bool IsPickerViewColumnNode(const AppNode* node) {
           node->tag == "pickerviewcolumn" ||
           node->name == "picker-view-column" ||
           node->name == "pickerviewcolumn");
+}
+
+// Skyline's `<selection>` wrapper provides long-press text selection over its
+// subtree (and a programmatic range API).
+bool IsSelectionNode(const AppNode* node) {
+  return node != nullptr &&
+         (node->tag == "selection" || node->name == "selection");
+}
+
+bool InsideSelectionContext(const AppNode* node) {
+  for (const AppNode* parent = node != nullptr ? node->parent : nullptr;
+       parent != nullptr; parent = parent->parent) {
+    if (IsSelectionNode(parent)) return true;
+  }
+  return false;
 }
 
 // glass-easel wraps the real adapter node (`scrollview`, which carries the
@@ -8498,12 +8903,16 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     // CSS white-space nowrap/pre disable wrapping; text-overflow is the
     // Flutter TextOverflow index (ellipsis = 2).
     const bool soft_wrap = style.white_space != 1 && style.white_space != 2;
+    const bool user_select =
+        AttrBool(node, "userSelect", AttrBool(node, "selectable", false)) ||
+        InsideSelectionContext(node);
     inner = CreateTextWidget(
         newText, newTextSpan, node->address, text.c_str(), style.font_size,
         style.color, style.font_weight, style.font_style,
         std::isnan(style.letter_spacing) ? std::nan("") : style.letter_spacing,
         line_height, style.text_align, static_cast<int>(style.max_lines),
-        style.text_overflow, soft_wrap, style.font_families, &span_handle);
+        style.text_overflow, soft_wrap, user_select, style.font_families,
+        &span_handle);
     if (Dart_IsError(inner)) {
       ReportDartError("appservice text widget", inner);
       return Dart_Null();
@@ -8775,6 +9184,43 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                  node->id, AttrNumber(node, "value", 0.0),
                  item_widgets.size());
     inner = column;
+  } else if (IsSelectionNode(node)) {
+    auto* newSelection = g_page != nullptr && g_page->holder != nullptr
+                             ? reinterpret_cast<NewSelectionFn>(FindCallback(
+                                   g_page->holder->ffi_table, kNewSelectionHash))
+                             : nullptr;
+    if (newSelection == nullptr) return Dart_Null();
+    Dart_Handle child = Dart_Null();
+    for (AppNode* item : node->children) {
+      if (item == nullptr || item->released || item->style.display_none) {
+        continue;
+      }
+      Dart_Handle widget =
+          BuildWidget(item, newYGNode, newYGConnector, newText, newTextSpan,
+                      newDecoratedBox, newOpacity, newScrollView, newListView,
+                      newGridView, newDirectRenderWidget, newListBuilder,
+                      newGridBuilder, true);
+      if (widget != nullptr && !Dart_IsError(widget) && !Dart_IsNull(widget)) {
+        child = widget;
+        break;
+      }
+    }
+    const uint32_t handle_color =
+        ParseColorString(AttrText(node, "selectionHandleColor", "").c_str(),
+                         0u);
+    const uint32_t selection_color =
+        ParseColorString(AttrText(node, "selectionColor", "").c_str(), 0u);
+    Dart_Handle selection = newSelection(
+        node->address, AttrBool(node, "disableContextMenu", false) ? 1 : 0,
+        reinterpret_cast<void*>(&SelectionOnChangeCallback), handle_color,
+        selection_color, child);
+    if (Dart_IsError(selection)) {
+      ReportDartError("appservice NewSelection", selection);
+      return Dart_Null();
+    }
+    node->selection_p = Dart_NewPersistentHandle(selection);
+    InstallSelectionCallbacks(node);
+    inner = selection;
   } else {
     const bool is_scroll_view = IsScrollViewName(node->name) &&
                                 newScrollView != nullptr &&
@@ -8873,7 +9319,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         Dart_ListSetAt(children, 0, inner);
         Dart_Handle scroll = newScrollView(
             node->address, node->id, 3 /* ScrollViewType.custom */, 0, 1, 0.0,
-            0.0, 0, 50.0, 50.0, 0, 0.0, 0u, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 1,
+            0.0, 0, 50.0, 50.0, 0, 0.0, 0u, 0, 0, 0, 0, 0, 0, 0, 150.0, 80.0,
+            1,
             1, 0, 0, 0, 0.0,
             const_cast<NativeGestureRecognizerNative*>(g_scroll_recognizers), 1,
             Dart_Null(), 0, 0.0, style.padding[0], style.padding[1],
@@ -8884,12 +9331,12 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             reinterpret_cast<void*>(&ScrollEndEvent),
             reinterpret_cast<void*>(&ScrollNoopPtr),
             reinterpret_cast<void*>(&ScrollNoopPtr),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopStatus),
+            reinterpret_cast<void*>(&RefresherPulling),
+            reinterpret_cast<void*>(&RefresherWillRefresh),
+            reinterpret_cast<void*>(&RefresherRefresh),
+            reinterpret_cast<void*>(&RefresherRestore),
+            reinterpret_cast<void*>(&RefresherAbort),
+            reinterpret_cast<void*>(&RefresherStatusChange),
             reinterpret_cast<void*>(&ScrollNoopPtr), children);
         if (Dart_IsError(scroll)) {
           ReportDartError("appservice standalone list scroll view", scroll);
@@ -9133,11 +9580,30 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                          child != nullptr ? child->name.c_str() : "?");
           }
         }
+        const std::string refresher_style =
+            AttrText(node, "refresherDefaultStyle", "black");
+        uint8_t refresher_style_index = 0;
+        if (refresher_style == "white") {
+          refresher_style_index = 1;
+        } else if (refresher_style == "none") {
+          refresher_style_index = 2;
+        }
         Dart_Handle scroll = newScrollView(
             node->address, node->id, scroll_type, scroll_x_attr ? 1 : 0,
             scroll_y_attr ? 1 : 0, AttrNumber(node, "scrollTop", 0.0),
-            AttrNumber(node, "scrollLeft", 0.0), 0, 50.0, 50.0, 0, 0.0, 0u, 0,
-            0, 0, 0, 0, 0, 0, 0.0, 0.0,
+            AttrNumber(node, "scrollLeft", 0.0), 0,
+            AttrNumber(node, "lowerThreshold", 50.0),
+            AttrNumber(node, "upperThreshold", 50.0),
+            AttrBool(node, "refresherEnabled", false) ? 1 : 0,
+            AttrNumber(node, "refresherThreshold", 50.0),
+            ParseColorString(AttrText(node, "refresherBackground", "").c_str(),
+                             0u),
+            refresher_style_index,
+            AttrBool(node, "refresherTriggered", false) ? 1 : 0, 0, 0, 0,
+            AttrBool(node, "twoLevelEnabled", false) ? 1 : 0,
+            AttrBool(node, "twoLevelTriggered", false) ? 1 : 0,
+            AttrNumber(node, "twoLevelThreshold", 150.0),
+            AttrNumber(node, "twoLevelCloseThreshold", 80.0),
             AttrBool(node, "scrollEnabled", true) ? 1 : 0,
             AttrBool(node, "bounces", true) ? 1 : 0, 0, 0, 0, 0.0,
             const_cast<NativeGestureRecognizerNative*>(g_scroll_recognizers), 1,
@@ -9150,12 +9616,12 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             reinterpret_cast<void*>(&ScrollEndEvent),
             reinterpret_cast<void*>(&ScrollNoopPtr),
             reinterpret_cast<void*>(&ScrollNoopPtr),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopDouble),
-            reinterpret_cast<void*>(&ScrollNoopStatus),
+            reinterpret_cast<void*>(&RefresherPulling),
+            reinterpret_cast<void*>(&RefresherWillRefresh),
+            reinterpret_cast<void*>(&RefresherRefresh),
+            reinterpret_cast<void*>(&RefresherRestore),
+            reinterpret_cast<void*>(&RefresherAbort),
+            reinterpret_cast<void*>(&RefresherStatusChange),
             reinterpret_cast<void*>(&ScrollNoopPtr), list);
         if (Dart_IsError(scroll)) {
           ReportDartError("appservice NewScrollView", scroll);
@@ -10010,6 +10476,9 @@ void ApplyNodeAttribute(AppNode* node, const char* name,
                            static_cast<uint32_t>(std::max(0.0, number)));
   } else if (node->name == "input" && std::strcmp(name, "focus") == 0) {
     SetInputFocus(node->id, flag);
+  } else if (node->scroll_view_p != nullptr &&
+             std::strcmp(name, "refresherTriggered") == 0) {
+    SetRefresherTriggered(node->id, flag, false);
   }
 }
 
@@ -10440,6 +10909,48 @@ void ApplyOperation(const rapidjson::Value& op) {
     SetPickerColumnCurrent(
         MemberUint(op, "id", 0),
         static_cast<uint32_t>(MemberNumber(op, "value", 0.0)));
+  } else if (std::strcmp(kind, "refresherTrigger") == 0) {
+    const bool two_level = MemberUint(op, "twoLevel", 0) != 0;
+    SetRefresherTriggered(MemberUint(op, "id", 0),
+                          MemberUint(op, "open", 1) != 0, two_level);
+  } else if (std::strcmp(kind, "addIntersectionObserver") == 0) {
+    std::vector<double> thresholds;
+    const auto list = op.FindMember("thresholds");
+    if (list != op.MemberEnd() && list->value.IsArray()) {
+      for (const rapidjson::Value& entry : list->value.GetArray()) {
+        if (entry.IsNumber()) thresholds.push_back(entry.GetDouble());
+      }
+    }
+    if (thresholds.empty()) thresholds.push_back(0.0);
+    RegisterIntersectionObserver(
+        MemberUint(op, "id", 0), MemberUint(op, "uniqueId", 0),
+        MemberUint(op, "rootId", 0), MemberNumber(op, "marginTop", 0.0),
+        MemberNumber(op, "marginRight", 0.0),
+        MemberNumber(op, "marginBottom", 0.0),
+        MemberNumber(op, "marginLeft", 0.0), thresholds);
+  } else if (std::strcmp(kind, "intersect") == 0) {
+    const uint32_t id = MemberUint(op, "id", 0);
+    const bool has_unique = op.FindMember("uniqueId") != op.MemberEnd();
+    const int32_t unique =
+        has_unique ? static_cast<int32_t>(MemberUint(op, "uniqueId", 0)) : -1;
+    const double ratio = MemberNumber(op, "ratio", 1.0);
+    const bool intersecting = MemberUint(op, "intersecting", 1) != 0;
+    TriggerIntersectionForNode(
+        id, unique, 0.0, 100.0, 100.0, 0.0, 0.0, 100.0, 100.0, 0.0, 0.0,
+        320.0, 240.0, 0.0, ratio, intersecting);
+  } else if (std::strcmp(kind, "selectionRange") == 0) {
+    SetSelectionRange(
+        MemberUint(op, "selectionId", 0), MemberUint(op, "startId", 0),
+        static_cast<int32_t>(MemberNumber(op, "startOffset", 0.0)),
+        MemberUint(op, "endId", 0),
+        static_cast<int32_t>(MemberNumber(op, "endOffset", 0.0)));
+  } else if (std::strcmp(kind, "navigateBackIntercept") == 0) {
+    SetPageNavigateBackInterception(
+        static_cast<int32_t>(MemberNumber(op, "pageId", 1.0)),
+        MemberUint(op, "enabled", 1) != 0);
+  } else if (std::strcmp(kind, "triggerNavigateBackIntercept") == 0) {
+    TriggerNavigateBackIntercept(
+        static_cast<int32_t>(MemberNumber(op, "pageId", 1.0)));
   } else if (std::strcmp(kind, "dispatchTouch") == 0) {
     void* callback = g_page->holder != nullptr
                          ? FindCallback(g_page->holder->ffi_table,
@@ -11941,6 +12452,10 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   g_scroll_view_ids.clear();
   g_swiper_ids.clear();
   g_picker_column_ids.clear();
+  g_selection_ids.clear();
+  g_node_address_ids.clear();
+  g_intersection_unique_nodes.clear();
+  g_intersection_node_observers.clear();
   for (const rapidjson::Value& op : ops_member->value.GetArray()) {
     ApplyOperation(op);
     const char* kind = MemberText(op, "op");
@@ -12197,6 +12712,10 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
     g_scroll_view_ids.clear();
     g_swiper_ids.clear();
     g_picker_column_ids.clear();
+    g_selection_ids.clear();
+    g_node_address_ids.clear();
+    g_intersection_unique_nodes.clear();
+    g_intersection_node_observers.clear();
   }
 
   bool structural = false;
@@ -12527,6 +13046,9 @@ SKYLINE_EXPORT extern "C" int32_t SkylineGetNodeRect(uint32_t node_id,
   return 1;
 }
 
+template <typename Fn>
+void PostToUiIfReady(Fn fn);
+
 SKYLINE_EXPORT extern "C" void SkylineSetScrollEventSink(
     appservice::SkylineScrollEventSink sink) {
   appservice::g_scroll_event_sink.store(sink);
@@ -12535,6 +13057,94 @@ SKYLINE_EXPORT extern "C" void SkylineSetScrollEventSink(
 SKYLINE_EXPORT extern "C" void SkylineSetWidgetEventSink(
     appservice::SkylineWidgetEventSink sink) {
   appservice::g_widget_event_sink.store(sink);
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSetJsonEventSink(
+    appservice::SkylineJsonEventSink sink) {
+  appservice::g_json_event_sink.store(sink);
+}
+
+SKYLINE_EXPORT extern "C" void SkylineAddIntersectionObserver(
+    uint32_t node_id, uint32_t unique_id, uint32_t root_id, double margin_top,
+    double margin_right, double margin_bottom, double margin_left,
+    const double* thresholds, int32_t threshold_count) {
+  std::vector<double> list;
+  if (thresholds != nullptr && threshold_count > 0) {
+    list.assign(thresholds, thresholds + threshold_count);
+  }
+  if (list.empty()) list.push_back(0.0);
+  PostToUiIfReady([node_id, unique_id, root_id, margin_top, margin_right,
+                   margin_bottom, margin_left, list]() {
+    appservice::RegisterIntersectionObserver(node_id, unique_id, root_id,
+                                             margin_top, margin_right,
+                                             margin_bottom, margin_left, list);
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineRemoveIntersectionObserver(
+    uint32_t node_id, uint32_t unique_id) {
+  PostToUiIfReady([node_id, unique_id]() {
+    appservice::UnregisterIntersectionObserver(node_id, unique_id);
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSelectionSetRange(
+    uint32_t selection_id, uint32_t start_id, int32_t start_offset,
+    uint32_t end_id, int32_t end_offset) {
+  PostToUiIfReady([selection_id, start_id, start_offset, end_id, end_offset]() {
+    appservice::SetSelectionRange(selection_id, start_id, start_offset, end_id,
+                                  end_offset);
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineRefresherTriggered(
+    uint32_t node_id, uint8_t open, uint8_t two_level) {
+  PostToUiIfReady([node_id, open, two_level]() {
+    appservice::SetRefresherTriggered(node_id, open != 0, two_level != 0);
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSetNavigateBackInterception(
+    int32_t page_id, uint8_t enabled) {
+  PostToUiIfReady([page_id, enabled]() {
+    appservice::SetPageNavigateBackInterception(page_id, enabled != 0);
+  });
+}
+
+// Called by the Dart route while a back gesture is intercepted.
+SKYLINE_EXPORT extern "C" void OnNavigateBackIntercept(intptr_t /*runtime*/,
+                                                       int32_t page_id) {
+  appservice::TriggerNavigateBackIntercept(page_id);
+}
+
+// Dart's IntersectionObserver layer reports threshold crossings here; route
+// them to the JS observer registered for the YGNode address.
+SKYLINE_EXPORT extern "C" void YogaTriggerIntersectionObservers(
+    intptr_t node_address, int32_t unique_id, float b_top, float b_right,
+    float b_bottom, float b_left, float i_top, float i_right, float i_bottom,
+    float i_left, float root_top, float root_right, float root_bottom,
+    float root_left, float ratio, uint8_t is_intersecting) {
+  const auto found = appservice::g_node_address_ids.find(node_address);
+  const uint32_t node_id =
+      found == appservice::g_node_address_ids.end() ? 0 : found->second;
+  appservice::TriggerIntersectionForNode(
+      node_id, unique_id, b_top, b_right, b_bottom, b_left, i_top, i_right,
+      i_bottom, i_left, root_top, root_right, root_bottom, root_left, ratio,
+      is_intersecting != 0);
+}
+
+SKYLINE_EXPORT extern "C" void YogaTriggerIntersection(
+    intptr_t node_address, float b_top, float b_right, float b_bottom,
+    float b_left, float i_top, float i_right, float i_bottom, float i_left,
+    float root_top, float root_right, float root_bottom, float root_left,
+    float ratio, uint8_t is_intersecting) {
+  const auto found = appservice::g_node_address_ids.find(node_address);
+  const uint32_t node_id =
+      found == appservice::g_node_address_ids.end() ? 0 : found->second;
+  appservice::TriggerIntersectionForNode(
+      node_id, -1, b_top, b_right, b_bottom, b_left, i_top, i_right, i_bottom,
+      i_left, root_top, root_right, root_bottom, root_left, ratio,
+      is_intersecting != 0);
 }
 
 // UI-thread programmatic widget updates used by the addon bridge.
@@ -13286,7 +13896,6 @@ SKYLINE_VOID_STUB(NotifyNavigateBackDoneByGesture)
 SKYLINE_VOID_STUB(NotifyWindowReady)
 SKYLINE_VOID_STUB(OnAccessibilityFeaturesChanged)
 SKYLINE_VOID_STUB(OnLayoutFinished)
-SKYLINE_VOID_STUB(OnNavigateBackIntercept)
 SKYLINE_VOID_STUB(OnViewportChanged)
 #ifndef SKYLINE_EMBEDDED
 SKYLINE_VOID_STUB(RemovePendingFont)
@@ -13301,8 +13910,13 @@ SKYLINE_VOID_STUB(TraceFlushDart)
 SKYLINE_VOID_STUB(TraceInstantDart)
 SKYLINE_VOID_STUB(UpdateAccessibility)
 SKYLINE_VOID_STUB(UpdatePlatformBrightness)
+#ifndef SKYLINE_EMBEDDED
+// Embedded builds provide the real implementations above; the DL-only stub
+// still has to export the full 73-symbol lookup table.
+SKYLINE_VOID_STUB(OnNavigateBackIntercept)
 SKYLINE_VOID_STUB(YogaTriggerIntersection)
 SKYLINE_VOID_STUB(YogaTriggerIntersectionObservers)
+#endif
 // clang-format on
 
 // ---------------------------------------------------------------------------
