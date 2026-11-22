@@ -53,6 +53,22 @@ extern "C" void SkylineRefresherTriggered(uint32_t node_id, uint8_t open,
                                           uint8_t two_level);
 extern "C" void SkylineSetNavigateBackInterception(int32_t page_id,
                                                    uint8_t enabled);
+// D10: accessibility + DevTools automation.
+extern "C" void SkylineSetAccessibilitySink(void (*sink)(int32_t kind,
+                                                         int32_t value));
+extern "C" int32_t SkylineGetAccessibilityState();
+extern "C" void SkylineRequestAccessibility(uint8_t enabled);
+extern "C" void SkylineDumpElementTree();
+extern "C" void SkylineDumpRenderTree();
+extern "C" void SkylineCollectGarbage();
+extern "C" void SkylineSendMessageToRunner(const char* message);
+extern "C" void SkylineTakeAppSnapshot(uint32_t request_id, double scale,
+                                       uint8_t compressed);
+extern "C" void SkylineSnapshotNode(uint32_t node_id, uint8_t format,
+                                    uint32_t request_id);
+extern "C" void SkylineSetUserGesture(uint8_t in_progress);
+extern "C" void SkylineRelaunchApp(uint8_t open_type);
+extern "C" void SkylineShutdownApplication();
 #endif
 
 namespace {
@@ -987,6 +1003,159 @@ napi_value SetNavigateBackInterception(napi_env env,
   return Undefined(env);
 }
 
+// D10: `setAccessibility(windowId, enabled)` toggles the appservice's
+// accessibility mode programmatically (DevTools automation).
+napi_value SetAccessibility(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 2) {
+    return Throw(env, napi_invalid_arg,
+                 "setAccessibility expects (windowId, enabled)");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineRequestAccessibility(ReadBool(env, argv[1], false) ? 1 : 0);
+#endif
+  return Undefined(env);
+}
+
+napi_value AccessibilityState(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  uint32_t state = 0;
+#ifdef SKYLINE_HAVE_ENGINE
+  state = static_cast<uint32_t>(SkylineGetAccessibilityState());
+#endif
+  napi_value result = nullptr;
+  napi_create_uint32(env, state, &result);
+  return result;
+}
+
+napi_value DumpElementTree(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineDumpElementTree();
+#endif
+  return Undefined(env);
+}
+
+napi_value DumpRenderTree(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineDumpRenderTree();
+#endif
+  return Undefined(env);
+}
+
+napi_value CollectGarbage(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineCollectGarbage();
+#endif
+  return Undefined(env);
+}
+
+napi_value SendMessageToRunner(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 2) {
+    return Throw(env, napi_invalid_arg,
+                 "sendMessageToRunner expects (windowId, message)");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  const std::string message = ReadString(env, argv[1]);
+  SkylineSendMessageToRunner(message.c_str());
+#endif
+  return Undefined(env);
+}
+
+// `takeAppSnapshot(windowId, requestId, scale, compressed)`.
+napi_value TakeAppSnapshot(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 2) {
+    return Throw(env, napi_invalid_arg,
+                 "takeAppSnapshot expects (windowId, requestId[, scale[, compressed]])");
+  }
+  const uint32_t request_id = static_cast<uint32_t>(ReadNumber(env, argv[1]));
+  const double scale = argc > 2 ? ReadNumber(env, argv[2], 1.0) : 1.0;
+  const bool compressed = argc > 3 ? ReadBool(env, argv[3], true) : true;
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineTakeAppSnapshot(request_id, scale, compressed ? 1 : 0);
+#else
+  (void)request_id;
+  (void)scale;
+  (void)compressed;
+#endif
+  return Undefined(env);
+}
+
+// `snapshotNode(windowId, nodeId, format, requestId)`.
+napi_value SnapshotNode(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 4) {
+    return Throw(env, napi_invalid_arg,
+                 "snapshotNode expects (windowId, nodeId, format, requestId)");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSnapshotNode(
+      static_cast<uint32_t>(ReadNumber(env, argv[1])),
+      static_cast<uint8_t>(ReadNumber(env, argv[2], 4.0)),
+      static_cast<uint32_t>(ReadNumber(env, argv[3])));
+#endif
+  return Undefined(env);
+}
+
+napi_value SetUserGesture(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 2) {
+    return Throw(env, napi_invalid_arg,
+                 "setUserGesture expects (windowId, active)");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSetUserGesture(ReadBool(env, argv[1], false) ? 1 : 0);
+#endif
+  return Undefined(env);
+}
+
+napi_value RelaunchApp(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 2) {
+    return Throw(env, napi_invalid_arg,
+                 "relaunchApp expects (windowId, openType)");
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineRelaunchApp(
+      static_cast<uint8_t>(ReadNumber(env, argv[1], 0.0)));
+#endif
+  return Undefined(env);
+}
+
+napi_value ShutdownApplication(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineShutdownApplication();
+#endif
+  return Undefined(env);
+}
+
 napi_value SwiperTo(napi_env env, napi_callback_info info) {
   size_t argc = 4;
   napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
@@ -1158,6 +1327,17 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "refresherTriggered", RefresherTriggered);
   Define(env, bridge, "setNavigateBackInterception",
          SetNavigateBackInterception);
+  Define(env, bridge, "setAccessibility", SetAccessibility);
+  Define(env, bridge, "accessibilityState", AccessibilityState);
+  Define(env, bridge, "dumpElementTree", DumpElementTree);
+  Define(env, bridge, "dumpRenderTree", DumpRenderTree);
+  Define(env, bridge, "collectGarbage", CollectGarbage);
+  Define(env, bridge, "sendMessageToRunner", SendMessageToRunner);
+  Define(env, bridge, "takeAppSnapshot", TakeAppSnapshot);
+  Define(env, bridge, "snapshotNode", SnapshotNode);
+  Define(env, bridge, "setUserGesture", SetUserGesture);
+  Define(env, bridge, "relaunchApp", RelaunchApp);
+  Define(env, bridge, "shutdownApplication", ShutdownApplication);
   Define(env, bridge, "setSafeArea", Noop);
   Define(env, bridge, "dispatch", Noop);
   Define(env, bridge, "notify", Noop);

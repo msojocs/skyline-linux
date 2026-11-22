@@ -108,6 +108,34 @@ void LogMessage(const char* tag, const char* message, void* /*user_data*/) {
                message != nullptr ? message : "");
 }
 
+// The embedded runtime installs this sink for accessibility requests; when the
+// addon is built against a stock engine the symbol is absent.
+extern "C" void SkylineSetAccessibilitySink(void (*sink)(int32_t kind,
+                                                         int32_t value))
+    __attribute__((weak));
+
+void OnSemanticsUpdate(const FlutterSemanticsUpdate2* update, void* /*data*/) {
+  if (update == nullptr || std::getenv("SKYLINE_APP_SERVICE_DEBUG") == nullptr) {
+    return;
+  }
+  for (size_t i = 0; i < update->node_count; i++) {
+    const FlutterSemanticsNode2* node = update->nodes[i];
+    if (node == nullptr) continue;
+    const bool is_button =
+        node->flags2 != nullptr && node->flags2->is_button;
+    const bool is_text_field =
+        node->flags2 != nullptr && node->flags2->is_text_field;
+    const bool is_header = node->flags2 != nullptr && node->flags2->is_header;
+    std::fprintf(stderr,
+                 "[skyline-engine] semantics node: id=%d label=\"%s\" "
+                 "value=\"%s\" button=%d textField=%d header=%d children=%zu\n",
+                 node->id, node->label != nullptr ? node->label : "",
+                 node->value != nullptr ? node->value : "", is_button ? 1 : 0,
+                 is_text_field ? 1 : 0, is_header ? 1 : 0,
+                 node->child_count);
+  }
+}
+
 class WindowHost {
  public:
   explicit WindowHost(CreateWindowArgs args) : args_(std::move(args)) {}
@@ -325,6 +353,7 @@ class WindowHost {
     project.log_message_callback = &LogMessage;
     project.log_tag = "skyline_host";
     project.shutdown_dart_vm_when_done = true;
+    project.update_semantics_callback2 = &OnSemanticsUpdate;
     const char* command_line[] = {"skyline_engine", "--disable-vm-service"};
     project.command_line_argc = 2;
     project.command_line_argv = command_line;
@@ -374,6 +403,13 @@ class WindowHost {
       return;
     }
     engine_ = engine;
+    {
+      std::lock_guard<std::mutex> lock(accessibility_mutex_);
+      accessibility_host_ = this;
+    }
+    if (SkylineSetAccessibilitySink != nullptr) {
+      SkylineSetAccessibilitySink(&WindowHost::AccessibilitySink);
+    }
 
     FlutterWindowMetricsEvent metrics = {};
     metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
@@ -408,14 +444,38 @@ class WindowHost {
     while (true) {
       std::deque<intptr_t> batons;
       std::deque<std::function<void()>> tasks;
+      std::deque<std::pair<int32_t, int32_t>> accessibility;
       {
         std::unique_lock<std::mutex> lock(mutex_);
         cv_.wait_for(lock, std::chrono::milliseconds(5), [this]() {
-          return stop_ || !batons_.empty() || !platform_tasks_.empty();
+          return stop_ || !batons_.empty() || !platform_tasks_.empty() ||
+                 !accessibility_requests_.empty();
         });
         if (stop_ && batons_.empty() && platform_tasks_.empty()) break;
         batons.swap(batons_);
         tasks.swap(platform_tasks_);
+        accessibility.swap(accessibility_requests_);
+      }
+      // Semantics updates are posted to the platform task runner; this host
+      // services vsync manually, so drain the platform tasks explicitly.
+      __FlutterEngineFlushPendingTasksNow();
+      // Accessibility must be applied on the platform thread.
+      for (const auto& request : accessibility) {
+        if (request.first == 0) {
+          const FlutterAccessibilityFeature features =
+              request.second != 0
+                  ? kFlutterAccessibilityFeatureAccessibleNavigation
+                  : static_cast<FlutterAccessibilityFeature>(0);
+          FlutterEngineUpdateAccessibilityFeatures(engine, features);
+          std::fprintf(stderr,
+                       "[skyline-engine] window %g accessibility features: %d\n",
+                       args_.window_id, static_cast<int>(features));
+        } else {
+          FlutterEngineUpdateSemanticsEnabled(engine, request.second != 0);
+          std::fprintf(stderr,
+                       "[skyline-engine] window %g semantics enabled: %d\n",
+                       args_.window_id, request.second != 0 ? 1 : 0);
+        }
       }
       for (auto& task : tasks) task();
       for (intptr_t baton : batons) {
@@ -443,6 +503,10 @@ class WindowHost {
       }
     }
 
+    {
+      std::lock_guard<std::mutex> lock(accessibility_mutex_);
+      if (accessibility_host_ == this) accessibility_host_ = nullptr;
+    }
     FlutterEngineShutdown(engine);
     engine_ = nullptr;
     if (aot_data_ != nullptr) {
@@ -469,6 +533,23 @@ class WindowHost {
       self->batons_.push_back(baton);
     }
     self->cv_.notify_all();
+  }
+
+  void EnqueueAccessibility(int32_t kind, int32_t value) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      accessibility_requests_.emplace_back(kind, value);
+    }
+    cv_.notify_all();
+  }
+
+  static void AccessibilitySink(int32_t kind, int32_t value) {
+    WindowHost* host = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(accessibility_mutex_);
+      host = accessibility_host_;
+    }
+    if (host != nullptr) host->EnqueueAccessibility(kind, value);
   }
 
   static bool OnPresent(void* user_data, const void* allocation,
@@ -546,6 +627,11 @@ class WindowHost {
   std::condition_variable ready_cv_;
   std::deque<intptr_t> batons_;
   std::deque<std::function<void()>> platform_tasks_;
+  // D10: accessibility requests from the embedded runtime.  Applied on the
+  // platform thread inside the vsync loop.
+  std::deque<std::pair<int32_t, int32_t>> accessibility_requests_;
+  static std::mutex accessibility_mutex_;
+  static WindowHost* accessibility_host_;
   // Platform-thread-only single-touch state (see SendPointer).
   bool touch_down_ = false;
   bool ready_ = false;
@@ -558,6 +644,9 @@ class WindowHost {
   uint32_t frame_id_ = 0;
   bool warned_no_buffer_ = false;
 };
+
+std::mutex WindowHost::accessibility_mutex_;
+WindowHost* WindowHost::accessibility_host_ = nullptr;
 
 class HostEngine final : public Engine {
  public:

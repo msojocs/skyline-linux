@@ -1149,6 +1149,144 @@ test('appservice ops: intersection observer, selection range and back intercepti
   }
 });
 
+test('appservice ops: accessibility semantics, dumps and automation APIs', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-automation-'));
+  const ops = path.join(dir, 'automation.ops.json');
+  const snapshotDir = path.join(dir, 'snapshots');
+  fs.mkdirSync(snapshotDir);
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:10px;top:10px;width:100px;' +
+          'height:100px;background:#00AA00;' },
+      { op: 'setAttributes', id: 3, attrs: {
+        'aria-label': 'album cover', 'aria-role': 'img',
+      } },
+      { op: 'createElement', id: 4, tag: 'text', name: '' },
+      { op: 'setText', id: 4, text: 'Play' },
+      { op: 'setStyle', id: 4,
+        value: 'position:absolute;left:140px;top:10px;font-size:20px;' },
+      { op: 'setAttributes', id: 4, attrs: {
+        'aria-label': 'play button', 'aria-role': 'button',
+      } },
+      { op: 'createElement', id: 5, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 5,
+        value: 'position:absolute;left:10px;top:140px;width:80px;' +
+          'height:40px;background:#FF0000;' },
+      { op: 'setAttributes', id: 5, attrs: { 'aria-hidden': 'true' } },
+      // `<snapshot>` exercises NewSnapshot + SnapshotTakeSnapshot + SceneToImage.
+      { op: 'createElement', id: 6, tag: 'snapshot', name: 'snapshot' },
+      { op: 'setStyle', id: 6,
+        value: 'position:absolute;left:200px;top:10px;width:60px;' +
+          'height:60px;' },
+      { op: 'createElement', id: 7, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 7,
+        value: 'width:60px;height:60px;background:#0000FF;' },
+      { op: 'appendChild', id: 6, child: 7 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'appendChild', id: 2, child: 4 },
+      { op: 'appendChild', id: 2, child: 5 },
+      { op: 'appendChild', id: 2, child: 6 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 500, ops: [
+        { op: 'accessibility', enabled: true },
+      ] },
+      { afterMs: 1500, ops: [
+        // Semantics* updates the materialized SkylineSemantics in place.
+        { op: 'setAttribute', id: 3, name: 'aria-label',
+          value: 'updated cover' },
+        { op: 'dumpElementTree' },
+        { op: 'dumpRenderTree' },
+        { op: 'collectGarbage' },
+        { op: 'sendMessageToRunner', message: 'hello runner' },
+        { op: 'userGesture', active: true },
+        { op: 'userGesture', active: false },
+        { op: 'takeAppSnapshot', requestId: 11, scale: 1, compressed: true },
+        { op: 'snapshotNode', id: 3, format: 4, requestId: 12 },
+        { op: 'snapshotNode', id: 6, format: 4, requestId: 13 },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(ops, {
+      timeoutMs: 6500,
+      frames: 0,
+      env: {
+        SKYLINE_APP_SERVICE_DEBUG: '1',
+        SKYLINE_SNAPSHOT_DIR: snapshotDir,
+      },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.doesNotMatch(logs, /Incorrect use of ParentDataWidget/);
+
+    // Accessibility: the runtime builds SkylineSemantics through NewSemantics,
+    // the host applies the feature/semantics flags, and the framework emits a
+    // semantics tree with the aria-label.
+    assert.match(logs, /semantics #3 label="album cover" role="img" hidden=0/);
+    assert.match(logs,
+      /semantics #4 label="play button" role="button" hidden=0/);
+    assert.match(logs, /semantics #5 label="" role="" hidden=1/);
+    assert.match(logs, /UpdateAccessibility: enabled=1/);
+    assert.match(logs, /AccessibilityBoldTextEnabled: [01]/);
+    assert.match(logs, /semantics update #3 label="updated cover" role="img"/);
+    assert.match(logs, /semantics enabled: 1/);
+    assert.match(logs, /semantics node: id=\d+ label="updated cover"/);
+
+    // Automation.
+    assert.match(logs, /DumpElementTree requested \(callback=yes\)/);
+    assert.match(logs, /\[skyline-runtime:I\] : dumpElementTree/);
+    assert.match(logs, /YGNodeRenderObject/);
+    assert.match(logs, /DumpRenderTree requested \(callback=yes\)/);
+    assert.match(logs, /CollectGarbage requested \(callback=yes\)/);
+    assert.match(logs, /SendMessageToRunner: "hello runner" \(callback=yes\)/);
+    assert.match(logs, /user gesture: start \(callback=yes\)/);
+    assert.match(logs, /user gesture: stop \(callback=yes\)/);
+    assert.match(logs,
+      /app snapshot: request=11 320x240 format=png bytes=\d+ ok=1/);
+    assert.match(logs,
+      /node snapshot: request=12 format=png bytes=\d+ ok=1/);
+    // `<snapshot>` path: NewSnapshot → SnapshotTakeSnapshot → SceneToImage.
+    assert.match(logs,
+      /snapshot widget request: node=#6 format=4 request=13 \(callback=yes\)/);
+    assert.match(logs, /snapshot widget: node=#6 accepted=1/);
+    assert.match(logs, /SceneToImage: 60x60 format=4 bytes=\d+/);
+    assert.match(logs,
+      /node snapshot: request=13 format=png bytes=\d+ ok=1/);
+
+    // Snapshot payloads are also written for DevTools automation.
+    const files = fs.readdirSync(snapshotDir);
+    assert.ok(files.includes('snapshot-app-11.png'),
+      `missing app snapshot (${files.join(',')})`);
+    assert.ok(files.includes('snapshot-node-12.png'),
+      `missing node snapshot (${files.join(',')})`);
+    assert.ok(files.includes('snapshot-node-13.png'),
+      `missing widget snapshot (${files.join(',')})`);
+    const appPng = fs.readFileSync(path.join(snapshotDir, 'snapshot-app-11.png'));
+    assert.equal(appPng.subarray(1, 4).toString('ascii'), 'PNG');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('host pointer script reaches the Skyline hit test path', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

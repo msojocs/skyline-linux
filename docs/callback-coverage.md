@@ -32,15 +32,12 @@ widget，不经过 Dart 回调表，不计为缺口。下表的“未接线”�
 | `GetWindowWidth` / `GetWindowHeight` | `PageContext.clientWidth/clientHeight` 在 createWindow 时捕获 |
 | `HitTestNode` | appservice 镜像树由 `__skylineDebug.hit` / `touchTargetElement` 命中测试 |
 | `NotifyFontFaceLoad` | 字体平台通道 / 运行时导出函数，不经过回调表 |
-| `DumpElementTree` / `DumpRenderTree` | 仅有调试/自动化价值，未实现；不影响页面功能 |
 
 ## 3. 确认缺失（源码 0 引用）
 
-| 能力 | 回调 | 影响 |
-| --- | --- | --- |
-| 用户手势 | `StartUserGesture` / `StopUserGesture` | 自动播放/音频的用户手势状态不可用 |
-| 无障碍 | `UpdateAccessibility`、`Semantics*`、`AccessibilityBoldTextEnabled` | 语义树不更新；`UpdateAccessibility` 是空 stub |
-| 自动化/调试 | `SnapshotTakeSnapshot`、`DumpElementTree`、`CollectGarbage`、`SendMessageToRunner`、`RelaunchApp`、`ShutdownApplication` | DevTools 自动化、内存压力、runner 消息缺失 |
+D10 之后不再有行为性缺口：用户手势、无障碍语义与自动化/调试回调均已接入
+（见下一节）。`DumpElementTree` / `DumpRenderTree` 也从“仅调试价值、未实现”
+改为真实回调。
 
 ## 4. 已实现并加行为探针
 
@@ -57,6 +54,9 @@ widget，不经过 Dart 回调表，不计为缺口。下表的“未接线”�
 | 返回拦截 | `SetNavigateBackInterception(pageId, enabled)` 下发 Dart 路由；`OnNavigateBackIntercept` 导出经 JSON 通道通知 JS | `test:ops`：enabled/OnNavigateBackIntercept 日志；bootstrap 单测：navigate-back 事件 |
 | `pointer-events: none` | 解析为 `PointerEvents.none` 传给 `NewYGNode`；`SkylineGetNodeRect` 增加 `pointerEvents` 字段，appservice 镜像 hit test 跳过该子树 | `native/test/skyline-appservice-ops.test.js`：`pointer-events:none` 覆盖层可穿透滚动；对照组 `pointer-events` auto 覆盖层拦截滚动 |
 | `will-change` | 纯渲染提示，无静态像素差异；不解析（官方探针也不产生差异） | 无行为差异，不设探针 |
+| 无障碍语义 | `aria-label`/`aria-role`/`aria-hidden`/`aria-disabled` → `NewSemantics`（`SkylineSemantics`），增量属性走 `SemanticsLabel/Role/Hidden/Disable`；`UpdateAccessibility`/`OnAccessibilityFeaturesChanged` 驱动宿主 `FlutterEngineUpdateSemanticsEnabled`/`UpdateAccessibilityFeatures`，`AccessibilityBoldTextEnabled` 查询加粗文本 | `test:ops`：`semantics #3/#4/#5` 包装日志、`semantics update #3`、宿主 `semantics node` 包含 `updated cover`；bootstrap 单测：`accessibilityEvents` |
+| 快照 | `SceneToImage` CPU 光栅化（`LayerTree::Flatten` + `DlSkCanvasDispatcher` + `SkPngEncoder`）；`<snapshot>` + `NewSnapshot`/`SnapshotTakeSnapshot`；`TakeAppSnapshot`；`YGNodeTakeSnapshot`（按需 repaint boundary） | `test:ops`：app/node PNG 快照写入 `SKYLINE_SNAPSHOT_DIR`，JSON `appSnapshot`/`nodeSnapshot`；bootstrap 单测：`snapshotEvents` |
+| DevTools 自动化 | `DumpElementTree`/`DumpRenderTree`/`CollectGarbage`/`SendMessageToRunner`/`RelaunchApp`/`ShutdownApplication`/`StartUserGesture`/`StopUserGesture` 经 `FindCallback` 调用；addon 暴露 `__skylineDebug.*` | `test:ops`：dump 输出 `YGNodeRenderObject`、GC/runner/gesture 日志；bootstrap 单测：全部调试方法转发 |
 
 ## 5. 后续修复任务
 
@@ -69,7 +69,12 @@ widget，不经过 Dart 回调表，不计为缺口。下表的“未接线”�
   `YGNodeAdd/RemoveIntersectionObserver` + trigger 回传、`NewSelection` 与
   `SelectionSetRange`、refresher 原生回调与编程式开合、
   `SetNavigateBackInterception`/`OnNavigateBackIntercept` 均已接入。
-- **D10** 无障碍语义树与 DevTools 自动化快照/内存 API。
+- ~~**D10** 无障碍语义树与 DevTools 自动化快照/内存 API~~ 已完成：
+  `NewSemantics`/`Semantics*` + `UpdateAccessibility`/`OnAccessibilityFeaturesChanged`、
+  `SceneToImage`/`NewSnapshot`/`SnapshotTakeSnapshot`/`TakeAppSnapshot`/
+  `YGNodeTakeSnapshot`、`DumpElementTree`/`DumpRenderTree`/`CollectGarbage`/
+  `SendMessageToRunner`/`RelaunchApp`/`ShutdownApplication`/`Start/StopUserGesture`
+  均已接入，并通过 `__skylineDebug` 暴露给 DevTools。
 
 新增探针时沿用 D2 的方式：静态行为夹具优先放在 `test:ops`（可断言日志/像素），
 需要官方 Windows 基准时再用 `tools/l5-windows.js --only <name>` 采集。

@@ -261,9 +261,9 @@
   - 新增两个 `test:ops` 行为探针：`pointer-events:none` 覆盖层可穿透滚动；
     同几何、无 `pointer-events` 的对照组覆盖层会拦截滚动。
   - `will-change` 确认无静态/行为差异，不解析、不设探针。
-  - 确认缺口（D7/D8/D9 已分别补齐滚动、Swiper/PickerView/Input、
-    IntersectionObserver/Selection/Refresher/返回拦截；其余待 D10）：用户手势、
-    无障碍语义、自动化快照/内存 API。
+  - 确认缺口（D7/D8/D9/D10 已分别补齐滚动、Swiper/PickerView/Input、
+    IntersectionObserver/Selection/Refresher/返回拦截、用户手势/无障碍语义/
+    自动化快照与内存 API）：无剩余行为候选。
   - 回归：`test:ops` 70/70（含 2 个 pointer-events 探针）；顺带把
     “移除背景” 用例的 200ms 更新改为 600ms，消除初始物化竞态。
 - [ ] **D4** 真实页面 ops 录制与整页差分
@@ -366,16 +366,51 @@
     真机（release）：`wx.createIntersectionObserver` 页面收到
     `intersectionRatio=1/isIntersecting=true`（rootBounds 为 viewport）；
     编程式 refresher 触发 `refreshCount=1`、status refreshing→restore。
-- [ ] **D10** 无障碍与 DevTools 自动化
-  - `UpdateAccessibility`/`Semantics*`、`SnapshotTakeSnapshot`、
-    `DumpElementTree`、`CollectGarbage`、`SendMessageToRunner` 等。
+- [x] **D10** 无障碍与 DevTools 自动化
+  - **语义树**：appservice 节点上的 `aria-label` / `aria-role` / `aria-hidden` /
+    `aria-disabled`（及 `semantics*` 别名）解析为 `SemanticsInfo`。首建时经真实
+    `NewSemantics` 包住元素 widget（`SkylineSemantics`），属性增量更新走
+    `SemanticsLabel` / `SemanticsRole` / `SemanticsHidden` / `SemanticsDisable`
+    原地刷新；新增/移除包装需要重建时置 `force_rebuild`。
+  - **无障碍状态**：实现 `UpdateAccessibility(runtime, enabled)` 与
+    `OnAccessibilityFeaturesChanged(runtime, boldText)`（原来都是 void stub）。
+    运行时保存 `enabled/boldText`，调用注册的 `AccessibilityBoldTextEnabled`，
+    并经新增的 `SkylineSetAccessibilitySink` 通知宿主。`host/main.cc` 与
+    `host/host_engine.cc` 在 **platform 线程** 调用
+    `FlutterEngineUpdateSemanticsEnabled` / `FlutterEngineUpdateAccessibilityFeatures`。
+    由于宿主不使用 fml 消息循环，语义更新会挂在 platform task runner 上，循环内
+    用 `__FlutterEngineFlushPendingTasksNow()` 显式排空；否则
+    `update_semantics_callback2` 永不触发。`SKYLINE_APP_SERVICE_DEBUG` 下宿主
+    逐节点输出 `semantics node: id=.. label=".." button=..`。
+  - **快照**：`SceneToImage` 用 `Scene::takeLayerTree` → `LayerTree::Flatten` →
+    `DlSkCanvasDispatcher` 在 CPU SkSurface 上光栅化，PNG 走 `SkPngEncoder`，
+    其余格式回读 RGBA；回调收到 `Uint8List`。`<snapshot>` 元素经 `NewSnapshot`
+    包装并支持 `SnapshotTakeSnapshot`；`TakeAppSnapshot` 包装 Dart 的
+    `RenderRepaintBoundary.toImage`；`YGNodeTakeSnapshot` 按需把节点
+    `setIsRepaintBoundary(true)` 后截图。结果写入 `SKYLINE_SNAPSHOT_DIR`
+    （`snapshot-app-<id>.png` / `snapshot-node-<id>.png`）并作为
+    `appSnapshot`/`nodeSnapshot` JSON 事件投递到 JS。`<snapshot>` 的
+    `allowSnapshotting` 默认关闭：开启后 Dart `SnapshotWidget.toImageSync`
+    在无 GPU 上下文的软件宿主上会触发 raster-thread 断言，自动化请使用
+    `snapshotNode`（内部按需设 repaint boundary）。
+  - **自动化**：`DumpElementTree` / `DumpRenderTree` / `CollectGarbage` /
+    `SendMessageToRunner` / `RelaunchApp` / `ShutdownApplication` /
+    `StartUserGesture` / `StopUserGesture` 均通过 `FindCallback` 调用真实 Dart
+    回调，并由 appservice ops（`dumpElementTree`、`collectGarbage`、
+    `sendMessageToRunner`、`takeAppSnapshot`、`snapshotNode`、`userGesture`、
+    `accessibility`、`relaunchApp`、`shutdownApplication`）与 addon
+    `__skylineDebug.*` 暴露给 DevTools。
+  - 回归/验证：新增 `test:ops` 用例覆盖语义树、宿主语义节点、in-place 标签
+    更新、两类快照、树 dump、GC、runner 消息与用户手势；`test:ops` **76 / 76**。
+    bootstrap 单测覆盖全部 `__skylineDebug` 自动化方法与 JSON 事件分发；
+    `npm test` **176 / 200**（24 skipped）。
 
 ## 测试基线（x / y）
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **174 / 198** | 24 skipped，0 fail |
-| `npm run test:ops` | **75 / 75** | appservice 操作流回放 |
+| `npm test` | **176 / 200** | 24 skipped，0 fail |
+| `npm run test:ops` | **76 / 76** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

@@ -131,6 +131,19 @@ names.append("SkylineRemoveIntersectionObserver")
 names.append("SkylineSelectionSetRange")
 names.append("SkylineRefresherTriggered")
 names.append("SkylineSetNavigateBackInterception")
+# D10: accessibility + DevTools automation.
+names.append("SkylineSetAccessibilitySink")
+names.append("SkylineGetAccessibilityState")
+names.append("SkylineRequestAccessibility")
+names.append("SkylineDumpElementTree")
+names.append("SkylineDumpRenderTree")
+names.append("SkylineCollectGarbage")
+names.append("SkylineSendMessageToRunner")
+names.append("SkylineTakeAppSnapshot")
+names.append("SkylineSnapshotNode")
+names.append("SkylineSetUserGesture")
+names.append("SkylineRelaunchApp")
+names.append("SkylineShutdownApplication")
 missing = [name for name in names if f"    {name};" not in exports]
 if missing:
     anchor = "    kInternalFlutterGpu*;\n"

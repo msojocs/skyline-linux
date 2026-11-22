@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -50,12 +51,16 @@
 // and append a DrawImageRect without round-tripping through Dart objects.
 #include "flutter/display_list/dl_builder.h"
 #include "flutter/display_list/image/dl_image.h"
+#include "flutter/display_list/skia/dl_sk_dispatcher.h"
+#include "flutter/lib/ui/compositing/scene.h"
 #include "flutter/lib/ui/painting/canvas.h"
 #include "flutter/lib/ui/painting/display_list_image_gpu.h"
 #include "flutter/lib/ui/painting/image.h"
 #include "third_party/skia/include/core/SkData.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/encode/SkPngEncoder.h"
 #include "third_party/tonic/converter/dart_converter.h"
 #include "third_party/tonic/dart_wrappable.h"
 // Schedule page construction after the current FFI callback returns; the Dart VM
@@ -772,6 +777,56 @@ using ScrollViewRequestRefresherFn = void (*)(Dart_Handle scroll_view,
                                               Dart_Handle easing);
 using SetNavigateBackInterceptionFn = void (*)(int32_t page_id,
                                                uint8_t interception);
+
+// D10: accessibility.  Negative/absent semantics wrappers are Dart widgets the
+// runtime builds through NewSemantics and updates in place through Semantics*.
+using NewSemanticsFn = Dart_Handle (*)(Dart_Handle child,
+                                       Dart_Handle semantics_label,
+                                       Dart_Handle semantics_role,
+                                       uint8_t semantics_hidden,
+                                       uint8_t semantics_disable);
+using SemanticsTextFn = void (*)(Dart_Handle semantics, Dart_Handle value);
+using SemanticsBoolFn = void (*)(Dart_Handle semantics, uint8_t value);
+
+// D10: snapshot / automation callbacks registered by package:skyline.
+using NewSnapshotFn = Dart_Handle (*)(Dart_Handle child,
+                                      uint8_t allow_snapshotting);
+using SnapshotUpdateAllowSnapshottingFn = void (*)(Dart_Handle snapshot,
+                                                   uint8_t allow);
+using SnapshotTakeSnapshotFn = uint8_t (*)(Dart_Handle snapshot, uint8_t format,
+                                           intptr_t callback_ptr);
+// `AppSnapshotCallbackNative`: (ptr, width, height, Uint8List data).
+using AppSnapshotCallback = void (*)(intptr_t ptr, int32_t width, int32_t height,
+                                     Dart_Handle data);
+using TakeAppSnapshotFn = void (*)(intptr_t ptr, double scale,
+                                   uint8_t compressed,
+                                   AppSnapshotCallback callback);
+// `OnSnapshotCallbackNative`: (ptr, Uint8List data).
+using NodeSnapshotCallback = void (*)(intptr_t ptr, Dart_Handle data);
+using YGNodeTakeSnapshotFn = void (*)(Dart_Handle yoga_node, uint8_t format,
+                                      intptr_t ptr,
+                                      NodeSnapshotCallback callback);
+using YGNodeSetIsRepaintBoundaryFn = void (*)(Dart_Handle yoga_node,
+                                              uint8_t is_boundary);
+using DumpTreeFn = void (*)();
+using CollectGarbageFn = void (*)();
+using SendMessageToRunnerFn = void (*)(Dart_Handle message);
+using UserGestureFn = void (*)();
+using AppCommandFn = void (*)(uint8_t open_type);
+using VoidCommandFn = void (*)();
+using AccessibilityBoldTextEnabledFn = uint8_t (*)();
+
+// Accessibility state is shared between the Dart runtime layer and the host
+// embedder.  The host installs `SkylineSetAccessibilitySink`; `kind` 0 asks the
+// embedder to apply accessibility *features*, kind 1 enables the semantics
+// tree (the two are separate engine APIs).
+using SkylineAccessibilitySink = void (*)(int32_t kind, int32_t value);
+std::atomic<SkylineAccessibilitySink> g_accessibility_sink{nullptr};
+std::atomic<int32_t> g_accessibility_enabled{0};
+std::atomic<int32_t> g_accessibility_bold_text{0};
+// SnapshotTakeSnapshot is synchronous: SceneToImage runs inside the call, so
+// this carries the DevTools request id into the snapshot callback.
+std::atomic<int32_t> g_pending_node_snapshot_request{0};
 using ConnectorUpdateChildrenFn = void (*)(Dart_Handle connector,
                                            uint8_t stackingPaint,
                                            Dart_Handle children);
@@ -970,6 +1025,27 @@ constexpr uint32_t kNewInputHash = 762417174u;
 constexpr uint32_t kYGNodeSetupTransformHash = 620430677u;
 constexpr uint32_t kYGNodeTransformOriginHash = 740488219u;
 constexpr uint32_t kYGNodeUpdatePointerEventsHash = 449412672u;
+// D10: accessibility, snapshots and DevTools automation.
+constexpr uint32_t kNewSemanticsHash = 448407021u;
+constexpr uint32_t kSemanticsLabelHash = 681175330u;
+constexpr uint32_t kSemanticsRoleHash = 666094628u;
+constexpr uint32_t kSemanticsHiddenHash = 560051307u;
+constexpr uint32_t kSemanticsDisableHash = 646536060u;
+constexpr uint32_t kAccessibilityBoldTextEnabledHash = 715306527u;
+constexpr uint32_t kNewSnapshotHash = 744193752u;
+constexpr uint32_t kSnapshotUpdateAllowSnapshottingHash = 519292321u;
+constexpr uint32_t kSnapshotTakeSnapshotHash = 750173314u;
+constexpr uint32_t kTakeAppSnapshotHash = 762914009u;
+constexpr uint32_t kYGNodeTakeSnapshotHash = 762672341u;
+constexpr uint32_t kYGNodeSetIsRepaintBoundaryHash = 367311360u;
+constexpr uint32_t kDumpElementTreeHash = 669860362u;
+constexpr uint32_t kDumpRenderTreeHash = 665271336u;
+constexpr uint32_t kCollectGarbageHash = 655232023u;
+constexpr uint32_t kSendMessageToRunnerHash = 517490473u;
+constexpr uint32_t kRelaunchAppHash = 390635245u;
+constexpr uint32_t kShutdownApplicationHash = 539287559u;
+constexpr uint32_t kStartUserGestureHash = 662129673u;
+constexpr uint32_t kStopUserGestureHash = 638807572u;
 
 enum class DemoMode { kStripes, kText, kCard };
 DemoMode g_demo_mode = DemoMode::kStripes;
@@ -1603,9 +1679,9 @@ float MemberNumber(const rapidjson::Value& object,
                    const char* key,
                    float fallback) {
   const auto member = object.FindMember(key);
-  if (member == object.MemberEnd() || !member->value.IsNumber()) {
-    return fallback;
-  }
+  if (member == object.MemberEnd()) return fallback;
+  if (member->value.IsBool()) return member->value.GetBool() ? 1.0f : 0.0f;
+  if (!member->value.IsNumber()) return fallback;
   return static_cast<float>(member->value.GetDouble());
 }
 
@@ -2492,6 +2568,11 @@ struct AppNode {
   Dart_PersistentHandle swiper_p = nullptr;
   Dart_PersistentHandle picker_column_p = nullptr;
   Dart_PersistentHandle selection_p = nullptr;
+  // D10: accessibility wrapper (`<view aria-label=...>`) and snapshot widgets.
+  Dart_Handle semantics_widget = nullptr;
+  Dart_PersistentHandle semantics_p = nullptr;
+  Dart_Handle snapshot_widget = nullptr;
+  Dart_PersistentHandle snapshot_p = nullptr;
   // Float64List(16) backing YGNodeSetupTransform while the Matrix4 reads it.
   Dart_PersistentHandle transform_p = nullptr;
   // Decoded image backing a `<image>` node's direct-render paint callback.
@@ -7640,6 +7721,10 @@ void ResetNodeHandles(AppNode* node, bool include_layout) {
   DeletePersistent(&node->scroll_view_p);
   DeletePersistent(&node->transform_p);
   DeletePersistent(&node->input_widget_p);
+  DeletePersistent(&node->semantics_p);
+  DeletePersistent(&node->snapshot_p);
+  node->semantics_widget = nullptr;
+  node->snapshot_widget = nullptr;
   node->input_widget = nullptr;
   if (node->builder_p != nullptr || !node->builder_items.empty()) {
     g_builders_by_address.erase(node->address);
@@ -8858,6 +8943,199 @@ void OnStickyHeaderStickOnTop(intptr_t native_widget_ptr, uint8_t value) {
                static_cast<unsigned>(value));
 }
 
+// ---------------------------------------------------------------------------
+// D10: accessibility semantics
+//
+// The appservice WXML layer carries the W3C accessibility attributes on the
+// DOM mirror (`aria-label`, `aria-role`, `aria-hidden`, `aria-disabled`).  The
+// official native runtime wraps the element's Flutter widget in
+// `SkylineSemantics` (NewSemantics) and keeps it in sync with Semantics*.
+// ---------------------------------------------------------------------------
+
+bool IsSnapshotNode(const AppNode* node) {
+  return node != nullptr &&
+         (node->tag == "snapshot" || node->name == "snapshot");
+}
+
+const char* const kSemanticsLabelKeys[] = {"aria-label", "ariaLabel",
+                                           "semanticsLabel", "semantics-label"};
+const char* const kSemanticsRoleKeys[] = {"aria-role", "ariaRole", "role",
+                                          "semanticsRole", "semantics-role"};
+const char* const kSemanticsHiddenKeys[] = {
+    "aria-hidden", "ariaHidden", "semanticsHidden", "semantics-hidden"};
+const char* const kSemanticsDisableKeys[] = {
+    "aria-disabled", "ariaDisabled", "semanticsDisabled", "semanticsDisable",
+    "semantics-disabled"};
+
+bool FindAttrKey(const AppNode* node, const char* const* keys, size_t count,
+                 std::string* value) {
+  for (size_t i = 0; i < count; i++) {
+    const auto found = node->attrs.find(keys[i]);
+    if (found != node->attrs.end()) {
+      if (value != nullptr) *value = found->second;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsSemanticsAttribute(const char* name) {
+  if (name == nullptr || *name == '\0') return false;
+  const struct {
+    const char* const* keys;
+    size_t count;
+  } groups[] = {
+      {kSemanticsLabelKeys, sizeof(kSemanticsLabelKeys) / sizeof(char*)},
+      {kSemanticsRoleKeys, sizeof(kSemanticsRoleKeys) / sizeof(char*)},
+      {kSemanticsHiddenKeys, sizeof(kSemanticsHiddenKeys) / sizeof(char*)},
+      {kSemanticsDisableKeys, sizeof(kSemanticsDisableKeys) / sizeof(char*)},
+  };
+  for (const auto& group : groups) {
+    for (size_t i = 0; i < group.count; i++) {
+      if (std::strcmp(name, group.keys[i]) == 0) return true;
+    }
+  }
+  return false;
+}
+
+struct SemanticsInfo {
+  std::string label;
+  std::string role;
+  bool hidden = false;
+  bool disabled = false;
+  bool present = false;
+};
+
+bool ReadSemanticsInfo(const AppNode* node, SemanticsInfo* info) {
+  if (node == nullptr || info == nullptr) return false;
+  bool label_present = FindAttrKey(
+      node, kSemanticsLabelKeys,
+      sizeof(kSemanticsLabelKeys) / sizeof(char*), &info->label);
+  bool role_present = FindAttrKey(
+      node, kSemanticsRoleKeys,
+      sizeof(kSemanticsRoleKeys) / sizeof(char*), &info->role);
+  bool hidden_present = FindAttrKey(
+      node, kSemanticsHiddenKeys,
+      sizeof(kSemanticsHiddenKeys) / sizeof(char*), nullptr);
+  bool disable_present = FindAttrKey(
+      node, kSemanticsDisableKeys,
+      sizeof(kSemanticsDisableKeys) / sizeof(char*), nullptr);
+  if (hidden_present) {
+    for (size_t i = 0;
+         i < sizeof(kSemanticsHiddenKeys) / sizeof(char*); i++) {
+      if (node->attrs.find(kSemanticsHiddenKeys[i]) != node->attrs.end()) {
+        info->hidden = AttrBool(node, kSemanticsHiddenKeys[i], false);
+        break;
+      }
+    }
+  }
+  if (disable_present) {
+    for (size_t i = 0;
+         i < sizeof(kSemanticsDisableKeys) / sizeof(char*); i++) {
+      if (node->attrs.find(kSemanticsDisableKeys[i]) != node->attrs.end()) {
+        info->disabled = AttrBool(node, kSemanticsDisableKeys[i], false);
+        break;
+      }
+    }
+  }
+  info->present = label_present || role_present || hidden_present ||
+                  disable_present;
+  return info->present;
+}
+
+Dart_Handle WrapSemantics(AppNode* node, Dart_Handle inner) {
+  if (node == nullptr || Dart_IsNull(inner) || g_page == nullptr ||
+      g_page->holder == nullptr) {
+    return inner;
+  }
+  SemanticsInfo info;
+  if (!ReadSemanticsInfo(node, &info)) return inner;
+  auto* new_semantics = reinterpret_cast<NewSemanticsFn>(
+      FindCallback(g_page->holder->ffi_table, kNewSemanticsHash));
+  if (new_semantics == nullptr) return inner;
+  Dart_Handle label = Dart_NewStringFromCString(info.label.c_str());
+  Dart_Handle role = Dart_NewStringFromCString(info.role.c_str());
+  if (Dart_IsError(label)) label = Dart_NewStringFromCString("");
+  if (Dart_IsError(role)) role = Dart_NewStringFromCString("");
+  Dart_Handle semantics =
+      new_semantics(inner, label, role, info.hidden ? 1 : 0,
+                    info.disabled ? 1 : 0);
+  if (Dart_IsError(semantics)) {
+    ReportDartError("appservice NewSemantics", semantics);
+    return inner;
+  }
+  node->semantics_widget = semantics;
+  node->semantics_p = Dart_NewPersistentHandle(semantics);
+  std::fprintf(stderr,
+               "[skyline-runtime] semantics #%u label=\"%s\" role=\"%s\" "
+               "hidden=%d disabled=%d\n",
+               node->id, info.label.c_str(), info.role.c_str(),
+               info.hidden ? 1 : 0, info.disabled ? 1 : 0);
+  return semantics;
+}
+
+// Attribute changes reuse the materialized SkylineSemantics widget.  Adding or
+// removing the wrapper itself needs a rebuild.
+void UpdateNodeSemantics(AppNode* node) {
+  if (node == nullptr || g_page == nullptr || g_page->holder == nullptr) return;
+  SemanticsInfo info;
+  const bool present = ReadSemanticsInfo(node, &info);
+  if (node->semantics_p == nullptr) {
+    if (present) g_page->force_rebuild = true;
+    return;
+  }
+  if (!present) {
+    g_page->force_rebuild = true;
+    return;
+  }
+  Dart_Handle semantics = Dart_HandleFromPersistent(node->semantics_p);
+  auto* label = reinterpret_cast<SemanticsTextFn>(
+      FindCallback(g_page->holder->ffi_table, kSemanticsLabelHash));
+  auto* role = reinterpret_cast<SemanticsTextFn>(
+      FindCallback(g_page->holder->ffi_table, kSemanticsRoleHash));
+  auto* hidden = reinterpret_cast<SemanticsBoolFn>(
+      FindCallback(g_page->holder->ffi_table, kSemanticsHiddenHash));
+  auto* disable = reinterpret_cast<SemanticsBoolFn>(
+      FindCallback(g_page->holder->ffi_table, kSemanticsDisableHash));
+  if (label != nullptr) {
+    Dart_Handle text = Dart_NewStringFromCString(info.label.c_str());
+    if (!Dart_IsError(text)) label(semantics, text);
+  }
+  if (role != nullptr) {
+    Dart_Handle text = Dart_NewStringFromCString(info.role.c_str());
+    if (!Dart_IsError(text)) role(semantics, text);
+  }
+  if (hidden != nullptr) hidden(semantics, info.hidden ? 1 : 0);
+  if (disable != nullptr) disable(semantics, info.disabled ? 1 : 0);
+  std::fprintf(stderr,
+               "[skyline-runtime] semantics update #%u label=\"%s\" "
+               "role=\"%s\" hidden=%d disabled=%d\n",
+               node->id, info.label.c_str(), info.role.c_str(),
+               info.hidden ? 1 : 0, info.disabled ? 1 : 0);
+}
+
+// `<snapshot>` wraps its child in the Dart SkylineSnapshot widget so DevTools
+// automation can request per-node snapshots (YGNodeTakeSnapshot also works
+// against any YGNode).
+Dart_Handle WrapSnapshot(AppNode* node, Dart_Handle inner) {
+  if (node == nullptr || Dart_IsNull(inner) || g_page == nullptr ||
+      g_page->holder == nullptr) {
+    return inner;
+  }
+  auto* new_snapshot = reinterpret_cast<NewSnapshotFn>(
+      FindCallback(g_page->holder->ffi_table, kNewSnapshotHash));
+  if (new_snapshot == nullptr) return inner;
+  Dart_Handle snapshot = new_snapshot(
+      inner, AttrBool(node, "allowSnapshotting", false) ? 1 : 0);
+  if (Dart_IsError(snapshot)) {
+    ReportDartError("appservice NewSnapshot", snapshot);
+    return inner;
+  }
+  node->snapshot_widget = snapshot;
+  node->snapshot_p = Dart_NewPersistentHandle(snapshot);
+  return snapshot;
+}
+
 Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         NewYGConnectorFn newYGConnector, NewTextFn newText,
                         NewTextSpanFn newTextSpan,
@@ -9774,6 +10052,13 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     }
   }
 
+  if (IsSnapshotNode(node)) {
+    inner = WrapSnapshot(node, inner);
+  }
+  // Accessibility wrapper sits outside the visual wrappers so the semantics
+  // node covers the whole element.
+  inner = WrapSemantics(node, inner);
+
   Dart_Handle buffer = node->layout_buffer_p != nullptr
                            ? Dart_HandleFromPersistent(node->layout_buffer_p)
                            : node->layout_buffer;
@@ -10479,7 +10764,17 @@ void ApplyNodeAttribute(AppNode* node, const char* name,
   } else if (node->scroll_view_p != nullptr &&
              std::strcmp(name, "refresherTriggered") == 0) {
     SetRefresherTriggered(node->id, flag, false);
+  } else if (node->snapshot_p != nullptr && g_page != nullptr &&
+             g_page->holder != nullptr &&
+             std::strcmp(name, "allowSnapshotting") == 0) {
+    auto* update = reinterpret_cast<SnapshotUpdateAllowSnapshottingFn>(
+        FindCallback(g_page->holder->ffi_table,
+                     kSnapshotUpdateAllowSnapshottingHash));
+    if (update != nullptr) {
+      update(Dart_HandleFromPersistent(node->snapshot_p), flag ? 1 : 0);
+    }
   }
+  if (IsSemanticsAttribute(name)) UpdateNodeSemantics(node);
 }
 
 std::string CamelToKebab(const std::string& key) {
@@ -10734,6 +11029,301 @@ void NotifyInputState(AppNode* node) {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// D10: DevTools automation (tree dumps, GC, snapshots, runner messages)
+// ---------------------------------------------------------------------------
+
+FfiTable* ActiveFfiTable() {
+  if (g_page != nullptr && g_page->holder != nullptr &&
+      g_page->holder->ffi_table != nullptr) {
+    return g_page->holder->ffi_table;
+  }
+  return g_fallback_holder.ffi_table;
+}
+
+std::string EncodeBase64(const uint8_t* data, size_t size) {
+  static const char kAlphabet[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((size + 2) / 3) * 4);
+  for (size_t i = 0; i < size; i += 3) {
+    const uint32_t b0 = data[i];
+    const uint32_t b1 = i + 1 < size ? data[i + 1] : 0;
+    const uint32_t b2 = i + 2 < size ? data[i + 2] : 0;
+    const uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+    out.push_back(kAlphabet[(triple >> 18) & 0x3F]);
+    out.push_back(kAlphabet[(triple >> 12) & 0x3F]);
+    out.push_back(i + 1 < size ? kAlphabet[(triple >> 6) & 0x3F] : '=');
+    out.push_back(i + 2 < size ? kAlphabet[triple & 0x3F] : '=');
+  }
+  return out;
+}
+
+bool ReadDartBytes(Dart_Handle data, std::vector<uint8_t>* out) {
+  if (data == nullptr || Dart_IsError(data) || Dart_IsNull(data)) return false;
+  Dart_TypedData_Type type = Dart_TypedData_kInvalid;
+  void* bytes = nullptr;
+  intptr_t length = 0;
+  if (Dart_IsError(Dart_TypedDataAcquireData(data, &type, &bytes, &length)) ||
+      bytes == nullptr || length <= 0) {
+    return false;
+  }
+  out->assign(static_cast<uint8_t*>(bytes),
+              static_cast<uint8_t*>(bytes) + length);
+  Dart_TypedDataReleaseData(data);
+  return true;
+}
+
+bool WriteSnapshotFile(const char* prefix, uint32_t request_id,
+                       const std::string& extension,
+                       const std::vector<uint8_t>& bytes) {
+  const char* dir = std::getenv("SKYLINE_SNAPSHOT_DIR");
+  if (dir == nullptr || dir[0] == '\0') return false;
+  char path[512];
+  std::snprintf(path, sizeof(path), "%s/%s-%u.%s", dir, prefix, request_id,
+                extension.c_str());
+  std::ofstream file(path, std::ios::binary);
+  if (!file) return false;
+  file.write(reinterpret_cast<const char*>(bytes.data()),
+             static_cast<std::streamsize>(bytes.size()));
+  return file.good();
+}
+
+void EmitSnapshotJson(const char* type, uint32_t request_id, int32_t width,
+                      int32_t height, const char* format,
+                      const std::vector<uint8_t>& bytes) {
+  const std::string encoded = EncodeBase64(bytes.data(), bytes.size());
+  std::string json = "{\"type\":\"";
+  json += type;
+  json += "\",\"requestId\":";
+  json += std::to_string(request_id);
+  if (width > 0 && height > 0) {
+    json += ",\"width\":";
+    json += std::to_string(width);
+    json += ",\"height\":";
+    json += std::to_string(height);
+  }
+  json += ",\"format\":\"";
+  json += format;
+  json += "\",\"byteLength\":";
+  json += std::to_string(bytes.size());
+  json += ",\"data\":\"";
+  json += encoded;
+  json += "\"}";
+  EmitJsonEvent(json);
+}
+
+// Dart calls this back from `takeAppSnapshot` with (ptr, width, height, data).
+void OnAppSnapshotResult(intptr_t ptr, int32_t width, int32_t height,
+                         Dart_Handle data) {
+  std::vector<uint8_t> bytes;
+  const bool ok = ReadDartBytes(data, &bytes);
+  const char* format = "rgba";
+  if (!bytes.empty() && bytes.size() >= 8 && bytes[0] == 0x89 &&
+      bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
+    format = "png";
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] app snapshot: request=%ld %dx%d format=%s "
+               "bytes=%zu ok=%d\n",
+               static_cast<long>(ptr), width, height, format, bytes.size(),
+               ok ? 1 : 0);
+  if (!ok) return;
+  WriteSnapshotFile("snapshot-app", static_cast<uint32_t>(ptr),
+                    std::strcmp(format, "png") == 0 ? "png" : "rgba", bytes);
+  EmitSnapshotJson("appSnapshot", static_cast<uint32_t>(ptr), width, height,
+                   format, bytes);
+}
+
+// Dart calls this back from `YGNodeTakeSnapshot` with (ptr, data).
+void OnNodeSnapshotResult(intptr_t ptr, Dart_Handle data) {
+  std::vector<uint8_t> bytes;
+  const bool ok = ReadDartBytes(data, &bytes);
+  const char* format = "rgba";
+  if (!bytes.empty() && bytes.size() >= 8 && bytes[0] == 0x89 &&
+      bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
+    format = "png";
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] node snapshot: request=%ld format=%s "
+               "bytes=%zu ok=%d\n",
+               static_cast<long>(ptr), format, bytes.size(), ok ? 1 : 0);
+  if (!ok) return;
+  WriteSnapshotFile("snapshot-node", static_cast<uint32_t>(ptr),
+                    std::strcmp(format, "png") == 0 ? "png" : "rgba", bytes);
+  EmitSnapshotJson("nodeSnapshot", static_cast<uint32_t>(ptr), 0, 0, format,
+                   bytes);
+}
+
+void DumpTree(bool elements) {
+  FfiTable* table = ActiveFfiTable();
+  DumpTreeFn dump = nullptr;
+  if (elements) {
+    dump = reinterpret_cast<DumpTreeFn>(
+        FindCallback(table, kDumpElementTreeHash));
+  } else {
+    dump = reinterpret_cast<DumpTreeFn>(
+        FindCallback(table, kDumpRenderTreeHash));
+  }
+  std::fprintf(stderr, "[skyline-runtime] %s requested (callback=%s)\n",
+               elements ? "DumpElementTree" : "DumpRenderTree",
+               dump != nullptr ? "yes" : "no");
+  if (dump != nullptr) dump();
+}
+
+void CollectGarbage() {
+  auto* collect = reinterpret_cast<CollectGarbageFn>(
+      FindCallback(ActiveFfiTable(), kCollectGarbageHash));
+  std::fprintf(stderr, "[skyline-runtime] CollectGarbage requested "
+                       "(callback=%s)\n",
+               collect != nullptr ? "yes" : "no");
+  if (collect != nullptr) collect();
+}
+
+void SendMessageToRunner(const std::string& message) {
+  auto* send = reinterpret_cast<SendMessageToRunnerFn>(
+      FindCallback(ActiveFfiTable(), kSendMessageToRunnerHash));
+  std::fprintf(stderr,
+               "[skyline-runtime] SendMessageToRunner: \"%s\" (callback=%s)\n",
+               message.c_str(), send != nullptr ? "yes" : "no");
+  if (send != nullptr) {
+    Dart_Handle text = Dart_NewStringFromCString(message.c_str());
+    if (!Dart_IsError(text)) send(text);
+  }
+}
+
+void TakeAppSnapshot(uint32_t request_id, double scale, bool compressed) {
+  auto* take = reinterpret_cast<TakeAppSnapshotFn>(
+      FindCallback(ActiveFfiTable(), kTakeAppSnapshotHash));
+  std::fprintf(stderr,
+               "[skyline-runtime] TakeAppSnapshot: request=%u scale=%g "
+               "compressed=%d (callback=%s)\n",
+               request_id, scale, compressed ? 1 : 0,
+               take != nullptr ? "yes" : "no");
+  if (take == nullptr) return;
+  take(static_cast<intptr_t>(request_id), scale, compressed ? 1 : 0,
+       &OnAppSnapshotResult);
+}
+
+void SnapshotNode(uint32_t node_id, uint8_t format, uint32_t request_id) {
+  AppNode* node = FindNode(node_id);
+  if (node == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] node snapshot: node #%u not found\n",
+                 node_id);
+    return;
+  }
+  // `<snapshot>` elements carry a SkylineSnapshot widget; SnapshotTakeSnapshot
+  // paints it offscreen and calls back through SceneToImage.
+  if (node->snapshot_p != nullptr) {
+    auto* take = reinterpret_cast<SnapshotTakeSnapshotFn>(FindCallback(
+        ActiveFfiTable(), kSnapshotTakeSnapshotHash));
+    std::fprintf(stderr,
+                 "[skyline-runtime] snapshot widget request: node=#%u "
+                 "format=%u request=%u (callback=%s)\n",
+                 node_id, static_cast<unsigned>(format), request_id,
+                 take != nullptr ? "yes" : "no");
+    if (take == nullptr) return;
+    g_pending_node_snapshot_request.store(static_cast<int32_t>(request_id));
+    const uint8_t ok = take(Dart_HandleFromPersistent(node->snapshot_p), format,
+                            reinterpret_cast<intptr_t>(&OnNodeSnapshotResult));
+    g_pending_node_snapshot_request.store(0);
+    std::fprintf(stderr,
+                 "[skyline-runtime] snapshot widget: node=#%u accepted=%u\n",
+                 node_id, static_cast<unsigned>(ok));
+    return;
+  }
+  if (node->yoga_node_p == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] node snapshot: node #%u not materialized\n",
+                 node_id);
+    return;
+  }
+  auto* take = reinterpret_cast<YGNodeTakeSnapshotFn>(
+      FindCallback(ActiveFfiTable(), kYGNodeTakeSnapshotHash));
+  std::fprintf(stderr,
+               "[skyline-runtime] node snapshot request: node=#%u format=%u "
+               "request=%u (callback=%s)\n",
+               node_id, static_cast<unsigned>(format), request_id,
+               take != nullptr ? "yes" : "no");
+  if (take == nullptr) return;
+  // YGNodeRenderObject.takeSnapshotAsync asserts that the render object is a
+  // repaint boundary; DevTools asks for snapshots lazily, so enable it now.
+  auto* set_boundary = reinterpret_cast<YGNodeSetIsRepaintBoundaryFn>(
+      FindCallback(ActiveFfiTable(), kYGNodeSetIsRepaintBoundaryHash));
+  Dart_Handle yoga = Dart_HandleFromPersistent(node->yoga_node_p);
+  if (set_boundary != nullptr) set_boundary(yoga, 1);
+  take(yoga, format, static_cast<intptr_t>(request_id),
+       &OnNodeSnapshotResult);
+}
+
+void SetUserGesture(bool in_progress) {
+  FfiTable* table = ActiveFfiTable();
+  UserGestureFn callback = nullptr;
+  if (in_progress) {
+    callback = reinterpret_cast<UserGestureFn>(
+        FindCallback(table, kStartUserGestureHash));
+  } else {
+    callback = reinterpret_cast<UserGestureFn>(
+        FindCallback(table, kStopUserGestureHash));
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] user gesture: %s (callback=%s)\n",
+               in_progress ? "start" : "stop",
+               callback != nullptr ? "yes" : "no");
+  if (callback != nullptr) callback();
+  char buffer[96];
+  std::snprintf(buffer, sizeof(buffer),
+                "{\"type\":\"userGesture\",\"inProgress\":%s}",
+                in_progress ? "true" : "false");
+  EmitJsonEvent(buffer);
+}
+
+void RelaunchApp(uint8_t open_type) {
+  auto* relaunch = reinterpret_cast<AppCommandFn>(
+      FindCallback(ActiveFfiTable(), kRelaunchAppHash));
+  std::fprintf(stderr,
+               "[skyline-runtime] RelaunchApp: openType=%u (callback=%s)\n",
+               static_cast<unsigned>(open_type),
+               relaunch != nullptr ? "yes" : "no");
+  if (relaunch != nullptr) relaunch(open_type);
+}
+
+void ShutdownApplication() {
+  auto* shutdown = reinterpret_cast<VoidCommandFn>(
+      FindCallback(ActiveFfiTable(), kShutdownApplicationHash));
+  std::fprintf(stderr, "[skyline-runtime] ShutdownApplication requested "
+                       "(callback=%s)\n",
+               shutdown != nullptr ? "yes" : "no");
+  if (shutdown != nullptr) shutdown();
+}
+
+bool QueryAccessibilityBoldText() {
+  auto* bold = reinterpret_cast<AccessibilityBoldTextEnabledFn>(FindCallback(
+      ActiveFfiTable(), kAccessibilityBoldTextEnabledHash));
+  if (bold == nullptr) return false;
+  return bold() != 0;
+}
+
+void NotifyAccessibilitySink(int32_t kind, int32_t value) {
+  SkylineAccessibilitySink sink = g_accessibility_sink.load();
+  if (sink != nullptr) sink(kind, value);
+}
+
+bool IsAutomationOpKind(const char* kind) {
+  return kind != nullptr &&
+         (std::strcmp(kind, "accessibility") == 0 ||
+          std::strcmp(kind, "dumpElementTree") == 0 ||
+          std::strcmp(kind, "dumpRenderTree") == 0 ||
+          std::strcmp(kind, "collectGarbage") == 0 ||
+          std::strcmp(kind, "sendMessageToRunner") == 0 ||
+          std::strcmp(kind, "takeAppSnapshot") == 0 ||
+          std::strcmp(kind, "snapshotNode") == 0 ||
+          std::strcmp(kind, "userGesture") == 0 ||
+          std::strcmp(kind, "relaunchApp") == 0 ||
+          std::strcmp(kind, "shutdownApplication") == 0);
+}
 
 void ApplyOperation(const rapidjson::Value& op) {
   if (g_page == nullptr || !op.IsObject()) return;
@@ -11083,7 +11673,9 @@ void ApplyOperation(const rapidjson::Value& op) {
   } else if (std::strcmp(kind, "removeAttribute") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
     if (node != nullptr) {
-      node->attrs.erase(MemberText(op, "name"));
+      const std::string attr = MemberText(op, "name");
+      node->attrs.erase(attr);
+      if (IsSemanticsAttribute(attr.c_str())) UpdateNodeSemantics(node);
     }
   } else if (std::strcmp(kind, "setStyle") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
@@ -11189,6 +11781,39 @@ void ApplyOperation(const rapidjson::Value& op) {
     g_page->root_id = MemberUint(op, "root", 0);
   } else if (std::strcmp(kind, "startRender") == 0) {
     g_page->started = true;
+  } else if (std::strcmp(kind, "accessibility") == 0) {
+    const bool enabled = MemberNumber(op, "enabled", 0.0f) != 0.0f;
+    g_accessibility_enabled.store(enabled ? 1 : 0);
+    std::fprintf(stderr,
+                 "[skyline-runtime] accessibility: enabled=%d (automation)\n",
+                 enabled ? 1 : 0);
+    // Enable the semantics tree before the accessibility feature flag: the
+    // page's root `ExcludeSemantics` wrapper rebuilds when MediaQuery reports
+    // accessibleNavigation, and it must observe semanticsEnabled == true then.
+    NotifyAccessibilitySink(1, enabled ? 1 : 0);
+    NotifyAccessibilitySink(0, enabled ? 1 : 0);
+  } else if (std::strcmp(kind, "dumpElementTree") == 0) {
+    DumpTree(true);
+  } else if (std::strcmp(kind, "dumpRenderTree") == 0) {
+    DumpTree(false);
+  } else if (std::strcmp(kind, "collectGarbage") == 0) {
+    CollectGarbage();
+  } else if (std::strcmp(kind, "sendMessageToRunner") == 0) {
+    SendMessageToRunner(MemberText(op, "message", ""));
+  } else if (std::strcmp(kind, "takeAppSnapshot") == 0) {
+    TakeAppSnapshot(MemberUint(op, "requestId", 0),
+                    static_cast<double>(MemberNumber(op, "scale", 1.0f)),
+                    MemberNumber(op, "compressed", 1.0f) != 0.0f);
+  } else if (std::strcmp(kind, "snapshotNode") == 0) {
+    SnapshotNode(MemberUint(op, "id", 0),
+                 static_cast<uint8_t>(MemberNumber(op, "format", 4.0f)),
+                 MemberUint(op, "requestId", 0));
+  } else if (std::strcmp(kind, "userGesture") == 0) {
+    SetUserGesture(MemberNumber(op, "active", 0.0f) != 0.0f);
+  } else if (std::strcmp(kind, "relaunchApp") == 0) {
+    RelaunchApp(static_cast<uint8_t>(MemberNumber(op, "openType", 0.0f)));
+  } else if (std::strcmp(kind, "shutdownApplication") == 0) {
+    ShutdownApplication();
   } else {
     // setStyleScope / associateComponent / setListenerOption /
     // setHitTestBehavior / forceDetached / ...
@@ -12610,7 +13235,8 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
                   g_page->pending_open_type = 0;
                 }
               } else if (std::strcmp(name, "dispatchTouch") != 0 &&
-                         std::strcmp(name, "startRender") != 0) {
+                         std::strcmp(name, "startRender") != 0 &&
+                         !IsAutomationOpKind(name)) {
                 if (IsStructuralOpKind(name)) {
                   structural = true;
                   if (std::strcmp(name, "createElement") != 0) {
@@ -12761,7 +13387,8 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
         switchTab(g_page->pending_page_id, 0);
       }
       g_page->pending_open_type = 0;
-    } else if (std::strcmp(kind, "startRender") != 0) {
+    } else if (std::strcmp(kind, "startRender") != 0 &&
+               !IsAutomationOpKind(kind)) {
       needs_flush = true;
       if (IsStructuralOpKind(kind)) {
         structural = true;
@@ -13110,6 +13737,195 @@ SKYLINE_EXPORT extern "C" void SkylineSetNavigateBackInterception(
     appservice::SetPageNavigateBackInterception(page_id, enabled != 0);
   });
 }
+
+// ---------------------------------------------------------------------------
+// D10: accessibility + DevTools automation bridge (addon -> embedded runtime)
+// ---------------------------------------------------------------------------
+
+SKYLINE_EXPORT extern "C" void SkylineSetAccessibilitySink(
+    SkylineAccessibilitySink sink) {
+  g_accessibility_sink.store(sink);
+  // Replay the state the Dart app reported before the host installed its sink.
+  if (sink != nullptr) {
+    if (g_accessibility_enabled.load() != 0) sink(1, 1);
+  }
+}
+
+SKYLINE_EXPORT extern "C" int32_t SkylineGetAccessibilityState() {
+  return (g_accessibility_enabled.load() != 0 ? 1 : 0) |
+         (g_accessibility_bold_text.load() != 0 ? 2 : 0);
+}
+
+// Programmatic accessibility toggle (DevTools automation / appservice ops).
+SKYLINE_EXPORT extern "C" void SkylineRequestAccessibility(uint8_t enabled) {
+  g_accessibility_enabled.store(enabled != 0 ? 1 : 0);
+  appservice::NotifyAccessibilitySink(1, enabled != 0 ? 1 : 0);
+  appservice::NotifyAccessibilitySink(0, enabled != 0 ? 1 : 0);
+}
+
+SKYLINE_EXPORT extern "C" void SkylineDumpElementTree() {
+  PostToUiIfReady([]() { appservice::DumpTree(true); });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineDumpRenderTree() {
+  PostToUiIfReady([]() { appservice::DumpTree(false); });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineCollectGarbage() {
+  PostToUiIfReady([]() { appservice::CollectGarbage(); });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSendMessageToRunner(const char* message) {
+  std::string text = message != nullptr ? message : "";
+  PostToUiIfReady([text = std::move(text)]() {
+    appservice::SendMessageToRunner(text);
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineTakeAppSnapshot(
+    uint32_t request_id, double scale, uint8_t compressed) {
+  PostToUiIfReady([request_id, scale, compressed]() {
+    appservice::TakeAppSnapshot(request_id, scale, compressed != 0);
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSnapshotNode(uint32_t node_id,
+                                                   uint8_t format,
+                                                   uint32_t request_id) {
+  PostToUiIfReady([node_id, format, request_id]() {
+    appservice::SnapshotNode(node_id, format, request_id);
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSetUserGesture(uint8_t in_progress) {
+  PostToUiIfReady([in_progress]() {
+    appservice::SetUserGesture(in_progress != 0);
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineRelaunchApp(uint8_t open_type) {
+  PostToUiIfReady([open_type]() { appservice::RelaunchApp(open_type); });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineShutdownApplication() {
+  PostToUiIfReady([]() { appservice::ShutdownApplication(); });
+}
+
+// Dart reports the platform accessibility state (`SkylineApplication
+// .notifyAccessibilityChanged`).  Persist it, drive the embedder's semantics
+// tree, and query the registered AccessibilityBoldTextEnabled callback.
+SKYLINE_EXPORT extern "C" void UpdateAccessibility(void* /*runtime_ptr*/,
+                                                   uint8_t enabled) {
+  g_accessibility_enabled.store(enabled != 0 ? 1 : 0);
+  std::fprintf(stderr, "[skyline-runtime] UpdateAccessibility: enabled=%u\n",
+               static_cast<unsigned>(enabled != 0));
+  appservice::NotifyAccessibilitySink(1, enabled != 0 ? 1 : 0);
+  appservice::NotifyAccessibilitySink(0, enabled != 0 ? 1 : 0);
+#ifdef SKYLINE_EMBEDDED
+  auto runner = UiTaskRunner();
+  if (runner) {
+    runner->PostTask([]() {
+      DemoPageApiScope scope;
+      const bool bold = appservice::QueryAccessibilityBoldText();
+      g_accessibility_bold_text.store(bold ? 1 : 0);
+      std::fprintf(stderr,
+                   "[skyline-runtime] AccessibilityBoldTextEnabled: %d\n",
+                   bold ? 1 : 0);
+    });
+  }
+#endif
+}
+
+// Called by the framework when the platform accessibility features change.
+SKYLINE_EXPORT extern "C" void OnAccessibilityFeaturesChanged(
+    void* /*runtime_ptr*/, uint8_t bold_text) {
+  g_accessibility_bold_text.store(bold_text != 0 ? 1 : 0);
+  std::fprintf(stderr,
+               "[skyline-runtime] OnAccessibilityFeaturesChanged: boldText=%u\n",
+               static_cast<unsigned>(bold_text != 0));
+  char buffer[96];
+  std::snprintf(buffer, sizeof(buffer),
+                "{\"type\":\"accessibilityFeatures\",\"boldText\":%s}",
+                bold_text != 0 ? "true" : "false");
+  appservice::EmitJsonEvent(buffer);
+}
+
+#ifdef SKYLINE_EMBEDDED
+// `SkylineSnapshot.takeSnapshotAsync` builds an offscreen Scene and hands it
+// to the native runtime (the private dart:ui has no `Scene.toImage`).  Flatten
+// the layer tree into a CPU display list, rasterize it with Skia and call the
+// Dart `OnSnapshotCallbackNative` with a Uint8List.  `format` follows
+// ui.ImageByteFormat: 4 = png, other values = raw RGBA.
+SKYLINE_EXPORT extern "C" void SceneToImage(Dart_Handle scene_handle,
+                                            int32_t width, int32_t height,
+                                            int32_t format,
+                                            intptr_t callback_ptr) {
+  std::vector<uint8_t> bytes;
+  if (scene_handle != nullptr && !Dart_IsError(scene_handle) &&
+      width > 0 && height > 0) {
+    auto* scene =
+        tonic::DartConverter<flutter::Scene*>::FromDart(scene_handle);
+    if (scene != nullptr) {
+      auto layer_tree = scene->takeLayerTree(static_cast<uint64_t>(width),
+                                             static_cast<uint64_t>(height));
+      if (layer_tree) {
+        auto display_list = layer_tree->Flatten(
+            flutter::DlRect::MakeLTRB(0.0, 0.0, static_cast<double>(width),
+                                      static_cast<double>(height)),
+            nullptr, nullptr);
+        if (display_list) {
+          const SkImageInfo info =
+              SkImageInfo::Make(width, height, kRGBA_8888_SkColorType,
+                                kPremul_SkAlphaType);
+          auto surface = SkSurfaces::Raster(info);
+          if (surface != nullptr) {
+            flutter::DlSkCanvasDispatcher dispatcher(surface->getCanvas());
+            display_list->Dispatch(dispatcher);
+            if (format == 4) {  // ui.ImageByteFormat.png
+              auto image = surface->makeImageSnapshot();
+              sk_sp<SkData> encoded =
+                  image != nullptr
+                      ? SkPngEncoder::Encode(nullptr, image.get(), {})
+                      : nullptr;
+              if (encoded != nullptr) {
+                bytes.assign(encoded->bytes(),
+                             encoded->bytes() + encoded->size());
+              }
+            } else {
+              bytes.resize(static_cast<size_t>(width) * height * 4);
+              if (!surface->readPixels(info, bytes.data(),
+                                       static_cast<size_t>(width) * 4, 0, 0)) {
+                bytes.clear();
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  Dart_Handle data = Dart_NewTypedData(
+      Dart_TypedData_kUint8, static_cast<intptr_t>(bytes.size()));
+  if (!Dart_IsError(data) && !bytes.empty()) {
+    Dart_TypedData_Type type = Dart_TypedData_kInvalid;
+    void* out = nullptr;
+    intptr_t length = 0;
+    if (!Dart_IsError(
+            Dart_TypedDataAcquireData(data, &type, &out, &length)) &&
+        out != nullptr) {
+      std::memcpy(out, bytes.data(),
+                  std::min<size_t>(bytes.size(), static_cast<size_t>(length)));
+      Dart_TypedDataReleaseData(data);
+    }
+  }
+  std::fprintf(stderr,
+               "[skyline-runtime] SceneToImage: %dx%d format=%d bytes=%zu\n",
+               width, height, format, bytes.size());
+  auto callback = reinterpret_cast<NodeSnapshotCallback>(callback_ptr);
+  if (callback != nullptr) {
+    callback(g_pending_node_snapshot_request.load(), data);
+  }
+}
+#endif  // SKYLINE_EMBEDDED
 
 // Called by the Dart route while a back gesture is intercepted.
 SKYLINE_EXPORT extern "C" void OnNavigateBackIntercept(intptr_t /*runtime*/,
@@ -13894,7 +14710,6 @@ SKYLINE_VOID_STUB(NotifyFontFaceLoad)
 SKYLINE_VOID_STUB(NotifyNavigateBackByGesture)
 SKYLINE_VOID_STUB(NotifyNavigateBackDoneByGesture)
 SKYLINE_VOID_STUB(NotifyWindowReady)
-SKYLINE_VOID_STUB(OnAccessibilityFeaturesChanged)
 SKYLINE_VOID_STUB(OnLayoutFinished)
 SKYLINE_VOID_STUB(OnViewportChanged)
 #ifndef SKYLINE_EMBEDDED
@@ -13902,14 +14717,22 @@ SKYLINE_VOID_STUB(RemovePendingFont)
 #endif
 SKYLINE_VOID_STUB(ReportFrameTiming)
 SKYLINE_VOID_STUB(ReportPerformance)
+#ifndef SKYLINE_EMBEDDED
 SKYLINE_VOID_STUB(SceneToImage)
+#endif
 SKYLINE_VOID_STUB(SetDevicePixelRatio)
 SKYLINE_VOID_STUB(TraceBeginDart)
 SKYLINE_VOID_STUB(TraceEndDart)
 SKYLINE_VOID_STUB(TraceFlushDart)
 SKYLINE_VOID_STUB(TraceInstantDart)
-SKYLINE_VOID_STUB(UpdateAccessibility)
 SKYLINE_VOID_STUB(UpdatePlatformBrightness)
+#ifndef SKYLINE_EMBEDDED
+// Embedded builds provide the real implementations above (accessibility
+// bridge / semantics tree).  The DL-only library still has to export the full
+// 73-symbol lookup table.
+SKYLINE_VOID_STUB(OnAccessibilityFeaturesChanged)
+SKYLINE_VOID_STUB(UpdateAccessibility)
+#endif
 #ifndef SKYLINE_EMBEDDED
 // Embedded builds provide the real implementations above; the DL-only stub
 // still has to export the full 73-symbol lookup table.

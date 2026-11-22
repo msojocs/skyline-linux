@@ -60,6 +60,21 @@ function loadBootstrap() {
     setNavigateBackInterception(...args) {
       calls.push(['setNavigateBackInterception', ...args]);
     },
+    setAccessibility(...args) { calls.push(['setAccessibility', ...args]); },
+    accessibilityState() { return 3; },
+    dumpElementTree(...args) { calls.push(['dumpElementTree', ...args]); },
+    dumpRenderTree(...args) { calls.push(['dumpRenderTree', ...args]); },
+    collectGarbage(...args) { calls.push(['collectGarbage', ...args]); },
+    sendMessageToRunner(...args) {
+      calls.push(['sendMessageToRunner', ...args]);
+    },
+    takeAppSnapshot(...args) { calls.push(['takeAppSnapshot', ...args]); },
+    snapshotNode(...args) { calls.push(['snapshotNode', ...args]); },
+    setUserGesture(...args) { calls.push(['setUserGesture', ...args]); },
+    relaunchApp(...args) { calls.push(['relaunchApp', ...args]); },
+    shutdownApplication(...args) {
+      calls.push(['shutdownApplication', ...args]);
+    },
   };
   const sandbox = {
     __skylineNative: native,
@@ -296,4 +311,49 @@ test('bootstrap: swiper/picker/input widget events reach their registrations', (
     ['pickerColumnSetCurrent', 4, column.viewTag, 2],
     ['inputFocus', 4, input.viewTag, true],
   ]));
+});
+
+test('bootstrap: D10 accessibility and automation helpers bridge to native', () => {
+  const { sandbox, calls, jsonSink } = loadBootstrap();
+  const debug = sandbox.__skylineDebug;
+  assert.equal(typeof jsonSink.value, 'function');
+
+  debug.setAccessibility(4, true);
+  assert.equal(debug.accessibilityState(), 3);
+  debug.dumpElementTree(4);
+  debug.dumpRenderTree(4);
+  debug.collectGarbage(4);
+  debug.sendMessageToRunner(4, 42);
+  debug.takeAppSnapshot(4, 7, 2, false);
+  debug.snapshotNode(4, 9, 4, 8);
+  debug.setUserGesture(4, true);
+  debug.relaunchApp(4, 1);
+  debug.shutdownApplication(4);
+
+  assert.equal(JSON.stringify(calls), JSON.stringify([
+    ['setAccessibility', 4, true],
+    ['dumpElementTree', 4],
+    ['dumpRenderTree', 4],
+    ['collectGarbage', 4],
+    ['sendMessageToRunner', 4, '42'],
+    ['takeAppSnapshot', 4, 7, 2, false],
+    ['snapshotNode', 4, 9, 4, 8],
+    ['setUserGesture', 4, true],
+    ['relaunchApp', 4, 1],
+    ['shutdownApplication', 4],
+  ]));
+
+  // Rich events from the native JSON channel are recorded for DevTools.
+  jsonSink.value('{"type":"appSnapshot","requestId":7,"byteLength":4,' +
+    '"format":"png","width":10,"height":10,"data":"AAAA"}');
+  jsonSink.value('{"type":"nodeSnapshot","requestId":8,"byteLength":4,' +
+    '"format":"rgba","data":"AAAA"}');
+  jsonSink.value('{"type":"accessibilityFeatures","boldText":false}');
+  jsonSink.value('{"type":"userGesture","inProgress":true}');
+  assert.equal(debug.snapshotEvents.length, 2);
+  assert.equal(debug.snapshotEvents[0].requestId, 7);
+  assert.equal(debug.accessibilityEvents.length, 1);
+  assert.equal(debug.accessibilityEvents[0].boldText, false);
+  assert.equal(debug.userGestureEvents.length, 1);
+  assert.equal(debug.userGestureEvents[0].inProgress, true);
 });

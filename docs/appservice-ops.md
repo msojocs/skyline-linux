@@ -117,6 +117,20 @@ tap 触发的 `setData` 会产生 attach 后的操作，录制器把它们写入
 | `keyboardStatus` | `inputKey, height` | 调用 `UpdateKeyboardStatus`（native → Dart 键盘高度通道） |
 | `dispatchKey` | `text` | 在光标处插入文本（替换选区；测试用） |
 | `addAnimatedStyle` | `id, timeline: [{atMs, style}]` 或 `id, updates` | 按时间线应用动画样式覆盖 |
+| `accessibility` | `enabled` | 切换无障碍模式；宿主开启语义树并下发 `accessibleNavigation` 特性 |
+| `dumpElementTree` / `dumpRenderTree` | — | 调用 Dart `TreeDumper`，输出元素/渲染树到日志 |
+| `collectGarbage` | — | 调用 `PlatformDispatcher.collectGarbage()` |
+| `sendMessageToRunner` | `message` | 调用 `SendMessageToRunner(message)` |
+| `takeAppSnapshot` | `requestId, scale, compressed` | 整页快照（`appSnapshot` JSON 事件 + 可选文件） |
+| `snapshotNode` | `id, format, requestId` | 节点快照；首次请求时把节点设为 repaint boundary |
+| `userGesture` | `active` | 调用 `StartUserGesture` / `StopUserGesture` |
+| `relaunchApp` | `openType` | 调用 `RelaunchApp(openType)` |
+| `shutdownApplication` | — | 调用 `ShutdownApplication()` |
+
+自动化类操作不参与页面 flush：它们是命令/查询，不应触发重排或重建。
+快照字节写入 `SKYLINE_SNAPSHOT_DIR`（`snapshot-app-<id>.png` /
+`snapshot-node-<id>.png`），并作为 `appSnapshot` / `nodeSnapshot` JSON 事件
+经 `SkylineSetJsonEventSink` 投递。
 
 `setStyleScope` / `associateComponent` / `setListenerOption` /
 `setHitTestBehavior` / `createContext` / `setAsTab` / `register*Callback` /

@@ -9,6 +9,7 @@
 
 #include <flutter_embedder.h>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -31,6 +32,13 @@
 extern "C" void DispatchSkylineKeyEvent(int32_t kind, uint32_t logical,
                                         const char* text)
     __attribute__((weak));
+
+// D10: the embedded runtime asks the host to apply accessibility state on the
+// platform thread (the embedder API has a platform-thread contract).
+extern "C" void SkylineSetAccessibilitySink(void (*sink)(int32_t kind,
+                                                         int32_t value))
+    __attribute__((weak));
+extern "C" int32_t SkylineGetAccessibilityState() __attribute__((weak));
 
 namespace {
 
@@ -61,7 +69,52 @@ struct HostState {
 
   // Set before FlutterEngineRun; used by the callbacks.
   std::string pixel_format = "bgra";
+
+  // Accessibility requests queued by the embedded runtime from the Dart UI
+  // thread.  They are applied on the platform thread (the thread that called
+  // FlutterEngineRun), which is where the embedder semantics APIs must run.
+  std::deque<std::pair<int32_t, int32_t>> accessibility_requests;
 };
+
+HostState* g_accessibility_host = nullptr;
+
+void OnAccessibilitySink(int32_t kind, int32_t value) {
+  HostState* state = g_accessibility_host;
+  if (state == nullptr) return;
+  {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->accessibility_requests.emplace_back(kind, value);
+  }
+  state->cv.notify_all();
+}
+
+// The embedder forwards the framework's semantics tree here.  Under
+// SKYLINE_APP_SERVICE_DEBUG each node is logged so automation/tests can assert
+// labels/roles without a platform accessibility service.
+void OnSemanticsUpdate(const FlutterSemanticsUpdate2* update, void* /*data*/) {
+  if (update == nullptr || std::getenv("SKYLINE_APP_SERVICE_DEBUG") == nullptr) {
+    return;
+  }
+  for (size_t i = 0; i < update->node_count; i++) {
+    const FlutterSemanticsNode2* node = update->nodes[i];
+    if (node == nullptr) continue;
+    const bool is_button =
+        node->flags2 != nullptr && node->flags2->is_button;
+    const bool is_text_field =
+        node->flags2 != nullptr && node->flags2->is_text_field;
+    const bool is_header = node->flags2 != nullptr && node->flags2->is_header;
+    std::fprintf(stderr,
+                 "[host] semantics node: id=%d label=\"%s\" value=\"%s\" "
+                 "button=%d textField=%d header=%d children=%zu "
+                 "rect=(%g,%g %gx%g)\n",
+                 node->id, node->label != nullptr ? node->label : "",
+                 node->value != nullptr ? node->value : "", is_button ? 1 : 0,
+                 is_text_field ? 1 : 0, is_header ? 1 : 0, node->child_count,
+                 node->rect.left, node->rect.top,
+                 node->rect.right - node->rect.left,
+                 node->rect.bottom - node->rect.top);
+  }
+}
 
 struct Options {
   std::string assets;
@@ -585,6 +638,9 @@ int main(int argc, char** argv) {
   args.log_message_callback = &OnLogMessage;
   args.log_tag = "skyline_host";
   args.shutdown_dart_vm_when_done = true;
+  // D10: capture the framework semantics tree (only produced once the runtime
+  // enables semantics through the accessibility sink below).
+  args.update_semantics_callback2 = &OnSemanticsUpdate;
   if (!opts.entrypoint.empty()) {
     args.custom_dart_entrypoint = opts.entrypoint.c_str();
   }
@@ -608,6 +664,13 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "FlutterEngineRun failed: %d\n",
                  static_cast<int>(run_result));
     return kExitEngineRunFailed;
+  }
+  // The embedded runtime (linked into libflutter_engine.so) may have queued an
+  // accessibility state before the host existed.  Install the sink now; its
+  // setter replays semantics-enabled state, and the ops below drive features.
+  g_accessibility_host = &state;
+  if (SkylineSetAccessibilitySink != nullptr) {
+    SkylineSetAccessibilitySink(&OnAccessibilitySink);
   }
   auto collect_aot = [&aot_data]() {
     if (aot_data != nullptr) {
@@ -789,6 +852,45 @@ int main(int argc, char** argv) {
           pending_events
               ? state.cv.wait_for(lock, std::chrono::milliseconds(5))
               : state.cv.wait_until(lock, deadline);
+
+      // The engine posts semantic updates (and other platform callbacks) to the
+      // platform task runner.  This host does not run an fml message loop, so
+      // drain the pending tasks explicitly on every iteration.
+      lock.unlock();
+      __FlutterEngineFlushPendingTasksNow();
+      lock.lock();
+
+      // Apply accessibility requests on the platform thread (the embedder API
+      // requires the FlutterEngineRun thread).
+      std::deque<std::pair<int32_t, int32_t>> accessibility;
+      accessibility.swap(state.accessibility_requests);
+      if (!accessibility.empty()) {
+        lock.unlock();
+        for (const auto& request : accessibility) {
+          if (request.first == 0) {
+            const FlutterAccessibilityFeature features =
+                request.second != 0
+                    ? kFlutterAccessibilityFeatureAccessibleNavigation
+                    : static_cast<FlutterAccessibilityFeature>(0);
+            const FlutterEngineResult result =
+                FlutterEngineUpdateAccessibilityFeatures(engine, features);
+            std::fprintf(stderr,
+                         "[host] accessibility features: %d (result=%d)\n",
+                         static_cast<int>(features),
+                         static_cast<int>(result));
+          } else {
+            const FlutterEngineResult result =
+                FlutterEngineUpdateSemanticsEnabled(engine,
+                                                    request.second != 0);
+            std::fprintf(stderr,
+                         "[host] semantics enabled: %d (result=%d)\n",
+                         request.second != 0 ? 1 : 0,
+                         static_cast<int>(result));
+          }
+        }
+        lock.lock();
+      }
+
       if (!state.presented && std::chrono::steady_clock::now() >= deadline) {
         break;
       }
@@ -899,6 +1001,7 @@ int main(int argc, char** argv) {
   // FlutterEngineShutdown must run on the platform (creation) thread.  The
   // appservice kernel keeps timers/async work alive and can make shutdown slow;
   // use --no-shutdown in smoke tests that only need the frame.
+  g_accessibility_host = nullptr;
   const FlutterEngineResult shutdown_result = FlutterEngineShutdown(engine);
   if (shutdown_result != kSuccess) {
     std::fprintf(stderr, "FlutterEngineShutdown failed: %d\n",

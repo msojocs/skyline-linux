@@ -1046,6 +1046,10 @@
   const selectionEvents = [];
   const refresherEvents = [];
   const navigateBackIntercepts = [];
+  // D10: accessibility / automation events reported by the native runtime.
+  const accessibilityEvents = [];
+  const snapshotEvents = [];
+  const userGestureEvents = [];
   // Refresher callbacks registered by the builtin scroll-view component.
   const refresherPullingCallbacks = new Map();
   const refresherWillRefreshCallbacks = new Map();
@@ -1745,6 +1749,9 @@
     selectionEvents,
     refresherEvents,
     navigateBackIntercepts,
+    accessibilityEvents,
+    snapshotEvents,
+    userGestureEvents,
     bridgeElements,
     rect: nodeRect,
     hit: hitTestElement,
@@ -1792,6 +1799,76 @@
       if (typeof native.scrollNodeTo === 'function') {
         native.scrollNodeTo(windowId, nodeId, top);
       }
+    },
+    // -- D10: accessibility + DevTools automation ---------------------------
+    setAccessibility(windowId, enabled) {
+      if (typeof native.setAccessibility === 'function') {
+        return native.setAccessibility(windowId, !!enabled);
+      }
+      return undefined;
+    },
+    accessibilityState() {
+      return typeof native.accessibilityState === 'function'
+        ? native.accessibilityState()
+        : 0;
+    },
+    dumpElementTree(windowId) {
+      if (typeof native.dumpElementTree === 'function') {
+        return native.dumpElementTree(windowId);
+      }
+      return undefined;
+    },
+    dumpRenderTree(windowId) {
+      if (typeof native.dumpRenderTree === 'function') {
+        return native.dumpRenderTree(windowId);
+      }
+      return undefined;
+    },
+    collectGarbage(windowId) {
+      if (typeof native.collectGarbage === 'function') {
+        return native.collectGarbage(windowId);
+      }
+      return undefined;
+    },
+    sendMessageToRunner(windowId, message) {
+      if (typeof native.sendMessageToRunner === 'function') {
+        return native.sendMessageToRunner(windowId, String(message));
+      }
+      return undefined;
+    },
+    takeAppSnapshot(windowId, requestId, scale, compressed) {
+      if (typeof native.takeAppSnapshot === 'function') {
+        return native.takeAppSnapshot(windowId, requestId,
+          typeof scale === 'number' ? scale : 1,
+          compressed !== false);
+      }
+      return undefined;
+    },
+    snapshotNode(windowId, nodeId, format, requestId) {
+      if (typeof native.snapshotNode === 'function') {
+        return native.snapshotNode(windowId, nodeId,
+          typeof format === 'number' ? format : 4,
+          typeof requestId === 'number' ? requestId : nodeId);
+      }
+      return undefined;
+    },
+    setUserGesture(windowId, active) {
+      if (typeof native.setUserGesture === 'function') {
+        return native.setUserGesture(windowId, !!active);
+      }
+      return undefined;
+    },
+    relaunchApp(windowId, openType) {
+      if (typeof native.relaunchApp === 'function') {
+        return native.relaunchApp(windowId, openType || 0);
+      }
+      return undefined;
+    },
+    shutdownApplication(windowId) {
+      if (typeof native.shutdownApplication === 'function') {
+        return native.shutdownApplication(windowId);
+      }
+      return undefined;
     },
     log(message) {
       if (typeof native.log === 'function') native.log(String(message));
@@ -2342,6 +2419,18 @@
           native.log(`navigateBack intercept dispatch failed: ${error && error.message}`);
         }
       }
+      return;
+    }
+    if (event.type === 'appSnapshot' || event.type === 'nodeSnapshot') {
+      snapshotEvents.push(event);
+      return;
+    }
+    if (event.type === 'accessibilityFeatures') {
+      accessibilityEvents.push(event);
+      return;
+    }
+    if (event.type === 'userGesture') {
+      userGestureEvents.push(event);
       return;
     }
   }
