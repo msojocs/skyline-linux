@@ -359,12 +359,27 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
 
 ## 3.6 HTTP / 路由 / 输入通道
 
-- **HTTP**：`ForwardHttpGet` 把请求转发给 Dart 的 `RequestHttpResource`
-  （DevTools 下由 `dart:io HttpClient` 真正发起请求），Dart 完成后经原生 C
-  回调回到 UI task runner，再调用 `OnForwardHttpGetResponse`，
-  `HttpForwarder.httpGet` 的 Future 完成。`SKYLINE_HTTP_TEST_URL` 会让
-  `sample/devtools.dart` 启动时发起一次 `httpGet` 并打印
-  `SKYLINE_HTTP_RESULT <len> <body>`。
+- **HTTP**：DevTools 下 Skyline 的图片/字体加载优先走
+  `SkylineShell.setHttpRequestCallback`（DevTools 的 `httpRequest` 用
+  appservice 上下文的 `window.fetch` 真正发起请求），因此会出现在
+  Network 面板。链路：
+
+  ```
+  native RequestHttpResource/ForwardHttpGet
+    -> SkylineSetHttpRequestSink(request_id, url)      (runtime -> addon)
+    -> native.setHttpRequestSink -> shell callback      (bootstrap -> DevTools)
+    -> window.fetch(url)
+    -> SkylineShell.notifyHttpRequestComplete(id,..,buf)
+    -> native.httpRequestComplete -> SkylineNotifyHttpRequestComplete
+    -> DeliverImagePayload / DeliverPendingHttpGet      (UI task runner)
+  ```
+
+  `setHttpRequestCallback` 未注册、返回空 payload 或 2 s 内未完成时，自动回退到
+  Dart 的 `RequestHttpResource`（`dart:io HttpClient`）。`ForwardHttpGet` 的回退
+  路径仍经 `OnForwardHttpGetResponse` 完成 `HttpForwarder.httpGet` 的 Future。
+  `SKYLINE_HTTP_TEST_URL` 会让 `sample/devtools.dart` 启动时发起一次 `httpGet`
+  并打印 `SKYLINE_HTTP_RESULT <len> <body>`。实测 album 示例的 26 张远程图片
+  在打开 Network 面板并重新加载/编译后全部显示（status 200、type fetch）。
 - **路由栈**：每个 `attach` 都物化为一条 `CreatePageRoute`。`notifyNavigateTo`
   记录 openType=navigateTo（4），初始 attach 为 kAppLaunch（0）；
   `notifySwitchTab` 调用 Dart 注册的 `SwitchTab`，已有页面时直接切 tab；

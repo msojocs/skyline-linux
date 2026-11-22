@@ -27,6 +27,8 @@ function loadBootstrap() {
   const sink = { value: null };
   const widgetSink = { value: null };
   const jsonSink = { value: null };
+  const httpSink = { value: null };
+  const httpCompletions = [];
   const calls = [];
   const appliedOps = [];
   const native = {
@@ -42,6 +44,10 @@ function loadBootstrap() {
     setScrollSink(callback) { sink.value = callback; },
     setWidgetEventSink(callback) { widgetSink.value = callback; },
     setJsonEventSink(callback) { jsonSink.value = callback; },
+    setHttpRequestSink(callback) { httpSink.value = callback; },
+    httpRequestComplete(requestId, bytes) {
+      httpCompletions.push({ requestId, length: bytes ? bytes.length : 0 });
+    },
     swiperTo(...args) { calls.push(['swiperTo', ...args]); },
     pickerColumnSetCurrent(...args) {
       calls.push(['pickerColumnSetCurrent', ...args]);
@@ -88,7 +94,7 @@ function loadBootstrap() {
   };
   vm.createContext(sandbox);
   vm.runInContext(bootstrapSource, sandbox, { filename: 'bootstrap.js' });
-  return { sandbox, sink, widgetSink, jsonSink, calls, appliedOps };
+  return { sandbox, sink, widgetSink, jsonSink, httpSink, httpCompletions, calls, appliedOps };
 }
 
 test('bootstrap: native scroll events dispatch to the window and worklet registrations', () => {
@@ -356,4 +362,32 @@ test('bootstrap: D10 accessibility and automation helpers bridge to native', () 
   assert.equal(debug.accessibilityEvents[0].boldText, false);
   assert.equal(debug.userGestureEvents.length, 1);
   assert.equal(debug.userGestureEvents[0].inProgress, true);
+});
+
+test('bootstrap: HTTP requests proxy through the SkylineShell callback', async () => {
+  const { sandbox, httpSink, httpCompletions } = loadBootstrap();
+  assert.equal(typeof httpSink.value, 'function',
+    'bootstrap installs setHttpRequestSink');
+
+  const shell = new sandbox.SkylineShell();
+  const requests = [];
+  shell.setHttpRequestCallback((request) => {
+    requests.push(request);
+    return Promise.resolve(new Uint8Array([1, 2, 3]));
+  });
+
+  httpSink.value({ requestId: 42, url: 'https://res.wx.qq.com/a.jpg' });
+  await Promise.resolve();
+  assert.equal(JSON.stringify(requests),
+    JSON.stringify([{ request_id: 42, url: 'https://res.wx.qq.com/a.jpg' }]));
+
+  // The DevTools callback invokes notifyHttpRequestComplete with the bytes.
+  shell.notifyHttpRequestComplete(42, 0, 200, {}, new Uint8Array([1, 2, 3]));
+  assert.deepEqual(httpCompletions, [{ requestId: 42, length: 3 }]);
+
+  // A missing callback completes with an empty payload so native falls back.
+  const second = loadBootstrap();
+  second.httpSink.value({ requestId: 43, url: 'https://example.invalid/b.jpg' });
+  assert.deepEqual(second.httpCompletions,
+    [{ requestId: 43, length: 0 }]);
 });

@@ -144,6 +144,9 @@ names.append("SkylineSnapshotNode")
 names.append("SkylineSetUserGesture")
 names.append("SkylineRelaunchApp")
 names.append("SkylineShutdownApplication")
+# DevTools Network panel bridge: images/fonts fetch through the pageframe.
+names.append("SkylineSetHttpRequestSink")
+names.append("SkylineNotifyHttpRequestComplete")
 missing = [name for name in names if f"    {name};" not in exports]
 if missing:
     anchor = "    kInternalFlutterGpu*;\n"

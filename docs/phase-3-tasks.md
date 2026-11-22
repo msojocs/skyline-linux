@@ -400,16 +400,23 @@
     `sendMessageToRunner`、`takeAppSnapshot`、`snapshotNode`、`userGesture`、
     `accessibility`、`relaunchApp`、`shutdownApplication`）与 addon
     `__skylineDebug.*` 暴露给 DevTools。
+  - **DevTools Network 面板**：图片/字体 HTTP 请求优先经
+    `SkylineShell.setHttpRequestCallback`（appservice 上下文的 `window.fetch`）
+    代理，新增 `SkylineSetHttpRequestSink`/`SkylineNotifyHttpRequestComplete`
+    与 addon `native.setHttpRequestSink`/`httpRequestComplete` 双向通道；
+    空响应或 2 s 超时自动回退 `dart:io`。album 示例的 26 张远程图片可在
+    Network 面板看到（status 200，type fetch）。
   - 回归/验证：新增 `test:ops` 用例覆盖语义树、宿主语义节点、in-place 标签
     更新、两类快照、树 dump、GC、runner 消息与用户手势；`test:ops` **76 / 76**。
-    bootstrap 单测覆盖全部 `__skylineDebug` 自动化方法与 JSON 事件分发；
-    `npm test` **176 / 200**（24 skipped）。
+    bootstrap 单测覆盖全部 `__skylineDebug` 自动化方法、JSON 事件分发与
+    HTTP 代理（含缺失回调/空 payload 回退）；`npm test` **177 / 201**
+    （24 skipped）。
 
 ## 测试基线（x / y）
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **176 / 200** | 24 skipped，0 fail |
+| `npm test` | **177 / 201** | 24 skipped，0 fail |
 | `npm run test:ops` | **76 / 76** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |

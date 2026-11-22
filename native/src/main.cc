@@ -69,6 +69,15 @@ extern "C" void SkylineSnapshotNode(uint32_t node_id, uint8_t format,
 extern "C" void SkylineSetUserGesture(uint8_t in_progress);
 extern "C" void SkylineRelaunchApp(uint8_t open_type);
 extern "C" void SkylineShutdownApplication();
+// DevTools Network bridge: image/font HTTP requests are proxied through the
+// pageframe renderer's fetch so they appear in the Network panel.
+extern "C" void SkylineSetHttpRequestSink(
+    void (*sink)(uint32_t request_id, const char* url),
+    int32_t (*has_callback)());
+extern "C" void SkylineNotifyHttpRequestComplete(uint32_t request_id,
+                                                 const uint8_t* data,
+                                                 int32_t length,
+                                                 uint8_t from_cache);
 #endif
 
 namespace {
@@ -130,6 +139,14 @@ struct AddonState {
 std::atomic<napi_threadsafe_function> g_scroll_tsfn{nullptr};
 std::atomic<napi_threadsafe_function> g_widget_tsfn{nullptr};
 std::atomic<napi_threadsafe_function> g_json_tsfn{nullptr};
+std::atomic<napi_threadsafe_function> g_http_request_tsfn{nullptr};
+// Set when the DevTools pageframe registers SkylineShell.setHttpRequestCallback.
+std::atomic<bool> g_http_request_callback_registered{false};
+
+struct HttpRequestEvent {
+  uint32_t request_id = 0;
+  std::string url;
+};
 
 struct ScrollEvent {
   uint32_t node_id = 0;
@@ -230,6 +247,9 @@ napi_value SetCallback(napi_env env, napi_callback_info info) {
     return Throw(env, napi_generic_failure, "Unable to retain callback");
   }
   state->callbacks[name] = reference;
+  if (name == "setHttpRequestCallback") {
+    g_http_request_callback_registered.store(true);
+  }
   return Undefined(env);
 }
 
@@ -869,6 +889,105 @@ napi_value SetJsonEventSink(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
+// DevTools Network bridge.  Runtime image/font loads arrive on the engine UI
+// thread; the pageframe JS callback registered through
+// `SkylineShell.setHttpRequestCallback` performs the fetch (window.fetch) and
+// calls `native.httpRequestComplete` with the bytes.
+void CallHttpRequest(napi_env env, napi_value js_callback, void* /*context*/,
+                     void* data) {
+  auto* event = static_cast<HttpRequestEvent*>(data);
+  if (env == nullptr || js_callback == nullptr || event == nullptr) {
+    delete event;
+    return;
+  }
+  napi_value object = nullptr;
+  napi_create_object(env, &object);
+  napi_value request_id = nullptr;
+  napi_create_uint32(env, event->request_id, &request_id);
+  napi_set_named_property(env, object, "requestId", request_id);
+  napi_value url = nullptr;
+  napi_create_string_utf8(env, event->url.c_str(), NAPI_AUTO_LENGTH, &url);
+  napi_set_named_property(env, object, "url", url);
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  napi_value result = nullptr;
+  napi_call_function(env, undefined, js_callback, 1, &object, &result);
+  delete event;
+}
+
+void AddonHttpRequestSink(uint32_t request_id, const char* url) {
+  napi_threadsafe_function tsfn = g_http_request_tsfn.load();
+  if (tsfn == nullptr) return;
+  auto* event = new HttpRequestEvent();
+  event->request_id = request_id;
+  event->url = url != nullptr ? url : "";
+  if (napi_call_threadsafe_function(tsfn, event, napi_tsfn_nonblocking) !=
+      napi_ok) {
+    delete event;
+  }
+}
+
+int32_t AddonHasHttpRequestCallback() {
+  return g_http_request_callback_registered.load() ? 1 : 0;
+}
+
+napi_value SetHttpRequestSink(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1 || !IsType(env, argv[0], napi_function)) {
+    return Throw(env, napi_invalid_arg,
+                 "setHttpRequestSink expects a function");
+  }
+  napi_value resource_name = nullptr;
+  napi_create_string_utf8(env, "skyline_http_request", NAPI_AUTO_LENGTH,
+                          &resource_name);
+  napi_threadsafe_function tsfn = nullptr;
+  if (napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 32,
+                                      1, nullptr, nullptr, nullptr,
+                                      CallHttpRequest, &tsfn) != napi_ok) {
+    return Throw(env, napi_generic_failure,
+                 "Unable to create HTTP request callback");
+  }
+  napi_unref_threadsafe_function(env, tsfn);
+  napi_threadsafe_function previous = g_http_request_tsfn.exchange(tsfn);
+  if (previous != nullptr) {
+    napi_release_threadsafe_function(previous, napi_tsfn_release);
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSetHttpRequestSink(&AddonHttpRequestSink, &AddonHasHttpRequestCallback);
+#endif
+  return Undefined(env);
+}
+
+// `httpRequestComplete(requestId, bytes)` from the pageframe fetch callback.
+napi_value HttpRequestComplete(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2] = {nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 2) {
+    return Throw(env, napi_invalid_arg,
+                 "httpRequestComplete expects (requestId, bytes)");
+  }
+  const uint32_t request_id =
+      static_cast<uint32_t>(ReadNumber(env, argv[0]));
+  void* data = nullptr;
+  size_t length = 0;
+  bool is_typed = false;
+  if (napi_is_typedarray(env, argv[1], &is_typed) == napi_ok && is_typed) {
+    ReadBufferView(env, argv[1], &data, &length);
+  } else if (IsType(env, argv[1], napi_object)) {
+    // ArrayBuffer (or an empty Buffer).
+    ReadBufferView(env, argv[1], &data, &length);
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineNotifyHttpRequestComplete(
+      request_id, static_cast<const uint8_t*>(data),
+      static_cast<int32_t>(length), 0);
+#endif
+  return Undefined(env);
+}
+
 // `addIntersectionObserver(windowId, nodeId, rootId, top, right, bottom,
 // left, thresholds[])`.
 napi_value AddIntersectionObserver(napi_env env, napi_callback_info info) {
@@ -1321,6 +1440,8 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "pickerColumnSetCurrent", PickerColumnSetCurrent);
   Define(env, bridge, "inputFocus", InputFocus);
   Define(env, bridge, "setJsonEventSink", SetJsonEventSink);
+  Define(env, bridge, "setHttpRequestSink", SetHttpRequestSink);
+  Define(env, bridge, "httpRequestComplete", HttpRequestComplete);
   Define(env, bridge, "addIntersectionObserver", AddIntersectionObserver);
   Define(env, bridge, "removeIntersectionObserver", RemoveIntersectionObserver);
   Define(env, bridge, "selectionSetRange", SelectionSetRange);

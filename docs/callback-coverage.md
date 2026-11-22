@@ -57,6 +57,7 @@ D10 之后不再有行为性缺口：用户手势、无障碍语义与自动化/
 | 无障碍语义 | `aria-label`/`aria-role`/`aria-hidden`/`aria-disabled` → `NewSemantics`（`SkylineSemantics`），增量属性走 `SemanticsLabel/Role/Hidden/Disable`；`UpdateAccessibility`/`OnAccessibilityFeaturesChanged` 驱动宿主 `FlutterEngineUpdateSemanticsEnabled`/`UpdateAccessibilityFeatures`，`AccessibilityBoldTextEnabled` 查询加粗文本 | `test:ops`：`semantics #3/#4/#5` 包装日志、`semantics update #3`、宿主 `semantics node` 包含 `updated cover`；bootstrap 单测：`accessibilityEvents` |
 | 快照 | `SceneToImage` CPU 光栅化（`LayerTree::Flatten` + `DlSkCanvasDispatcher` + `SkPngEncoder`）；`<snapshot>` + `NewSnapshot`/`SnapshotTakeSnapshot`；`TakeAppSnapshot`；`YGNodeTakeSnapshot`（按需 repaint boundary） | `test:ops`：app/node PNG 快照写入 `SKYLINE_SNAPSHOT_DIR`，JSON `appSnapshot`/`nodeSnapshot`；bootstrap 单测：`snapshotEvents` |
 | DevTools 自动化 | `DumpElementTree`/`DumpRenderTree`/`CollectGarbage`/`SendMessageToRunner`/`RelaunchApp`/`ShutdownApplication`/`StartUserGesture`/`StopUserGesture` 经 `FindCallback` 调用；addon 暴露 `__skylineDebug.*` | `test:ops`：dump 输出 `YGNodeRenderObject`、GC/runner/gesture 日志；bootstrap 单测：全部调试方法转发 |
+| DevTools Network 面板 | 图片/字体 HTTP 经 `SkylineShell.setHttpRequestCallback`（appservice `window.fetch`）代理，`native.setHttpRequestSink`/`httpRequestComplete` 双向桥；空响应或 2 s 超时回退 `dart:io` | bootstrap 单测：sink → shell callback → `notifyHttpRequestComplete`；真机 Network 面板显示 album 26 张图片（status 200/fetch） |
 
 ## 5. 后续修复任务
 

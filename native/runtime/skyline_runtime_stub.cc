@@ -824,6 +824,23 @@ using SkylineAccessibilitySink = void (*)(int32_t kind, int32_t value);
 std::atomic<SkylineAccessibilitySink> g_accessibility_sink{nullptr};
 std::atomic<int32_t> g_accessibility_enabled{0};
 std::atomic<int32_t> g_accessibility_bold_text{0};
+// DevTools shell HTTP bridge: the addon proxies `setHttpRequestCallback`
+// (window.fetch in the pageframe renderer) so network requests show up in the
+// DevTools Network panel instead of an in-engine dart:io socket.
+using SkylineHttpRequestSink = void (*)(uint32_t request_id, const char* url);
+using SkylineHasHttpRequestCallbackFn = int32_t (*)();
+std::atomic<SkylineHttpRequestSink> g_shell_http_request{nullptr};
+std::atomic<SkylineHasHttpRequestCallbackFn> g_shell_http_available{nullptr};
+
+bool ShellHttpAvailable() {
+  auto* has = g_shell_http_available.load();
+  return has != nullptr && has() != 0;
+}
+
+void RequestShellHttp(uint32_t request_id, const std::string& url) {
+  auto sink = g_shell_http_request.load();
+  if (sink != nullptr) sink(request_id, url.c_str());
+}
 // SnapshotTakeSnapshot is synchronous: SceneToImage runs inside the call, so
 // this carries the DevTools request id into the snapshot callback.
 std::atomic<int32_t> g_pending_node_snapshot_request{0};
@@ -8246,6 +8263,8 @@ struct PendingImageRequest {
   RuntimeHolder* holder = nullptr;
   std::string source;
   std::vector<AppNode*> nodes;
+  // True while the request is proxied through the DevTools pageframe fetch.
+  bool via_shell = false;
 };
 
 struct PendingSvgRequest {
@@ -8373,23 +8392,14 @@ bool StartSvgDecode(AppNode* node, const std::string& source,
   return true;
 }
 
-// Dart's `RequestHttpResource` performs the actual request (dart:io).  The
+// Dart's `RequestHttpResource` performs the fallback request (dart:io).  The
 // response arrives on the UI task runner; decode once and fan the result out to
 // every node waiting on that URL.
+void DeliverImagePayload(uint32_t request_id, std::vector<uint8_t> bytes);
+
 extern "C" void OnImageResourceResponse(intptr_t /*runtime_ptr*/,
                                         uint32_t request_id, Dart_Handle data,
                                         uint8_t /*from_cache*/) {
-  auto found = g_pending_image_requests.find(request_id);
-  if (found == g_pending_image_requests.end()) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] image response for unknown request %u\n",
-                 request_id);
-    return;
-  }
-  PendingImageRequest pending = found->second;
-  g_pending_image_requests.erase(found);
-  g_pending_image_by_source.erase(pending.source);
-
   std::vector<uint8_t> bytes;
   if (data != nullptr && !Dart_IsNull(data) && !Dart_IsError(data)) {
     Dart_TypedData_Type type = Dart_TypedData_kInvalid;
@@ -8402,6 +8412,68 @@ extern "C" void OnImageResourceResponse(intptr_t /*runtime_ptr*/,
     }
     Dart_TypedDataReleaseData(data);
   }
+  DeliverImagePayload(request_id, std::move(bytes));
+}
+
+void IssueDartImageRequest(RuntimeHolder* holder, uint32_t request_id,
+                           const std::string& source) {
+  void* request = FindCallback(
+      holder != nullptr ? holder->ffi_table : nullptr,
+      kRequestHttpResourceHash);
+  if (request == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] image request %u: "
+                 "RequestHttpResource missing\n",
+                 request_id);
+    DeliverImagePayload(request_id, {});
+    return;
+  }
+  Dart_Handle url = Dart_NewStringFromCString(source.c_str());
+  std::fprintf(stderr, "[skyline-runtime] image request %u starting (dart:io)\n",
+               request_id);
+  reinterpret_cast<RequestHttpResourceFn>(request)(
+      request_id, url, reinterpret_cast<void*>(&OnImageResourceResponse));
+}
+
+void StartDartImageRequest(RuntimeHolder* holder, uint32_t request_id,
+                           const std::string& source) {
+  auto runner = UiTaskRunner();
+  if (!runner) runner = g_ui_task_runner;
+  if (!runner) {
+    DeliverImagePayload(request_id, {});
+    return;
+  }
+  runner->PostTask([holder, request_id, source]() {
+    DemoPageApiScope scope;
+    IssueDartImageRequest(holder, request_id, source);
+  });
+}
+
+// Entry point shared by the Dart fallback and the DevTools shell fetch.
+void DeliverImagePayload(uint32_t request_id, std::vector<uint8_t> bytes) {
+  auto found = g_pending_image_requests.find(request_id);
+  if (found == g_pending_image_requests.end()) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] image response for unknown request %u\n",
+                 request_id);
+    return;
+  }
+  PendingImageRequest pending = found->second;
+  if (bytes.empty() && pending.via_shell) {
+    // The DevTools pageframe fetch can fail on CORS/offline; retry through the
+    // in-engine dart:io client so images still render.
+    pending.via_shell = false;
+    g_pending_image_requests[request_id] = pending;
+    std::fprintf(stderr,
+                 "[skyline-runtime] image request %u: shell fetch empty, "
+                 "falling back to dart:io\n",
+                 request_id);
+    StartDartImageRequest(pending.holder, request_id, pending.source);
+    return;
+  }
+  g_pending_image_requests.erase(found);
+  g_pending_image_by_source.erase(pending.source);
+
   if (bytes.empty()) {
     for (AppNode* node : pending.nodes) {
       if (node != nullptr && !node->released && node->image_source == pending.source) {
@@ -8466,10 +8538,10 @@ extern "C" void OnImageResourceResponse(intptr_t /*runtime_ptr*/,
 bool StartNetworkImage(AppNode* node, const std::string& source,
                        bool background, RuntimeHolder* holder) {
   if (node->image_pending) return false;
-  void* request = holder != nullptr
-                      ? FindCallback(holder->ffi_table, kRequestHttpResourceHash)
-                      : nullptr;
-  if (request == nullptr) {
+  const bool via_shell = ShellHttpAvailable();
+  if (!via_shell &&
+      FindCallback(holder != nullptr ? holder->ffi_table : nullptr,
+                   kRequestHttpResourceHash) == nullptr) {
     std::fprintf(stderr,
                  "[skyline-runtime] image #%u: RequestHttpResource missing\n",
                  node->id);
@@ -8501,6 +8573,7 @@ bool StartNetworkImage(AppNode* node, const std::string& source,
   entry.holder = holder;
   entry.source = source;
   entry.nodes.push_back(node);
+  entry.via_shell = via_shell;
   g_pending_image_requests[request_id] = entry;
   g_pending_image_by_source[source] = request_id;
   std::fprintf(stderr, "[skyline-runtime] image #%u: fetch %s (request=%u)\n",
@@ -8511,24 +8584,34 @@ bool StartNetworkImage(AppNode* node, const std::string& source,
   auto runner = UiTaskRunner();
   if (!runner) runner = g_ui_task_runner;
   if (runner) {
-    runner->PostTask([holder, request_id, source]() {
-      DemoPageApiScope scope;
-      void* request = FindCallback(
-          holder != nullptr ? holder->ffi_table : nullptr,
-          kRequestHttpResourceHash);
-      if (request == nullptr) {
+    runner->PostTask([holder, request_id, source, via_shell, runner]() {
+      if (via_shell) {
         std::fprintf(stderr,
-                     "[skyline-runtime] image request %u: "
-                     "RequestHttpResource missing\n",
+                     "[skyline-runtime] image request %u via DevTools shell\n",
                      request_id);
+        RequestShellHttp(request_id, source);
+        // The DevTools fetch callback has no error return path; if it never
+        // completes (CORS, pageframe teardown), fall back to the in-engine
+        // dart:io client so the image still renders.
+        runner->PostDelayedTask(
+            [holder, request_id, source]() {
+              auto found = g_pending_image_requests.find(request_id);
+              if (found == g_pending_image_requests.end() ||
+                  !found->second.via_shell) {
+                return;
+              }
+              found->second.via_shell = false;
+              std::fprintf(stderr,
+                           "[skyline-runtime] image request %u: shell timeout, "
+                           "falling back to dart:io\n",
+                           request_id);
+              StartDartImageRequest(holder, request_id, source);
+            },
+            fml::TimeDelta::FromMilliseconds(2000));
         return;
       }
-      Dart_Handle url = Dart_NewStringFromCString(source.c_str());
-      std::fprintf(stderr, "[skyline-runtime] image request %u starting\n",
-                   request_id);
-      reinterpret_cast<RequestHttpResourceFn>(request)(
-          request_id, url,
-          reinterpret_cast<void*>(&OnImageResourceResponse));
+      DemoPageApiScope scope;
+      IssueDartImageRequest(holder, request_id, source);
     });
   }
   return false;
@@ -14580,48 +14663,146 @@ using OnForwardHttpGetResponseFn = void (*)(Dart_Handle data,
 struct PendingHttpGet {
   Dart_PersistentHandle callback = nullptr;
   RuntimeHolder* holder = nullptr;
+  std::string url;
+  bool via_shell = false;
 };
 
 std::unordered_map<uint32_t, PendingHttpGet> g_pending_http_gets;
-uint32_t g_next_http_get_id = 0;
+uint32_t g_next_http_get_id = 0x80000000u;
+
+void DeliverPendingHttpGet(uint32_t request_id, std::vector<uint8_t> bytes);
+
+extern "C" void OnHttpResourceResponse(intptr_t /*runtime_ptr*/,
+                                       uint32_t request_id, Dart_Handle data,
+                                       uint8_t /*from_cache*/);
+
+void IssueDartHttpGet(RuntimeHolder* holder, uint32_t request_id,
+                      const std::string& url) {
+  void* request = FindCallback(
+      holder != nullptr ? holder->ffi_table : nullptr,
+      kRequestHttpResourceHash);
+  if (request == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] ForwardHttpGet: RequestHttpResource "
+                 "callback missing\n");
+    DeliverPendingHttpGet(request_id, {});
+    return;
+  }
+  Dart_Handle url_handle = Dart_NewStringFromCString(url.c_str());
+  reinterpret_cast<RequestHttpResourceFn>(request)(
+      request_id, url_handle,
+      reinterpret_cast<void*>(&OnHttpResourceResponse));
+}
+
+void StartDartHttpGet(RuntimeHolder* holder, uint32_t request_id,
+                      const std::string& url) {
+  auto runner = UiTaskRunner();
+  if (!runner) {
+    DeliverPendingHttpGet(request_id, {});
+    return;
+  }
+  runner->PostTask([holder, request_id, url]() {
+    DemoPageApiScope scope;
+    IssueDartHttpGet(holder, request_id, url);
+  });
+}
 
 extern "C" void OnHttpResourceResponse(intptr_t /*runtime_ptr*/,
                                        uint32_t request_id, Dart_Handle data,
                                        uint8_t /*from_cache*/) {
+  std::vector<uint8_t> bytes;
+  if (data != nullptr && !Dart_IsNull(data) && !Dart_IsError(data)) {
+    Dart_TypedData_Type type = Dart_TypedData_kInvalid;
+    void* raw = nullptr;
+    intptr_t length = 0;
+    if (!Dart_IsError(Dart_TypedDataAcquireData(data, &type, &raw, &length)) &&
+        raw != nullptr && length > 0) {
+      bytes.assign(static_cast<uint8_t*>(raw),
+                   static_cast<uint8_t*>(raw) + length);
+    }
+    Dart_TypedDataReleaseData(data);
+  }
+  DeliverPendingHttpGet(request_id, std::move(bytes));
+}
+
+void DeliverPendingHttpGet(uint32_t request_id, std::vector<uint8_t> bytes) {
   auto found = g_pending_http_gets.find(request_id);
   if (found == g_pending_http_gets.end()) return;
   PendingHttpGet pending = found->second;
-  g_pending_http_gets.erase(found);
-  Dart_PersistentHandle data_persistent = nullptr;
-  if (data != nullptr && !Dart_IsNull(data) && !Dart_IsError(data)) {
-    data_persistent = Dart_NewPersistentHandle(data);
+  if (bytes.empty() && pending.via_shell) {
+    pending.via_shell = false;
+    g_pending_http_gets[request_id] = pending;
+    std::fprintf(stderr,
+                 "[skyline-runtime] ForwardHttpGet %u: shell fetch empty, "
+                 "falling back to dart:io\n",
+                 request_id);
+    StartDartHttpGet(pending.holder, request_id, pending.url);
+    return;
   }
+  g_pending_http_gets.erase(found);
   auto runner = UiTaskRunner();
   if (!runner) {
-    if (data_persistent != nullptr) Dart_DeletePersistentHandle(data_persistent);
     if (pending.callback != nullptr) Dart_DeletePersistentHandle(pending.callback);
     return;
   }
-  runner->PostTask([pending, data_persistent]() {
+  runner->PostTask([pending, bytes = std::move(bytes)]() {
     DemoPageApiScope scope;
+    Dart_Handle payload = Dart_Null();
+    if (!bytes.empty()) {
+      payload = Dart_NewTypedData(Dart_TypedData_kUint8,
+                                  static_cast<intptr_t>(bytes.size()));
+      if (!Dart_IsError(payload)) {
+        Dart_TypedData_Type type = Dart_TypedData_kInvalid;
+        void* raw = nullptr;
+        intptr_t length = 0;
+        if (!Dart_IsError(Dart_TypedDataAcquireData(payload, &type, &raw,
+                                                   &length)) &&
+            raw != nullptr) {
+          std::memcpy(raw, bytes.data(),
+                      std::min<size_t>(bytes.size(),
+                                       static_cast<size_t>(length)));
+          Dart_TypedDataReleaseData(payload);
+        }
+      }
+    }
     void* callback = FindCallback(
         pending.holder != nullptr ? pending.holder->ffi_table : nullptr,
         kOnForwardHttpGetResponseHash);
     if (callback != nullptr && pending.callback != nullptr) {
-      Dart_Handle payload = data_persistent != nullptr
-                                ? Dart_HandleFromPersistent(data_persistent)
-                                : Dart_Null();
       Dart_Handle dart_callback =
           Dart_HandleFromPersistent(pending.callback);
       reinterpret_cast<OnForwardHttpGetResponseFn>(callback)(payload,
                                                              dart_callback);
     }
-    if (data_persistent != nullptr) Dart_DeletePersistentHandle(data_persistent);
     if (pending.callback != nullptr) Dart_DeletePersistentHandle(pending.callback);
   });
 }
 
 }  // namespace
+
+SKYLINE_EXPORT extern "C" void SkylineSetHttpRequestSink(
+    SkylineHttpRequestSink sink, SkylineHasHttpRequestCallbackFn has) {
+  g_shell_http_request.store(sink);
+  g_shell_http_available.store(has);
+}
+
+// Addon JS thread -> runtime: the DevTools pageframe finished a shell fetch.
+SKYLINE_EXPORT extern "C" void SkylineNotifyHttpRequestComplete(
+    uint32_t request_id, const uint8_t* data, int32_t length,
+    uint8_t /*from_cache*/) {
+  std::vector<uint8_t> bytes;
+  if (data != nullptr && length > 0) {
+    bytes.assign(data, data + length);
+  }
+  // Called from the addon JS thread: hop onto the engine UI task runner.
+  PostToUiIfReady([request_id, bytes = std::move(bytes)]() {
+    if (request_id >= 0x80000000u) {
+      DeliverPendingHttpGet(request_id, bytes);
+    } else {
+      appservice::DeliverImagePayload(request_id, std::move(bytes));
+    }
+  });
+}
 
 SKYLINE_EXPORT extern "C" void ForwardHttpGet(void* runtime_ptr,
                                               void* /*window_ptr*/,
@@ -14632,9 +14813,12 @@ SKYLINE_EXPORT extern "C" void ForwardHttpGet(void* runtime_ptr,
   RuntimeHolder* holder = runtime != nullptr ? runtime->holder : &g_fallback_holder;
   const std::string requested = ResourcePathFromDart(url);
   const uint32_t request_id = ++g_next_http_get_id;
+  const bool via_shell = ShellHttpAvailable();
   PendingHttpGet pending;
   pending.callback = Dart_NewPersistentHandle(callback);
   pending.holder = holder;
+  pending.url = requested;
+  pending.via_shell = via_shell;
   g_pending_http_gets[request_id] = pending;
 
   auto runner = UiTaskRunner();
@@ -14643,23 +14827,32 @@ SKYLINE_EXPORT extern "C" void ForwardHttpGet(void* runtime_ptr,
     Dart_DeletePersistentHandle(pending.callback);
     return;
   }
-  std::fprintf(stderr, "[skyline-runtime] ForwardHttpGet: id=%u url=%s\n",
-               request_id, requested.c_str());
-  runner->PostTask([holder, request_id, requested]() {
-    DemoPageApiScope scope;
-    void* request = FindCallback(holder != nullptr ? holder->ffi_table : nullptr,
-                                 kRequestHttpResourceHash);
-    if (request == nullptr) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] ForwardHttpGet: RequestHttpResource "
-                   "callback missing\n");
-      OnHttpResourceResponse(0, request_id, Dart_Null(), 0);
+  std::fprintf(stderr,
+               "[skyline-runtime] ForwardHttpGet: id=%u url=%s%s\n",
+               request_id, requested.c_str(),
+               via_shell ? " (shell)" : "");
+  runner->PostTask([holder, request_id, requested, via_shell, runner]() {
+    if (via_shell) {
+      RequestShellHttp(request_id, requested);
+      runner->PostDelayedTask(
+          [holder, request_id, requested]() {
+            auto found = g_pending_http_gets.find(request_id);
+            if (found == g_pending_http_gets.end() ||
+                !found->second.via_shell) {
+              return;
+            }
+            found->second.via_shell = false;
+            std::fprintf(stderr,
+                         "[skyline-runtime] ForwardHttpGet %u: shell timeout, "
+                         "falling back to dart:io\n",
+                         request_id);
+            StartDartHttpGet(holder, request_id, requested);
+          },
+          fml::TimeDelta::FromMilliseconds(2000));
       return;
     }
-    Dart_Handle url_handle = Dart_NewStringFromCString(requested.c_str());
-    reinterpret_cast<RequestHttpResourceFn>(request)(
-        request_id, url_handle,
-        reinterpret_cast<void*>(&OnHttpResourceResponse));
+    DemoPageApiScope scope;
+    IssueDartHttpGet(holder, request_id, requested);
   });
 }
 #endif  // SKYLINE_EMBEDDED

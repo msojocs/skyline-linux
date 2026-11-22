@@ -588,7 +588,18 @@
       return native.setSafeArea(args[0], args[1], args[2], args[3]);
     }],
     ['notifyResourceLoad', function (...args) { return native.notify('notifyResourceLoad', args); }],
-    ['notifyHttpRequestComplete', function (...args) { return native.notify('notifyHttpRequestComplete', args); }],
+    ['notifyHttpRequestComplete', function (requestId, errno, status, headers, buffer) {
+      if (typeof native.log === 'function') {
+        native.log(`notifyHttpRequestComplete ${requestId} ` +
+          `len=${buffer && typeof buffer.length === 'number' ? buffer.length : 0}`);
+      }
+      if (typeof native.httpRequestComplete === 'function') {
+        return native.httpRequestComplete(requestId,
+          buffer || new Uint8Array(0));
+      }
+      return native.notify('notifyHttpRequestComplete',
+        [requestId, errno, status, headers, buffer]);
+    }],
     ['dispatchTouchStartEvent', dispatchTouch('dispatchTouchStartEvent', 'start', 3)],
     ['dispatchTouchMoveEvent', dispatchTouch('dispatchTouchMoveEvent', 'move', 3)],
     ['dispatchTouchEndEvent', dispatchTouch('dispatchTouchEndEvent', 'end', 3)],
@@ -2586,6 +2597,44 @@
         if (typeof native.log === 'function') {
           native.log(`native json dispatch failed: ${error && error.message}`);
         }
+      }
+    });
+  }
+  // Native image/font HTTP loads are proxied through the DevTools pageframe
+  // fetch (`SkylineShell.setHttpRequestCallback`) so the Network panel shows
+  // them.  The DevTools callback calls `notifyHttpRequestComplete` with bytes.
+  if (typeof native.setHttpRequestSink === 'function') {
+    native.setHttpRequestSink(function (request) {
+      const requestId = request && request.requestId;
+      const url = request && request.url;
+      const complete = function (bytes) {
+        if (typeof native.httpRequestComplete === 'function') {
+          native.httpRequestComplete(requestId, bytes);
+        }
+      };
+      const callback = shellCallbacks.setHttpRequestCallback;
+      if (typeof callback !== 'function') {
+        complete(new Uint8Array(0));
+        return;
+      }
+      try {
+        if (typeof native.log === 'function') {
+          native.log(`httpRequest ${requestId} ${url}`);
+        }
+        const result = callback({ request_id: requestId, url });
+        if (result && typeof result.then === 'function') {
+          result.catch(function (error) {
+            if (typeof native.log === 'function') {
+              native.log(`httpRequest ${requestId} failed: ${error && error.message}`);
+            }
+            complete(new Uint8Array(0));
+          });
+        }
+      } catch (error) {
+        if (typeof native.log === 'function') {
+          native.log(`httpRequest ${requestId} threw: ${error && error.message}`);
+        }
+        complete(new Uint8Array(0));
       }
     });
   }
