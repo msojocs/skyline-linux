@@ -1034,8 +1034,16 @@
   const scrollEventCallbacks = new Map();
   const scrollStartEventCallbacks = new Map();
   const scrollEndEventCallbacks = new Map();
+  // Swiper's `onScrollEvent` carries a single translate-pixel value (and its
+  // worklet name is `onTransition`), unlike scroll-view's six-value callback.
+  const swiperScrollEventCallbacks = new Map();
   // Last reported offset per scroll view (selector-query `getScrollOffset`).
   const scrollOffsets = new Map();
+  // Picker/input events for CDP inspection and regression tests.
+  const pickerEvents = [];
+  const inputEvents = [];
+  // All mirrored backend elements by view tag (native events carry the tag).
+  const bridgeElements = new Map();
 
   class BridgeElement {
     constructor(tag, name, ops, windowId) {
@@ -1051,6 +1059,7 @@
       this._style = '';
       this.viewTag = ++nextBridgeTag;
       this.ops.push({ op: 'createElement', id: this.viewTag, tag, name });
+      bridgeElements.set(this.viewTag, this);
     }
     get tagName() { return this.tag; }
     get id() { return this._id; }
@@ -1276,10 +1285,12 @@
     // that get wired up later.
     onChangeEvent(callback) { this.changeEventCallback = callback; }
     onScrollEvent(callback) {
+      const isSwiper = this.name === 'swiper';
+      const map = isSwiper ? swiperScrollEventCallbacks : scrollEventCallbacks;
       if (typeof callback === 'function') {
-        scrollEventCallbacks.set(this.viewTag, callback);
+        map.set(this.viewTag, callback);
       } else {
-        scrollEventCallbacks.delete(this.viewTag);
+        map.delete(this.viewTag);
       }
     }
     onLoadEvent(callback) { this.loadEventCallback = callback; }
@@ -1386,6 +1397,11 @@
     onRefresherAbortEvent() {}
     onRefresherStatusChangeEvent() {}
     release() {
+      bridgeElements.delete(this.viewTag);
+      scrollEventCallbacks.delete(this.viewTag);
+      swiperScrollEventCallbacks.delete(this.viewTag);
+      scrollStartEventCallbacks.delete(this.viewTag);
+      scrollEndEventCallbacks.delete(this.viewTag);
       this.ops.push({ op: 'release', id: this.viewTag });
     }
   }
@@ -1610,10 +1626,32 @@
     scrollOffsets,
     workletEventHandlers,
     scrollEventCallbacks,
+    swiperScrollEventCallbacks,
     scrollStartEventCallbacks,
     scrollEndEventCallbacks,
+    pickerEvents,
+    inputEvents,
+    bridgeElements,
     rect: nodeRect,
     hit: hitTestElement,
+    swiperTo(windowId, nodeId, page, animated) {
+      if (typeof native.swiperTo === 'function') {
+        return native.swiperTo(windowId, nodeId, page, animated !== false);
+      }
+      return undefined;
+    },
+    pickerColumnSetCurrent(windowId, nodeId, current) {
+      if (typeof native.pickerColumnSetCurrent === 'function') {
+        return native.pickerColumnSetCurrent(windowId, nodeId, current);
+      }
+      return undefined;
+    },
+    inputFocus(windowId, nodeId, focus) {
+      if (typeof native.inputFocus === 'function') {
+        return native.inputFocus(windowId, nodeId, !!focus);
+      }
+      return undefined;
+    },
     scrollTo(windowId, nodeId, top) {
       if (typeof native.log === 'function') {
         native.log(`scroll-into-view node=${nodeId} top=${top}`);
@@ -1904,6 +1942,167 @@
     }
   }
 
+  function mirrorAncestor(element, names) {
+    let node = element ? element.parent : null;
+    while (node) {
+      if (names.indexOf(node.name) >= 0 || names.indexOf(node.tag) >= 0) {
+        return node;
+      }
+      node = node.parent;
+    }
+    return null;
+  }
+
+  function pickerValues(root) {
+    const values = [];
+    if (!root) return values;
+    for (const child of root.children || []) {
+      if (!child) continue;
+      const isColumn = child.name === 'picker-view-column' ||
+        child.name === 'pickerviewcolumn' ||
+        child.tag === 'picker-view-column' ||
+        child.tag === 'pickerviewcolumn';
+      if (!isColumn) continue;
+      const raw = child.attrs && (child.attrs.value ?? child.attrs.current);
+      values.push(Number(raw) || 0);
+    }
+    return values;
+  }
+
+  // Offscreen exparser dispatch for native components without a JS builtin
+  // (picker-view) and input focus/blur.  Touch events use the RuntimeCore
+  // callback instead; these nodes have no such callback.
+  let mirrorEventFailures = 0;
+  function dispatchMirrorEvent(element, type, detail) {
+    const wxElement = element && element.__wxElement;
+    if (!wxElement || typeof wxElement.dispatchEvent !== 'function') {
+      return false;
+    }
+    try {
+      wxElement.dispatchEvent({
+        type,
+        detail,
+        bubbles: true,
+        cancelable: false,
+        composed: true,
+        timeStamp: Date.now(),
+        target: wxElement,
+        currentTarget: wxElement,
+      });
+      return true;
+    } catch (error) {
+      if (mirrorEventFailures < 5 && typeof native.log === 'function') {
+        mirrorEventFailures += 1;
+        native.log(`mirror ${type} event failed: ${error && error.message}`);
+      }
+      return false;
+    }
+  }
+
+  // Swiper / picker-view-column / input events arrive from the native Dart
+  // widgets as `{nodeId, kind, value, extra, flag}`.
+  function dispatchNativeWidgetEvent(event) {
+    if (!event) return;
+    const tag = event.nodeId;
+    if (!tag) return;
+    const value = Number(event.value) || 0;
+    const extra = Number(event.extra) || 0;
+    const flag = Number(event.flag) || 0;
+    const element = bridgeElements.get(tag);
+    switch (Number(event.kind) || 0) {
+      case 0: {  // swiper change
+        if (element) element.attrs.current = String(value);
+        if (element && typeof element.changeEventCallback === 'function') {
+          try {
+            element.changeEventCallback(value, extra);
+          } catch (error) {
+            if (typeof native.log === 'function') {
+              native.log(`swiper change callback failed: ${error && error.message}`);
+            }
+          }
+        }
+        const worklet = workletEventHandlers.get(`onChange-${tag}`);
+        if (worklet) {
+          try {
+            worklet.call(worklet._closure || undefined, {
+              type: 'change',
+              detail: {
+                current: value,
+                source: ['touch', 'autoplay', 'manual'][extra] || '',
+              },
+              timeStamp: Date.now(),
+            });
+          } catch (error) {
+            if (typeof native.log === 'function') {
+              native.log(`swiper change worklet failed: ${error && error.message}`);
+            }
+          }
+        }
+        return;
+      }
+      case 1: {  // swiper scroll / transition
+        const callback = swiperScrollEventCallbacks.get(tag);
+        if (callback) {
+          try {
+            callback(value);
+          } catch (error) {
+            if (typeof native.log === 'function') {
+              native.log(`swiper scroll callback failed: ${error && error.message}`);
+            }
+          }
+        }
+        const vertical = !!(element && element.attrs &&
+          (element.attrs.vertical === '1' || element.attrs.vertical === 'true'));
+        const dx = vertical ? 0 : value;
+        const dy = vertical ? value : 0;
+        const stateName = ['onScrollStart', 'onScrollUpdate', 'onScrollEnd'][extra];
+        const names = ['onTransition'];
+        if (stateName) names.push(stateName);
+        for (const name of names) {
+          const worklet = workletEventHandlers.get(`${name}-${tag}`);
+          if (!worklet) continue;
+          try {
+            worklet.call(worklet._closure || undefined, {
+              type: name === 'onTransition' ? 'transition' : 'scroll',
+              detail: { dx, dy, current: flag },
+              state: extra,
+              timeStamp: Date.now(),
+            });
+          } catch (error) {
+            if (typeof native.log === 'function') {
+              native.log(`swiper ${name} worklet failed: ${error && error.message}`);
+            }
+          }
+        }
+        return;
+      }
+      case 2:  // picker column change
+      case 3:  // start
+      case 4: {  // end
+        const type = Number(event.kind) === 2 ? 'change'
+          : (Number(event.kind) === 3 ? 'pickstart' : 'pickend');
+        if (element) element.attrs.value = String(value);
+        const parent = mirrorAncestor(element, ['picker-view', 'pickerview']);
+        const detail = { value: pickerValues(parent || element && element.parent) };
+        if (type === 'change') detail.column = value;
+        pickerEvents.push({
+          type, nodeId: tag, value, reason: extra, detail,
+        });
+        if (parent) dispatchMirrorEvent(parent, type, detail);
+        return;
+      }
+      case 5:   // input focus
+      case 6: { // input blur
+        const type = Number(event.kind) === 5 ? 'focus' : 'blur';
+        inputEvents.push({ type, nodeId: tag });
+        if (element) dispatchMirrorEvent(element, type, {});
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
   function dispatchDomTouchEvent(windowId, type, x, y) {
     if (!runtimeTouchCallbacks.length) return;
     if (type === 'touchcancel') {
@@ -2032,6 +2231,17 @@
       } catch (error) {
         if (typeof native.log === 'function') {
           native.log(`native scroll dispatch failed: ${error && error.message}`);
+        }
+      }
+    });
+  }
+  if (typeof native.setWidgetEventSink === 'function') {
+    native.setWidgetEventSink(function (event) {
+      try {
+        dispatchNativeWidgetEvent(event);
+      } catch (error) {
+        if (typeof native.log === 'function') {
+          native.log(`native widget dispatch failed: ${error && error.message}`);
         }
       }
     });

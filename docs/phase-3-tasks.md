@@ -261,8 +261,8 @@
   - 新增两个 `test:ops` 行为探针：`pointer-events:none` 覆盖层可穿透滚动；
     同几何、无 `pointer-events` 的对照组覆盖层会拦截滚动。
   - `will-change` 确认无静态/行为差异，不解析、不设探针。
-  - 确认缺口（D7 已补齐滚动事件；其余待 D8-D10）：下拉刷新、Swiper/PickerView
-    事件、编程式输入焦点、IntersectionObserver、Selection、返回拦截、用户手势、
+  - 确认缺口（D7 已补齐滚动事件、D8 已补齐 Swiper/PickerView/Input；其余待
+    D9-D10）：下拉刷新、IntersectionObserver、Selection、返回拦截、用户手势、
     无障碍语义、自动化快照/内存 API。
   - 回归：`test:ops` 70/70（含 2 个 pointer-events 探针）；顺带把
     “移除背景” 用例的 200ms 更新改为 600ms，消除初始物化竞态。
@@ -312,9 +312,27 @@
   - 验证：新增 `test/bootstrap-scroll.test.js` 覆盖 sink→bindscroll/worklet 分发与
     render 回调；`test:ops` 断言三个 Update* 回调均已安装（70/70）；Linux
     DevTools 真机 address-book 滚轮滚动后右侧 A-Z 高亮由 A 切换为 B。
-- [ ] **D8** Swiper/PickerView/Input 编程式 API 与事件
-  - `SwiperUpdateOnChange/OnScroll`、`SwiperAnimateToPage/JumpToPage`、
-    `PickerViewColumnUpdateOnChange/Start/End`、`InputFocusManually/BlurManually`。
+- [x] **D8** Swiper/PickerView/Input 编程式 API 与事件
+  - `swiper` 改用真实 `NewSwiper`（页面型 BetterSwiper）并安装
+    `SwiperUpdateOnChange` / `SwiperUpdateOnScroll`；change/scroll 回调更新
+    `current` 并经 `SkylineSetWidgetEventSink` 投递到 appservice，bootstrap 分发给
+    内置组件的 `onChangeEvent` / `onScrollEvent` 与 `onChange`/`onTransition`
+    worklet。`SwiperAnimateToPage` / `SwiperJumpToPage` 由 `current` 属性更新、
+    `swiperTo` op 与 `native.swiperTo` 调用（`duration:0` 自动走 jump，规避 Flutter
+    `duration > Duration.zero` 断言）。
+  - `picker-view-column` 改用真实 `NewPickerViewColumn`，安装
+    `PickerViewColumnUpdateOnChange/OnStart/OnEnd`；`value` 属性变化、
+    `pickerTo` op 与 `native.pickerColumnSetCurrent` 调用
+    `PickerViewColumnUpdateCurrent`。change 事件会回填各列 `value` 并合成
+    picker-view 的 `{value:[...]}` detail。
+  - `focusInput`/`blurInput` 与 `focus` 属性变化调用
+    `InputFocusManually` / `InputBlurManually`（真实 NewInput 句柄）；新增
+    `native.inputFocus` 与 `__skylineDebug.inputFocus`。
+  - 回归/验证：新增 3 个 `test:ops` 用例（swiper 换页 + change/scroll 回调、
+    picker 列回调 + 编程式选中、input 焦点/失焦）；`test:ops` **73 / 73**；
+    bootstrap 单测覆盖三条 JS 分发路径。Linux DevTools `tab-indicator`：点击
+    第二个 Tab 后 swiper 换页，`__skylineDebug.swiperTo(...,2)` 触发
+    `bindchange` 使第三个 Tab 选中；album 预览页 swiper 正常渲染。
 - [ ] **D9** IntersectionObserver / Selection / Refresher / 返回拦截
   - `YGNodeAdd/RemoveIntersectionObserver`、`SelectionSetRange`/选区事件、
     `ScrollViewRequestRefresherRefresh/TwoLevel`、`SetNavigateBackInterception`。
@@ -326,8 +344,8 @@
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **167 / 191** | 24 skipped，0 fail |
-| `npm run test:ops` | **70 / 70** | appservice 操作流回放 |
+| `npm test` | **171 / 195** | 24 skipped，0 fail |
+| `npm run test:ops` | **73 / 73** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

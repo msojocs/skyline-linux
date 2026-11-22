@@ -837,6 +837,194 @@ test('appservice ops: mouse wheel scrolls the scroll view', {
   }
 });
 
+test('appservice ops: swiper callbacks and programmatic paging', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-swiper-'));
+  const ops = path.join(dir, 'swiper.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1,
+        css: '.page{width:320px;height:240px;background:#FFFFFF;}' +
+          '.sw{position:absolute;left:10px;top:10px;width:200px;height:100px;}' +
+          '.item{width:200px;height:100px;}' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'addClass', id: 2, prefix: 'page', name: 1 },
+      { op: 'createElement', id: 3, tag: 'swiper', name: 'swiper' },
+      { op: 'addClass', id: 3, prefix: 'sw', name: 1 },
+      { op: 'setAttributes', id: 3,
+        attrs: { current: 0, duration: 0, interval: 5000 } },
+      { op: 'createElement', id: 4, tag: 'swiper-item', name: 'swiper-item' },
+      { op: 'addClass', id: 4, prefix: 'item', name: 1 },
+      { op: 'setStyle', id: 4, value: 'background:#FF0000;' },
+      { op: 'createElement', id: 5, tag: 'swiper-item', name: 'swiper-item' },
+      { op: 'addClass', id: 5, prefix: 'item', name: 1 },
+      { op: 'setStyle', id: 5, value: 'background:#00FF00;' },
+      { op: 'createElement', id: 6, tag: 'swiper-item', name: 'swiper-item' },
+      { op: 'addClass', id: 6, prefix: 'item', name: 1 },
+      { op: 'setStyle', id: 6, value: 'background:#0000FF;' },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'appendChild', id: 3, child: 5 },
+      { op: 'appendChild', id: 3, child: 6 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 800, ops: [
+        { op: 'swiperTo', id: 3, page: 1, animated: false },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2500,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs,
+      /swiper callbacks installed #3 \(onChange=1 onScroll=1\)/);
+    assert.match(logs, /swiper scroll: id=3 offset=0 state=0 current=1/);
+    assert.match(logs, /swiper change: id=3 page=1 reason=2/);
+    assert.match(logs, /swiperTo #3 page=1 animated=0/);
+    assert.ok(pixels, 'no frame was captured');
+    // The swiper jumped to the second page (green).
+    assert.deepEqual(pixelAt(pixels, 100, 50), [0, 255, 0, 255]);
+    assert.deepEqual(pixelAt(pixels, 100, 20), [0, 255, 0, 255]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: picker-view-column events and programmatic value', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-picker-'));
+  const ops = path.join(dir, 'picker.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'picker-view', name: 'picker-view' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:10px;top:10px;width:200px;height:150px;' +
+          'display:flex;flex-direction:row;' },
+      { op: 'createElement', id: 4, tag: 'picker-view-column',
+        name: 'picker-view-column' },
+      { op: 'setStyle', id: 4, value: 'width:100px;height:150px;' },
+      { op: 'setAttributes', id: 4,
+        attrs: { value: 0, indicatorHeight: 50 } },
+      { op: 'createElement', id: 5, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 5,
+        value: 'width:100px;height:50px;background:#FF0000;' },
+      { op: 'createElement', id: 6, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 6,
+        value: 'width:100px;height:50px;background:#00FF00;' },
+      { op: 'createElement', id: 7, tag: 'empty', name: 'view' },
+      { op: 'setStyle', id: 7,
+        value: 'width:100px;height:50px;background:#0000FF;' },
+      { op: 'appendChild', id: 4, child: 5 },
+      { op: 'appendChild', id: 4, child: 6 },
+      { op: 'appendChild', id: 4, child: 7 },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 800, ops: [{ op: 'pickerTo', id: 4, value: 2 }] },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(ops, {
+      timeoutMs: 2500,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs,
+      /picker callbacks installed #4 \(onChange=1 onStart=1 onEnd=1\)/);
+    assert.match(logs, /picker change: id=4 index=2 reason=1/);
+    assert.match(logs, /picker start: id=4/);
+    assert.match(logs, /picker end: id=4/);
+    assert.match(logs, /pickerTo #4 current=2/);
+    assert.ok(pixels, 'no frame was captured');
+    // The third row (blue) is the selected centre item.
+    assert.ok(countColor(pixels, (r, g, b) => b > 200 && r < 80 && g < 80) > 0,
+      'expected the blue picker row to be visible after pickerTo(2)');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: programmatic input focus and blur', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-input-focus-'));
+  const ops = path.join(dir, 'input.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'text', name: 'input' },
+      { op: 'setText', id: 3, text: 'hello' },
+      { op: 'setStyle', id: 3,
+        value: 'position:absolute;left:10px;top:10px;width:200px;height:40px;' },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+    updates: [
+      { afterMs: 600, ops: [
+        { op: 'focusInput', id: 3, cursor: 5, selectionStart: 5,
+          selectionEnd: 5 },
+      ] },
+      { afterMs: 1200, ops: [{ op: 'blurInput', id: 3 }] },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(ops, { timeoutMs: 2500, frames: 0 });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+    // InputFocusManually/BlurManually run against the real NewInput handle.
+    assert.match(logs, /InputFocusManually: id=3/);
+    assert.match(logs, /focus input: id=3/);
+    assert.match(logs, /InputBlurManually: id=3/);
+    assert.match(logs, /blur input: id=3/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('host pointer script reaches the Skyline hit test path', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

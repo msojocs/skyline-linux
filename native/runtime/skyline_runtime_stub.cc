@@ -693,6 +693,55 @@ using ScrollViewUpdateOnScrollStartFn = void (*)(Dart_Handle scroll_view,
                                                  void* callback);
 using ScrollViewUpdateOnScrollEndFn = void (*)(Dart_Handle scroll_view,
                                                void* callback);
+
+// `swiper` is a native Dart widget.  Its callbacks use their own signatures
+// from package:skyline/widgets/swiper.dart (not the scroll-view ones):
+//   onPageChanged: (ptr, page, reason)
+//   onScroll:      (ptr, translatePixels, ScrollState, current)
+using NewSwiperFn = Dart_Handle (*)(
+    intptr_t ptr, uint32_t layout_type, uint32_t transformer_type,
+    uint32_t indicator_type, uint8_t show_indicator, float indicator_offset_x,
+    float indicator_offset_y, double indicator_alignment_x,
+    double indicator_alignment_y, float indicator_margin,
+    float indicator_spacing, float indicator_radius, float indicator_width,
+    float indicator_height, uint32_t indicator_dot_color,
+    uint32_t indicator_dot_active_color, uint8_t scroll_direction,
+    uint8_t axis_direction, uint8_t circular, uint8_t autoplay,
+    uint32_t interval, uint32_t duration, Dart_Handle easing_function,
+    uint32_t initial_page, float cache_extent, float display_multiple_items,
+    uint8_t snap_to_edge, float viewport_margin_left,
+    float viewport_margin_right, void* recognizers, uint32_t recognizer_num,
+    void* on_page_changed, void* on_scroll, Dart_Handle children);
+using SwiperUpdateOnChangeFn = void (*)(Dart_Handle swiper, void* callback);
+using SwiperUpdateOnScrollFn = void (*)(Dart_Handle swiper, void* callback);
+using SwiperAnimateToPageFn = void (*)(Dart_Handle swiper, uint32_t page);
+using SwiperJumpToPageFn = void (*)(Dart_Handle swiper, uint32_t page);
+
+// `picker-view-column` is also a native Dart widget; there is no
+// `NewPickerView` (the parent picker-view is a plain box).
+using NewPickerViewColumnFn = Dart_Handle (*)(
+    intptr_t ptr, uint32_t current, float indicator_height,
+    double border_left_width, double border_top_width,
+    double border_right_width, double border_bottom_width,
+    uint32_t border_left_color, uint32_t border_top_color,
+    uint32_t border_right_color, uint32_t border_bottom_color,
+    uint8_t border_left_style, uint8_t border_top_style,
+    uint8_t border_right_style, uint8_t border_bottom_style,
+    uint32_t background_color, uint8_t immediate_change_changed,
+    uint8_t magnifier, double magnification, double over_under_center_opacity,
+    void* on_change, void* on_start, void* on_end, Dart_Handle children);
+using PickerViewColumnUpdateOnChangeFn = void (*)(Dart_Handle column,
+                                                  void* callback);
+using PickerViewColumnUpdateOnStartFn = void (*)(Dart_Handle column,
+                                                 void* callback);
+using PickerViewColumnUpdateOnEndFn = void (*)(Dart_Handle column,
+                                               void* callback);
+using PickerViewColumnUpdateCurrentFn = void (*)(Dart_Handle column,
+                                                 uint32_t current);
+
+// Programmatic focus/blur (input.dart focusManually/blurManually).
+using InputFocusManuallyFn = void (*)(Dart_Handle input);
+using InputBlurManuallyFn = void (*)(Dart_Handle input);
 using ConnectorUpdateChildrenFn = void (*)(Dart_Handle connector,
                                            uint8_t stackingPaint,
                                            Dart_Handle children);
@@ -831,6 +880,18 @@ constexpr uint32_t kScrollViewUpdateScrollTopHash = 390858736u;
 constexpr uint32_t kScrollViewUpdateOnScrollHash = 694938287u;
 constexpr uint32_t kScrollViewUpdateOnScrollEndHash = 721422539u;
 constexpr uint32_t kScrollViewUpdateOnScrollStartHash = 759191700u;
+constexpr uint32_t kNewSwiperHash = 523432330u;
+constexpr uint32_t kSwiperUpdateOnChangeHash = 670492408u;
+constexpr uint32_t kSwiperUpdateOnScrollHash = 692717296u;
+constexpr uint32_t kSwiperAnimateToPageHash = 659191896u;
+constexpr uint32_t kSwiperJumpToPageHash = 659178726u;
+constexpr uint32_t kNewPickerViewColumnHash = 558687230u;
+constexpr uint32_t kPickerViewColumnUpdateOnChangeHash = 639706827u;
+constexpr uint32_t kPickerViewColumnUpdateOnStartHash = 760325763u;
+constexpr uint32_t kPickerViewColumnUpdateOnEndHash = 711584966u;
+constexpr uint32_t kPickerViewColumnUpdateCurrentHash = 756271499u;
+constexpr uint32_t kInputFocusManuallyHash = 353543806u;
+constexpr uint32_t kInputBlurManuallyHash = 349711200u;
 constexpr uint32_t kNewListBuilderHash = 526654284u;
 constexpr uint32_t kNewListBuilderItemHash = 629516111u;
 constexpr uint32_t kListBuilderAppendChildHash = 707989954u;
@@ -2388,6 +2449,8 @@ struct AppNode {
   Dart_PersistentHandle texture_widget_p = nullptr;
   Dart_PersistentHandle yoga_node_p = nullptr;
   Dart_PersistentHandle scroll_view_p = nullptr;
+  Dart_PersistentHandle swiper_p = nullptr;
+  Dart_PersistentHandle picker_column_p = nullptr;
   // Float64List(16) backing YGNodeSetupTransform while the Matrix4 reads it.
   Dart_PersistentHandle transform_p = nullptr;
   // Decoded image backing a `<image>` node's direct-render paint callback.
@@ -2613,6 +2676,28 @@ using SkylineScrollEventSink = void (*)(
     double scroll_width, double scroll_height, double delta_x, double delta_y,
     uint8_t is_drag, double boundary_velocity);
 std::atomic<SkylineScrollEventSink> g_scroll_event_sink{nullptr};
+
+// Native widget events (swiper change/transition, picker column change/start/
+// end, programmatic input focus/blur) use a second sink so the addon can
+// dispatch them to the appservice mirror.
+enum : int32_t {
+  kWidgetSwiperChange = 0,   // value = page, extra = reason
+  kWidgetSwiperScroll = 1,   // value = translatePixels, extra = state, flag = current
+  kWidgetPickerChange = 2,   // value = index, extra = reason
+  kWidgetPickerStart = 3,
+  kWidgetPickerEnd = 4,
+  kWidgetInputFocus = 5,
+  kWidgetInputBlur = 6,
+};
+using SkylineWidgetEventSink = void (*)(uint32_t node_id, int32_t kind,
+                                        double value, double extra,
+                                        uint8_t flag);
+std::atomic<SkylineWidgetEventSink> g_widget_event_sink{nullptr};
+
+// Address -> view tag for the native Dart widgets whose callbacks receive the
+// opaque `ptr` we passed at construction.
+std::unordered_map<intptr_t, uint32_t> g_swiper_ids;
+std::unordered_map<intptr_t, uint32_t> g_picker_column_ids;
 
 // Layout geometry published for the appservice selector-query APIs
 // (`createSelectorQuery().boundingClientRect`).  The appservice JS queries node
@@ -6761,6 +6846,16 @@ const NativeGestureRecognizerNative g_scroll_recognizers[] = {
     {1u, 6u, kScrollVerticalTag, nullptr, 0u},
 };
 
+const char kSwiperHorizontalTag[] = "skyline-swiper-horizontal";
+const char kSwiperVerticalTag[] = "skyline-swiper-vertical";
+// GestureType.kHorizontalDrag == 7, kVerticalDrag == 6.
+const NativeGestureRecognizerNative g_swiper_horizontal_recognizer[] = {
+    {2u, 7u, kSwiperHorizontalTag, nullptr, 0u},
+};
+const NativeGestureRecognizerNative g_swiper_vertical_recognizer[] = {
+    {3u, 6u, kSwiperVerticalTag, nullptr, 0u},
+};
+
 extern "C" double ScrollNoopContentSize(intptr_t, int32_t, int32_t, double,
                                        double) {
   return std::nan("");
@@ -6861,6 +6956,236 @@ void InstallScrollCallbacks(AppNode* node) {
                  "(start=%d scroll=%d end=%d)\n",
                  node->id, start ? 1 : 0, scroll ? 1 : 0, end ? 1 : 0);
   }
+}
+
+// -- swiper / picker-view / input native widget channel ----------------------
+
+void EmitWidgetEvent(uint32_t node_id, int32_t kind, double value,
+                     double extra, uint8_t flag) {
+  SkylineWidgetEventSink sink = g_widget_event_sink.load();
+  if (sink != nullptr) sink(node_id, kind, value, extra, flag);
+}
+
+uint32_t WidgetNodeId(const std::unordered_map<intptr_t, uint32_t>& map,
+                      intptr_t ptr) {
+  const auto found = map.find(ptr);
+  return found == map.end() ? 0 : found->second;
+}
+
+extern "C" void SwiperOnChange(intptr_t ptr, uint32_t page, uint8_t reason) {
+  const uint32_t id = WidgetNodeId(g_swiper_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] swiper change: id=%u page=%u reason=%u\n",
+                 id, page, static_cast<unsigned>(reason));
+  }
+  if (id != 0) {
+    AppNode* node = FindNode(id);
+    if (node != nullptr && !node->released) {
+      char buffer[32];
+      std::snprintf(buffer, sizeof(buffer), "%u", page);
+      node->attrs["current"] = buffer;
+    }
+  }
+  EmitWidgetEvent(id, kWidgetSwiperChange, static_cast<double>(page),
+                  static_cast<double>(reason), 0);
+}
+
+extern "C" void SwiperOnScroll(intptr_t ptr, double translate_pixels,
+                               uint8_t state, uint32_t current) {
+  const uint32_t id = WidgetNodeId(g_swiper_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] swiper scroll: id=%u offset=%g state=%u "
+                 "current=%u\n",
+                 id, translate_pixels, static_cast<unsigned>(state), current);
+  }
+  EmitWidgetEvent(id, kWidgetSwiperScroll, translate_pixels,
+                  static_cast<double>(state),
+                  static_cast<uint8_t>(current > 255 ? 255 : current));
+}
+
+extern "C" void PickerColumnOnChange(intptr_t ptr, int32_t index,
+                                     int32_t reason) {
+  const uint32_t id = WidgetNodeId(g_picker_column_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] picker change: id=%u index=%d reason=%d\n",
+                 id, index, reason);
+  }
+  if (id != 0) {
+    AppNode* node = FindNode(id);
+    if (node != nullptr && !node->released) {
+      char buffer[32];
+      std::snprintf(buffer, sizeof(buffer), "%d", index);
+      node->attrs["value"] = buffer;
+    }
+  }
+  EmitWidgetEvent(id, kWidgetPickerChange, static_cast<double>(index),
+                  static_cast<double>(reason), 0);
+}
+
+extern "C" void PickerColumnOnStart(intptr_t ptr) {
+  const uint32_t id = WidgetNodeId(g_picker_column_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr, "[skyline-runtime] picker start: id=%u\n", id);
+  }
+  EmitWidgetEvent(id, kWidgetPickerStart, 0.0, 0.0, 0);
+}
+
+extern "C" void PickerColumnOnEnd(intptr_t ptr) {
+  const uint32_t id = WidgetNodeId(g_picker_column_ids, ptr);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr, "[skyline-runtime] picker end: id=%u\n", id);
+  }
+  EmitWidgetEvent(id, kWidgetPickerEnd, 0.0, 0.0, 0);
+}
+
+void InstallSwiperCallbacks(AppNode* node) {
+  if (node == nullptr || node->swiper_p == nullptr || g_page == nullptr ||
+      g_page->holder == nullptr) {
+    return;
+  }
+  g_swiper_ids[node->address] = node->id;
+  FfiTable* table = g_page->holder->ffi_table;
+  Dart_Handle handle = Dart_HandleFromPersistent(node->swiper_p);
+  bool change = false;
+  bool scroll = false;
+  if (void* callback = FindCallback(table, kSwiperUpdateOnChangeHash)) {
+    reinterpret_cast<SwiperUpdateOnChangeFn>(callback)(
+        handle, reinterpret_cast<void*>(&SwiperOnChange));
+    change = true;
+  }
+  if (void* callback = FindCallback(table, kSwiperUpdateOnScrollHash)) {
+    reinterpret_cast<SwiperUpdateOnScrollFn>(callback)(
+        handle, reinterpret_cast<void*>(&SwiperOnScroll));
+    scroll = true;
+  }
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] swiper callbacks installed #%u "
+                 "(onChange=%d onScroll=%d)\n",
+                 node->id, change ? 1 : 0, scroll ? 1 : 0);
+  }
+}
+
+void InstallPickerColumnCallbacks(AppNode* node) {
+  if (node == nullptr || node->picker_column_p == nullptr ||
+      g_page == nullptr || g_page->holder == nullptr) {
+    return;
+  }
+  g_picker_column_ids[node->address] = node->id;
+  FfiTable* table = g_page->holder->ffi_table;
+  Dart_Handle handle = Dart_HandleFromPersistent(node->picker_column_p);
+  bool change = false;
+  bool start = false;
+  bool end = false;
+  if (void* callback =
+          FindCallback(table, kPickerViewColumnUpdateOnChangeHash)) {
+    reinterpret_cast<PickerViewColumnUpdateOnChangeFn>(callback)(
+        handle, reinterpret_cast<void*>(&PickerColumnOnChange));
+    change = true;
+  }
+  if (void* callback =
+          FindCallback(table, kPickerViewColumnUpdateOnStartHash)) {
+    reinterpret_cast<PickerViewColumnUpdateOnStartFn>(callback)(
+        handle, reinterpret_cast<void*>(&PickerColumnOnStart));
+    start = true;
+  }
+  if (void* callback = FindCallback(table, kPickerViewColumnUpdateOnEndHash)) {
+    reinterpret_cast<PickerViewColumnUpdateOnEndFn>(callback)(
+        handle, reinterpret_cast<void*>(&PickerColumnOnEnd));
+    end = true;
+  }
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] picker callbacks installed #%u "
+                 "(onChange=%d onStart=%d onEnd=%d)\n",
+                 node->id, change ? 1 : 0, start ? 1 : 0, end ? 1 : 0);
+  }
+}
+
+// UI-thread programmatic updates.  These run on the engine UI task runner
+// (exported wrappers below hop there from the addon thread).
+double AttrNumber(const AppNode* node, const char* key, double fallback);
+
+void AnimateSwiperTo(uint32_t node_id, uint32_t page, bool animated) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* node = FindNode(node_id);
+  if (node == nullptr || node->swiper_p == nullptr) return;
+  // Flutter asserts `duration > Duration.zero` inside DrivenScrollActivity;
+  // `<swiper duration="0">` must therefore be a jump, not an animation.
+  const bool use_animation =
+      animated && AttrNumber(node, "duration", 500.0) > 0.0;
+  void* callback = FindCallback(
+      g_page->holder->ffi_table,
+      use_animation ? kSwiperAnimateToPageHash : kSwiperJumpToPageHash);
+  if (callback == nullptr) return;
+  Dart_Handle handle = Dart_HandleFromPersistent(node->swiper_p);
+  if (use_animation) {
+    reinterpret_cast<SwiperAnimateToPageFn>(callback)(handle, page);
+  } else {
+    reinterpret_cast<SwiperJumpToPageFn>(callback)(handle, page);
+  }
+  char buffer[32];
+  std::snprintf(buffer, sizeof(buffer), "%u", page);
+  node->attrs["current"] = buffer;
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] swiperTo #%u page=%u animated=%d\n", node_id,
+                 page, use_animation ? 1 : 0);
+  }
+}
+
+void SetPickerColumnCurrent(uint32_t node_id, uint32_t current) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* node = FindNode(node_id);
+  if (node == nullptr || node->picker_column_p == nullptr) return;
+  void* callback = FindCallback(g_page->holder->ffi_table,
+                                kPickerViewColumnUpdateCurrentHash);
+  if (callback == nullptr) return;
+  reinterpret_cast<PickerViewColumnUpdateCurrentFn>(callback)(
+      Dart_HandleFromPersistent(node->picker_column_p), current);
+  char buffer[32];
+  std::snprintf(buffer, sizeof(buffer), "%u", current);
+  node->attrs["value"] = buffer;
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr, "[skyline-runtime] pickerTo #%u current=%u\n",
+                 node_id, current);
+  }
+}
+
+void SetInputFocus(uint32_t node_id, bool focus) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* node = FindNode(node_id);
+  if (node == nullptr) return;
+  if (focus) {
+    g_page->focused_input_id = node_id;
+  } else if (g_page->focused_input_id == node_id) {
+    g_page->focused_input_id = 0;
+  }
+  if (node->input_widget_p == nullptr) {
+    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] input %s #%u: no input widget\n",
+                   focus ? "focus" : "blur", node_id);
+    }
+    return;
+  }
+  void* callback = FindCallback(
+      g_page->holder->ffi_table,
+      focus ? kInputFocusManuallyHash : kInputBlurManuallyHash);
+  if (callback == nullptr) return;
+  Dart_Handle handle = Dart_HandleFromPersistent(node->input_widget_p);
+  if (focus) {
+    reinterpret_cast<InputFocusManuallyFn>(callback)(handle);
+  } else {
+    reinterpret_cast<InputBlurManuallyFn>(callback)(handle);
+  }
+  std::fprintf(stderr, "[skyline-runtime] Input%sManually: id=%u\n",
+               focus ? "Focus" : "Blur", node_id);
+  EmitWidgetEvent(node_id, focus ? kWidgetInputFocus : kWidgetInputBlur, 0.0,
+                  0.0, 0);
 }
 
 bool AttrBool(const AppNode* node, const char* key, bool fallback) {
@@ -7039,6 +7364,16 @@ bool IsShareElementNode(const AppNode* node) {
 bool IsSwiperNode(const AppNode* node) {
   return node != nullptr &&
          (node->tag == "swiper" || node->name == "swiper");
+}
+
+// `picker-view-column` is the native Cupertino wheel; `<picker-view>` itself
+// is a plain box that lays the columns out horizontally.
+bool IsPickerViewColumnNode(const AppNode* node) {
+  return node != nullptr &&
+         (node->tag == "picker-view-column" ||
+          node->tag == "pickerviewcolumn" ||
+          node->name == "picker-view-column" ||
+          node->name == "pickerviewcolumn");
 }
 
 // glass-easel wraps the real adapter node (`scrollview`, which carries the
@@ -8291,6 +8626,155 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     // Slivers are consumed by the ancestor scroll view; do not wrap in a
     // YGNode (a ParentDataWidget under a sliver is invalid).
     return builder;
+  } else if (IsSwiperNode(node)) {
+    auto* newSwiper = g_page != nullptr && g_page->holder != nullptr
+                          ? reinterpret_cast<NewSwiperFn>(FindCallback(
+                                g_page->holder->ffi_table, kNewSwiperHash))
+                          : nullptr;
+    if (newSwiper == nullptr) return Dart_Null();
+    std::vector<Dart_Handle> item_widgets;
+    item_widgets.reserve(node->children.size());
+    for (AppNode* child : node->children) {
+      if (child == nullptr || child->released || child->style.display_none) {
+        continue;
+      }
+      // PageView positions the pages itself; item YGNodes must be laid out at
+      // the origin (the page-wide pass positioned them side by side).
+      MeasureNode(child, node->measured_w, true, node->measured_h, true);
+      std::vector<NodeMetric> item_metrics;
+      LayoutNode(child, 0.0f, 0.0f, child->measured_w, child->measured_h,
+                 &item_metrics, child->abs_x, child->abs_y);
+      child->sliver_layout = true;
+      WriteLayoutMetrics(item_metrics);
+      Dart_Handle widget =
+          BuildWidget(child, newYGNode, newYGConnector, newText, newTextSpan,
+                      newDecoratedBox, newOpacity, newScrollView, newListView,
+                      newGridView, newDirectRenderWidget, newListBuilder,
+                      newGridBuilder, true);
+      if (widget != nullptr && !Dart_IsError(widget)) {
+        item_widgets.push_back(widget);
+      }
+    }
+    Dart_Handle children =
+        Dart_NewList(static_cast<intptr_t>(item_widgets.size()));
+    for (size_t i = 0; i < item_widgets.size(); i++) {
+      Dart_ListSetAt(children, static_cast<intptr_t>(i), item_widgets[i]);
+    }
+    const bool vertical = AttrBool(node, "vertical", false);
+    uint32_t dot_color =
+        ParseColorString(AttrText(node, "indicatorColor", "").c_str(),
+                         0x4D000000u);
+    uint32_t active_color =
+        ParseColorString(AttrText(node, "indicatorActiveColor", "").c_str(),
+                         0xFFFFFFFFu);
+    double previous_margin = 0.0;
+    double next_margin = 0.0;
+    {
+      const std::string raw = AttrText(node, "previousMargin", "");
+      if (!raw.empty()) ParsePxToken(raw, &previous_margin);
+    }
+    {
+      const std::string raw = AttrText(node, "nextMargin", "");
+      if (!raw.empty()) ParsePxToken(raw, &next_margin);
+    }
+    const std::string easing = AttrText(node, "easingFunction", "default");
+    Dart_Handle easing_handle = Dart_NewStringFromCString(easing.c_str());
+    const auto* recognizers = vertical ? g_swiper_vertical_recognizer
+                                       : g_swiper_horizontal_recognizer;
+    Dart_Handle swiper = newSwiper(
+        node->address, 0 /* layoutType */, 0 /* transformerType */,
+        0 /* indicatorType */, AttrBool(node, "indicatorDots", false) ? 1 : 0,
+        0.0f, 0.0f, -1.0, -1.0, 3.0f, 6.0f, 3.0f, 6.0f, 6.0f, dot_color,
+        active_color, vertical ? 1 : 0, vertical ? 1 : 3,
+        AttrBool(node, "circular", false) ? 1 : 0,
+        AttrBool(node, "autoplay", false) ? 1 : 0,
+        static_cast<uint32_t>(AttrNumber(node, "interval", 5000.0)),
+        static_cast<uint32_t>(AttrNumber(node, "duration", 500.0)),
+        easing_handle,
+        static_cast<uint32_t>(AttrNumber(node, "current", 0.0)), 0.0f,
+        static_cast<float>(std::max(
+            1.0, AttrNumber(node, "displayMultipleItems", 1.0))),
+        AttrBool(node, "snapToEdge", false) ? 1 : 0,
+        static_cast<float>(previous_margin),
+        static_cast<float>(next_margin),
+        const_cast<NativeGestureRecognizerNative*>(recognizers), 1,
+        reinterpret_cast<void*>(&SwiperOnChange),
+        reinterpret_cast<void*>(&SwiperOnScroll), children);
+    if (Dart_IsError(swiper)) {
+      ReportDartError("appservice NewSwiper", swiper);
+      return Dart_Null();
+    }
+    node->swiper_p = Dart_NewPersistentHandle(swiper);
+    InstallSwiperCallbacks(node);
+    std::fprintf(stderr,
+                 "[skyline-runtime] swiper #%u: vertical=%d current=%g "
+                 "items=%zu\n",
+                 node->id, vertical ? 1 : 0,
+                 AttrNumber(node, "current", 0.0), item_widgets.size());
+    inner = swiper;
+  } else if (IsPickerViewColumnNode(node)) {
+    auto* newPickerColumn =
+        g_page != nullptr && g_page->holder != nullptr
+            ? reinterpret_cast<NewPickerViewColumnFn>(
+                  FindCallback(g_page->holder->ffi_table,
+                               kNewPickerViewColumnHash))
+            : nullptr;
+    if (newPickerColumn == nullptr) return Dart_Null();
+    const double indicator_height =
+        AttrNumber(node, "indicatorHeight", 50.0);
+    std::vector<Dart_Handle> item_widgets;
+    item_widgets.reserve(node->children.size());
+    for (AppNode* child : node->children) {
+      if (child == nullptr || child->released || child->style.display_none) {
+        continue;
+      }
+      // ListWheel positions items at `itemExtent` steps; lay each item out at
+      // the origin with the indicator height as its slot.
+      MeasureNode(child, node->measured_w, true,
+                  static_cast<float>(indicator_height), true);
+      std::vector<NodeMetric> item_metrics;
+      LayoutNode(child, 0.0f, 0.0f, child->measured_w,
+                 static_cast<float>(indicator_height), &item_metrics,
+                 child->abs_x, child->abs_y);
+      child->sliver_layout = true;
+      WriteLayoutMetrics(item_metrics);
+      Dart_Handle widget =
+          BuildWidget(child, newYGNode, newYGConnector, newText, newTextSpan,
+                      newDecoratedBox, newOpacity, newScrollView, newListView,
+                      newGridView, newDirectRenderWidget, newListBuilder,
+                      newGridBuilder, true);
+      if (widget != nullptr && !Dart_IsError(widget)) {
+        item_widgets.push_back(widget);
+      }
+    }
+    Dart_Handle children =
+        Dart_NewList(static_cast<intptr_t>(item_widgets.size()));
+    for (size_t i = 0; i < item_widgets.size(); i++) {
+      Dart_ListSetAt(children, static_cast<intptr_t>(i), item_widgets[i]);
+    }
+    Dart_Handle column = newPickerColumn(
+        node->address,
+        static_cast<uint32_t>(AttrNumber(node, "value", 0.0)),
+        static_cast<float>(indicator_height), 0.0, 0.0, 0.0, 0.0, 0u, 0u, 0u,
+        0u, 0, 0, 0, 0, style.has_background ? style.background : 0u,
+        AttrBool(node, "immediateChange", false) ? 1 : 0,
+        AttrBool(node, "magnifier", true) ? 1 : 0,
+        AttrNumber(node, "magnification", 1.0),
+        AttrNumber(node, "overAndUnderCenterOpacity", 0.447),
+        reinterpret_cast<void*>(&PickerColumnOnChange),
+        reinterpret_cast<void*>(&PickerColumnOnStart),
+        reinterpret_cast<void*>(&PickerColumnOnEnd), children);
+    if (Dart_IsError(column)) {
+      ReportDartError("appservice NewPickerViewColumn", column);
+      return Dart_Null();
+    }
+    node->picker_column_p = Dart_NewPersistentHandle(column);
+    InstallPickerColumnCallbacks(node);
+    std::fprintf(stderr,
+                 "[skyline-runtime] picker column #%u: current=%g items=%zu\n",
+                 node->id, AttrNumber(node, "value", 0.0),
+                 item_widgets.size());
+    inner = column;
   } else {
     const bool is_scroll_view = IsScrollViewName(node->name) &&
                                 newScrollView != nullptr &&
@@ -9497,6 +9981,36 @@ void ApplyNodeAttribute(AppNode* node, const char* name,
   } else if (value.IsBool()) {
     ApplyAttribute(node, name, value.GetBool() ? "1" : "0");
   }
+  // Programmatic widget updates.  The native handles exist only after the
+  // widget has been materialized, so initial creation is unaffected.
+  if (node == nullptr || name == nullptr || *name == '\0') return;
+  double number = 0.0;
+  bool flag = false;
+  if (value.IsNumber()) {
+    number = value.GetDouble();
+    flag = number != 0.0;
+  } else if (value.IsBool()) {
+    flag = value.GetBool();
+    number = flag ? 1.0 : 0.0;
+  } else if (value.IsString()) {
+    const char* raw = value.GetString();
+    number = std::atof(raw);
+    flag = number != 0.0 || std::strcmp(raw, "true") == 0;
+  } else {
+    return;
+  }
+  if (IsSwiperNode(node) && std::strcmp(name, "current") == 0) {
+    AnimateSwiperTo(node->id, static_cast<uint32_t>(std::max(0.0, number)),
+                    AttrNumber(node, "duration", 500.0) > 0.0 &&
+                        AttrBool(node, "scrollWithAnimation", true));
+  } else if (IsPickerViewColumnNode(node) &&
+             (std::strcmp(name, "value") == 0 ||
+              std::strcmp(name, "current") == 0)) {
+    SetPickerColumnCurrent(node->id,
+                           static_cast<uint32_t>(std::max(0.0, number)));
+  } else if (node->name == "input" && std::strcmp(name, "focus") == 0) {
+    SetInputFocus(node->id, flag);
+  }
 }
 
 std::string CamelToKebab(const std::string& key) {
@@ -9788,9 +10302,19 @@ void ApplyOperation(const rapidjson::Value& op) {
       node->input_selection_end = end;
       ClampInputState(node);
       NotifyInputState(node);
+      SetInputFocus(id, true);
     }
     std::fprintf(stderr, "[skyline-runtime] focus input: id=%u\n",
                  g_page->focused_input_id);
+  } else if (std::strcmp(kind, "blurInput") == 0) {
+    const uint32_t id = MemberUint(op, "id", g_page->focused_input_id);
+    if (id != 0) {
+      SetInputFocus(id, false);
+    } else if (g_page->focused_input_id != 0) {
+      SetInputFocus(g_page->focused_input_id, false);
+    }
+    g_page->focused_input_id = 0;
+    std::fprintf(stderr, "[skyline-runtime] blur input: id=%u\n", id);
   } else if (std::strcmp(kind, "setSelection") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
     if (node != nullptr) {
@@ -9899,6 +10423,23 @@ void ApplyOperation(const rapidjson::Value& op) {
                    "[skyline-runtime] appservice setScrollTop: id=%u value=%g\n",
                    node->id, value);
     }
+  } else if (std::strcmp(kind, "swiperTo") == 0) {
+    bool animated = true;
+    const auto animated_member = op.FindMember("animated");
+    if (animated_member != op.MemberEnd()) {
+      if (animated_member->value.IsBool()) {
+        animated = animated_member->value.GetBool();
+      } else if (animated_member->value.IsNumber()) {
+        animated = animated_member->value.GetDouble() != 0.0;
+      }
+    }
+    AnimateSwiperTo(MemberUint(op, "id", 0),
+                    static_cast<uint32_t>(MemberNumber(op, "page", 0.0)),
+                    animated);
+  } else if (std::strcmp(kind, "pickerTo") == 0) {
+    SetPickerColumnCurrent(
+        MemberUint(op, "id", 0),
+        static_cast<uint32_t>(MemberNumber(op, "value", 0.0)));
   } else if (std::strcmp(kind, "dispatchTouch") == 0) {
     void* callback = g_page->holder != nullptr
                          ? FindCallback(g_page->holder->ffi_table,
@@ -11398,6 +11939,8 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   g_builders_by_address.clear();
   g_image_nodes.clear();
   g_scroll_view_ids.clear();
+  g_swiper_ids.clear();
+  g_picker_column_ids.clear();
   for (const rapidjson::Value& op : ops_member->value.GetArray()) {
     ApplyOperation(op);
     const char* kind = MemberText(op, "op");
@@ -11652,6 +12195,8 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
     g_builders_by_address.clear();
     g_image_nodes.clear();
     g_scroll_view_ids.clear();
+    g_swiper_ids.clear();
+    g_picker_column_ids.clear();
   }
 
   bool structural = false;
@@ -11985,6 +12530,46 @@ SKYLINE_EXPORT extern "C" int32_t SkylineGetNodeRect(uint32_t node_id,
 SKYLINE_EXPORT extern "C" void SkylineSetScrollEventSink(
     appservice::SkylineScrollEventSink sink) {
   appservice::g_scroll_event_sink.store(sink);
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSetWidgetEventSink(
+    appservice::SkylineWidgetEventSink sink) {
+  appservice::g_widget_event_sink.store(sink);
+}
+
+// UI-thread programmatic widget updates used by the addon bridge.
+template <typename Fn>
+void PostToUiIfReady(Fn fn) {
+  fml::RefPtr<fml::TaskRunner> runner;
+  {
+    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
+    if (!g_live_ready) return;
+    runner = g_live_ui_runner;
+  }
+  if (!runner) return;
+  runner->PostTask([fn]() {
+    DemoPageApiScope scope;
+    fn();
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSwiperTo(uint32_t node_id, uint32_t page,
+                                               uint8_t animated) {
+  PostToUiIfReady([node_id, page, animated]() {
+    appservice::AnimateSwiperTo(node_id, page, animated != 0);
+  });
+}
+
+SKYLINE_EXPORT extern "C" void SkylinePickerColumnSetCurrent(
+    uint32_t node_id, uint32_t current) {
+  PostToUiIfReady(
+      [node_id, current]() { appservice::SetPickerColumnCurrent(node_id, current); });
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSetInputFocus(uint32_t node_id,
+                                                    uint8_t focus) {
+  PostToUiIfReady(
+      [node_id, focus]() { appservice::SetInputFocus(node_id, focus != 0); });
 }
 
 SKYLINE_EXPORT extern "C" void SkylineScrollNodeTo(uint32_t node_id,

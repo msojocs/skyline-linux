@@ -39,11 +39,8 @@ widget，不经过 Dart 回调表，不计为缺口。下表的“未接线”�
 | 能力 | 回调 | 影响 |
 | --- | --- | --- |
 | 下拉刷新 | `ScrollViewRequestRefresherRefresh` / `TwoLevel` | `refresher-enabled` 的刷新请求不回调 |
-| Swiper 事件/控制 | `SwiperUpdateOnChange` / `OnScroll`、`SwiperAnimateToPage` / `JumpToPage` | `bindchange`/`bindscroll` 与 `swiper` 实例方法缺失 |
-| 输入框编程式焦点 | `InputFocusManually` / `InputBlurManually` | 点击聚焦可用（`InputFocus`），`wx.hideKeyboard`/编程式 focus 不可用 |
 | IntersectionObserver | `YGNodeAddIntersectionObserver` / `Remove...` | 节点可见性回调不触发 |
 | Selection API | `SelectionSetRange` / `OnSelectionChange` / `SelectionColor` 等 | 文本选区 API/事件缺失 |
-| PickerView 事件 | `PickerViewColumnUpdateOnChange/Start/End` | `bindchange`/`bindpickstart`/`bindpickend` 不触发 |
 | 返回拦截 | `SetNavigateBackInterception` | `wx.enableAlertBeforeUnload` 类能力缺失 |
 | 用户手势 | `StartUserGesture` / `StopUserGesture` | 自动播放/音频的用户手势状态不可用 |
 | 无障碍 | `UpdateAccessibility`、`Semantics*`、`AccessibilityBoldTextEnabled` | 语义树不更新；`UpdateAccessibility` 是空 stub |
@@ -55,6 +52,9 @@ widget，不经过 Dart 回调表，不计为缺口。下表的“未接线”�
 | --- | --- | --- |
 | 滚动事件 | `NewScrollView` 传入 `ScrollStartEvent`/`ScrollEvent`/`ScrollEndEvent`，并用 `ScrollViewUpdateOnScrollStart/OnScroll/OnScrollEnd` 安装；回调更新 `scrollTop` 并经 `SkylineSetScrollEventSink` 投递到 addon JS 线程，bootstrap 分发给 `bindscroll` 回调与 `onScroll-<tag>` worklet | `test/bootstrap-scroll.test.js`：sink → bindscroll/worklet 两条路径；`test:ops` 断言 `scroll callbacks installed #<id> (start=1 scroll=1 end=1)` 与滚动日志；Linux DevTools address-book 滚动后 A-Z 高亮 A→B |
 | `setData(data, callback)` | `PageContext.render(callback)` 在 flush 后调用回调（SDK 的 `triggerRender` 路径）；address-book 的 `computedSize()` 依赖该回调填充 `_tops` | `test/bootstrap-scroll.test.js`：render 回调与 op flush |
+| Swiper | 真实 `NewSwiper` + `SwiperUpdateOnChange/OnScroll`；`current` 属性、`swiperTo` op、`native.swiperTo` 走 `SwiperAnimateToPage`/`JumpToPage`；bootstrap 分发给 `onChangeEvent`/`onScrollEvent` 与 `onChange`/`onTransition` worklet | `test:ops`：换页像素 + `swiper change/scroll` 日志；`test/bootstrap-scroll.test.js`：三条 JS 分发；DevTools `tab-indicator` 点击/`swiperTo` 均触发 `bindchange` |
+| PickerView | 真实 `NewPickerViewColumn` + `PickerViewColumnUpdateOnChange/OnStart/OnEnd`；`value` 属性、`pickerTo` op、`native.pickerColumnSetCurrent` 走 `UpdateCurrent`；change 合成 picker-view `{value:[...]}` detail | `test:ops`：列 change/start/end 日志与编程式选中像素 |
+| Input 编程式焦点 | `focusInput`/`blurInput`、`focus` 属性与 `native.inputFocus` 调用 `InputFocusManually`/`InputBlurManually` | `test:ops`：`InputFocusManually`/`InputBlurManually` 日志；bootstrap 单测记录 focus/blur 事件 |
 | `pointer-events: none` | 解析为 `PointerEvents.none` 传给 `NewYGNode`；`SkylineGetNodeRect` 增加 `pointerEvents` 字段，appservice 镜像 hit test 跳过该子树 | `native/test/skyline-appservice-ops.test.js`：`pointer-events:none` 覆盖层可穿透滚动；对照组 `pointer-events` auto 覆盖层拦截滚动 |
 | `will-change` | 纯渲染提示，无静态像素差异；不解析（官方探针也不产生差异） | 无行为差异，不设探针 |
 
@@ -62,7 +62,9 @@ widget，不经过 Dart 回调表，不计为缺口。下表的“未接线”�
 
 - ~~**D7** 滚动事件~~ 已完成：`ScrollViewUpdateOnScroll/OnScrollStart/OnScrollEnd`
   在滚动位置/状态变化时回调，并已用 address-book 的滚动高亮验证。
-- **D8** Swiper/PickerView/Input 编程式 API 与事件回调。
+- ~~**D8** Swiper/PickerView/Input~~ 已完成：真实 Swiper/PickerViewColumn
+  回调与 `AnimateToPage`/`JumpToPage`/`UpdateCurrent`，Input
+  `FocusManually`/`BlurManually` 均已接入。
 - **D9** IntersectionObserver、Selection、Refresher、返回拦截。
 - **D10** 无障碍语义树与 DevTools 自动化快照/内存 API。
 

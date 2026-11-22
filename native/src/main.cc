@@ -29,6 +29,15 @@ extern "C" void SkylineSetScrollEventSink(
                  double scroll_left, double scroll_width, double scroll_height,
                  double delta_x, double delta_y, uint8_t is_drag,
                  double boundary_velocity));
+// Swiper/picker/input event sink and programmatic updates.
+extern "C" void SkylineSetWidgetEventSink(
+    void (*sink)(uint32_t node_id, int32_t kind, double value, double extra,
+                 uint8_t flag));
+extern "C" void SkylineSwiperTo(uint32_t node_id, uint32_t page,
+                                uint8_t animated);
+extern "C" void SkylinePickerColumnSetCurrent(uint32_t node_id,
+                                              uint32_t current);
+extern "C" void SkylineSetInputFocus(uint32_t node_id, uint8_t focus);
 #endif
 
 namespace {
@@ -88,6 +97,7 @@ struct AddonState {
 // the appservice JS thread through a threadsafe function installed by the
 // bootstrap (`native.setScrollSink`).
 std::atomic<napi_threadsafe_function> g_scroll_tsfn{nullptr};
+std::atomic<napi_threadsafe_function> g_widget_tsfn{nullptr};
 
 struct ScrollEvent {
   uint32_t node_id = 0;
@@ -100,6 +110,14 @@ struct ScrollEvent {
   double delta_y = 0.0;
   bool is_drag = false;
   double boundary_velocity = 0.0;
+};
+
+struct WidgetEvent {
+  uint32_t node_id = 0;
+  int32_t kind = 0;
+  double value = 0.0;
+  double extra = 0.0;
+  uint8_t flag = 0;
 };
 
 AddonState* State(napi_env env) {
@@ -118,10 +136,15 @@ void CleanupCallbacks(void* argument) {
   // down.  Clear the runtime sink first, then release the queue.
 #ifdef SKYLINE_HAVE_ENGINE
   SkylineSetScrollEventSink(nullptr);
+  SkylineSetWidgetEventSink(nullptr);
 #endif
   napi_threadsafe_function scroll_tsfn = g_scroll_tsfn.exchange(nullptr);
   if (scroll_tsfn != nullptr) {
     napi_release_threadsafe_function(scroll_tsfn, napi_tsfn_abort);
+  }
+  napi_threadsafe_function widget_tsfn = g_widget_tsfn.exchange(nullptr);
+  if (widget_tsfn != nullptr) {
+    napi_release_threadsafe_function(widget_tsfn, napi_tsfn_abort);
   }
   for (auto& [window_id, tsfn] : state->frame_tsfns) {
     (void)window_id;
@@ -676,6 +699,144 @@ napi_value SetScrollSink(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
+// Runs on the appservice JS thread.  Builds the widget event object the
+// bootstrap routes to the builtin swiper / picker-view mirror.
+void CallWidgetEvent(napi_env env, napi_value js_callback, void* /*context*/,
+                     void* data) {
+  auto* event = static_cast<WidgetEvent*>(data);
+  if (env == nullptr || js_callback == nullptr || event == nullptr) {
+    delete event;
+    return;
+  }
+  napi_value object = nullptr;
+  napi_create_object(env, &object);
+  auto set_number = [&](const char* key, double value) {
+    napi_value number = nullptr;
+    napi_create_double(env, value, &number);
+    napi_set_named_property(env, object, key, number);
+  };
+  set_number("nodeId", static_cast<double>(event->node_id));
+  set_number("kind", static_cast<double>(event->kind));
+  set_number("value", event->value);
+  set_number("extra", event->extra);
+  set_number("flag", static_cast<double>(event->flag));
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  napi_value result = nullptr;
+  napi_call_function(env, undefined, js_callback, 1, &object, &result);
+  delete event;
+}
+
+void AddonWidgetEventSink(uint32_t node_id, int32_t kind, double value,
+                          double extra, uint8_t flag) {
+  napi_threadsafe_function tsfn = g_widget_tsfn.load();
+  if (tsfn == nullptr) return;
+  auto* event = new WidgetEvent();
+  event->node_id = node_id;
+  event->kind = kind;
+  event->value = value;
+  event->extra = extra;
+  event->flag = flag;
+  if (napi_call_threadsafe_function(tsfn, event, napi_tsfn_nonblocking) !=
+      napi_ok) {
+    delete event;
+  }
+}
+
+napi_value SetWidgetEventSink(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1 || !IsType(env, argv[0], napi_function)) {
+    return Throw(env, napi_invalid_arg,
+                 "setWidgetEventSink expects a function");
+  }
+  napi_value resource_name = nullptr;
+  napi_create_string_utf8(env, "skyline_widget", NAPI_AUTO_LENGTH,
+                          &resource_name);
+  napi_threadsafe_function tsfn = nullptr;
+  if (napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 32,
+                                      1, nullptr, nullptr, nullptr,
+                                      CallWidgetEvent, &tsfn) != napi_ok) {
+    return Throw(env, napi_generic_failure,
+                 "Unable to create widget event callback");
+  }
+  napi_unref_threadsafe_function(env, tsfn);
+  napi_threadsafe_function previous = g_widget_tsfn.exchange(tsfn);
+  if (previous != nullptr) {
+    napi_release_threadsafe_function(previous, napi_tsfn_release);
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSetWidgetEventSink(&AddonWidgetEventSink);
+#endif
+  return Undefined(env);
+}
+
+// `swiperTo(windowId, nodeId, page, animated)` — programmatic swiper paging.
+napi_value SwiperTo(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 3) {
+    return Throw(env, napi_invalid_arg,
+                 "swiperTo expects (windowId, nodeId, page[, animated])");
+  }
+  const double node_id = ReadNumber(env, argv[1]);
+  const double page = ReadNumber(env, argv[2]);
+  const bool animated = argc > 3 ? ReadBool(env, argv[3], true) : true;
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSwiperTo(static_cast<uint32_t>(node_id),
+                  static_cast<uint32_t>(page < 0 ? 0 : page),
+                  animated ? 1 : 0);
+#else
+  (void)node_id;
+  (void)page;
+  (void)animated;
+#endif
+  return Undefined(env);
+}
+
+// `pickerColumnSetCurrent(windowId, nodeId, current)`.
+napi_value PickerColumnSetCurrent(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 3) {
+    return Throw(env, napi_invalid_arg,
+                 "pickerColumnSetCurrent expects (windowId, nodeId, current)");
+  }
+  const double node_id = ReadNumber(env, argv[1]);
+  const double current = ReadNumber(env, argv[2]);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylinePickerColumnSetCurrent(static_cast<uint32_t>(node_id),
+                                static_cast<uint32_t>(current < 0 ? 0 : current));
+#else
+  (void)node_id;
+  (void)current;
+#endif
+  return Undefined(env);
+}
+
+// `inputFocus(windowId, nodeId, focus)` — programmatic focus/blur.
+napi_value InputFocus(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3] = {nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 3) {
+    return Throw(env, napi_invalid_arg,
+                 "inputFocus expects (windowId, nodeId, focus)");
+  }
+  const double node_id = ReadNumber(env, argv[1]);
+  const bool focus = ReadBool(env, argv[2], false);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSetInputFocus(static_cast<uint32_t>(node_id), focus ? 1 : 0);
+#else
+  (void)node_id;
+  (void)focus;
+#endif
+  return Undefined(env);
+}
+
 napi_value Noop(napi_env env, napi_callback_info info) {
   (void)info;
   return Undefined(env);
@@ -772,6 +933,10 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "dispatchWheel", DispatchWheel);
   Define(env, bridge, "onWindowRasterized", OnWindowRasterized);
   Define(env, bridge, "setScrollSink", SetScrollSink);
+  Define(env, bridge, "setWidgetEventSink", SetWidgetEventSink);
+  Define(env, bridge, "swiperTo", SwiperTo);
+  Define(env, bridge, "pickerColumnSetCurrent", PickerColumnSetCurrent);
+  Define(env, bridge, "inputFocus", InputFocus);
   Define(env, bridge, "setSafeArea", Noop);
   Define(env, bridge, "dispatch", Noop);
   Define(env, bridge, "notify", Noop);

@@ -119,6 +119,11 @@ names.append("SkylineGetNodeRect")
 names.append("SkylineScrollNodeTo")
 # Scroll event sink (native ScrollViewUpdateOnScroll* -> addon JS thread).
 names.append("SkylineSetScrollEventSink")
+# Swiper/picker/input event + programmatic bridge.
+names.append("SkylineSetWidgetEventSink")
+names.append("SkylineSwiperTo")
+names.append("SkylinePickerColumnSetCurrent")
+names.append("SkylineSetInputFocus")
 missing = [name for name in names if f"    {name};" not in exports]
 if missing:
     anchor = "    kInternalFlutterGpu*;\n"
