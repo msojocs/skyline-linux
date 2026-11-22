@@ -1558,10 +1558,16 @@
   function executeWorkletMapper(entry) {
     entry.dirty = false;
     let nodes;
-    const hasSelector = entry.selector !== 0 && entry.selector !== null &&
-      entry.selector !== undefined;
-    if (hasSelector) {
+    // The SDK resolves `applyAnimatedStyle` selectors itself and registers the
+    // mapper on the resolved backend element with `addAnimatedStyle(mapperId)`;
+    // `startMapper` only receives the window id (4) as its selector argument.
+    const selectorLike = typeof entry.selector === 'string' ||
+      Array.isArray(entry.selector) ||
+      (entry.selector !== null && entry.selector !== undefined &&
+       typeof entry.selector === 'object');
+    if (selectorLike) {
       nodes = workletSelectorNodes(entry.selector, entry.owner);
+      if (nodes.length === 0 && entry.owner) nodes = [entry.owner];
       if (nodes.length === 0) {
         // The selector may not be attached yet (or its route is still being
         // built); retry for about a second before giving up.
@@ -1571,8 +1577,15 @@
         }
         return;
       }
-      entry.misses = 0;
+    } else if (entry.owner) {
+      // Target the element the mapper was registered on.
+      nodes = [entry.owner];
+    } else {
+      // `derived()` mappers have no owner and ignore the node list (they
+      // assign their output shared value themselves).
+      nodes = undefined;
     }
+    entry.misses = 0;
     try {
       entry.worklet.call(entry.worklet._closure || undefined, undefined, nodes);
     } catch (error) {

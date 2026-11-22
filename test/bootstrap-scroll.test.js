@@ -648,4 +648,37 @@ test('bootstrap: worklet mappers drive applyAnimatedStyle updates', () => {
   // no longer reach it.
   assert.doesNotMatch(styleOf(view) || '', /opacity: 0?\.5;/,
                       'sibling component stays untouched');
+
+  // Real SDK path: `applyAnimatedStyle` resolves the selector itself and
+  // registers the mapper on that backend element; startMapper only receives
+  // the window id.  The mapper must paint the owner element, not look up a
+  // selector named "4".
+  const owned = context.createElement('empty', 'view');
+  owned.setClass('owned-target');
+  root.appendChild(owned);
+  const ownedProgress = SkylineGlobal.ReanimatedModule.makeMutable(0);
+  const ownedWorklet = function (_unused, nodes) {
+    const style = `opacity: ${ownedProgress.value};`;
+    for (const node of nodes || []) {
+      sandbox.workletUIModule.updateNodeStyle(node, style);
+    }
+  };
+  ownedWorklet._closure = { progress: ownedProgress };
+  const ownedId = SkylineGlobal.workletModule.startMapper(
+    4, ownedWorklet, [ownedProgress], [], { immediate: false });
+  owned.addAnimatedStyle(ownedId);
+  ownedProgress.value = 0.75;
+  assert.match(styleOf(owned) || '', /opacity: 0?\.75;/,
+               'window-id mapper paints its registered owner');
+
+  // `derived()` mappers have no owner/selector and must still run (the worklet
+  // assigns its output shared value itself).
+  const source = SkylineGlobal.ReanimatedModule.makeMutable(1);
+  const derivedOut = SkylineGlobal.ReanimatedModule.makeMutable(0);
+  const derivedWorklet = function () { derivedOut.value = source.value * 3; };
+  derivedWorklet._closure = { source, derivedOut };
+  SkylineGlobal.workletModule.startMapper(
+    4, derivedWorklet, [source], [derivedOut], { flush: 'sync' });
+  source.value = 5;
+  assert.equal(derivedOut.value, 15, 'selector-less mapper still executes');
 });
