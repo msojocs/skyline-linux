@@ -117,6 +117,8 @@ names.append("SkylineApplyLiveOps")
 names.append("SkylineGetNodeRect")
 # Scroll-into-view bridge (`scroll-into-view` WXML property).
 names.append("SkylineScrollNodeTo")
+# Scroll event sink (native ScrollViewUpdateOnScroll* -> addon JS thread).
+names.append("SkylineSetScrollEventSink")
 missing = [name for name in names if f"    {name};" not in exports]
 if missing:
     anchor = "    kInternalFlutterGpu*;\n"

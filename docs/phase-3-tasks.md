@@ -261,8 +261,8 @@
   - 新增两个 `test:ops` 行为探针：`pointer-events:none` 覆盖层可穿透滚动；
     同几何、无 `pointer-events` 的对照组覆盖层会拦截滚动。
   - `will-change` 确认无静态/行为差异，不解析、不设探针。
-  - 确认缺口（待后续 D7-D10）：滚动事件、下拉刷新、Swiper/PickerView 事件、
-    编程式输入焦点、IntersectionObserver、Selection、返回拦截、用户手势、
+  - 确认缺口（D7 已补齐滚动事件；其余待 D8-D10）：下拉刷新、Swiper/PickerView
+    事件、编程式输入焦点、IntersectionObserver、Selection、返回拦截、用户手势、
     无障碍语义、自动化快照/内存 API。
   - 回归：`test:ops` 70/70（含 2 个 pointer-events 探针）；顺带把
     “移除背景” 用例的 200ms 更新改为 600ms，消除初始物化竞态。
@@ -292,9 +292,26 @@
     L5 基线已记录说明。
   - 回归：`test:ops` 68/68、`test:page` 14/14、`test:l5` 2/2 通过。
 
-- [ ] **D7** 滚动事件回调
-  - 在滚动位置/状态变化时调用 `ScrollViewUpdateOnScroll/OnScrollStart/OnScrollEnd`；
-    用 address-book 的滚动高亮做真机验证。
+- [x] **D7** 滚动事件回调
+  - `NewScrollView` 传入真实的 `ScrollStartEvent`/`ScrollEvent`/`ScrollEndEvent`，
+    创建后再通过 `ScrollViewUpdateOnScrollStart/OnScroll/OnScrollEnd` 安装同一组
+    回调（`SKYLINE_APP_SERVICE_DEBUG` 下输出
+    `scroll callbacks installed #<id> (start=1 scroll=1 end=1)`）。
+  - 滚动回调更新节点的 `scrollTop` 属性（后续 setData 重建不会跳回顶部），并经
+    `SkylineSetScrollEventSink` 把位置/尺寸/增量/isDrag/边界速度投递到 addon 的
+    JS 线程。
+  - bootstrap 新增 `native.setScrollSink` 分发：普通 `bindscroll`
+    （`node.onScrollEvent`）与 worklet（`ReanimatedModule.registerEventHandler`
+    的 `onScroll-<tag>`）两条路径都收到
+    `{type, detail:{scrollTop, scrollLeft, scrollWidth, scrollHeight, deltaX, deltaY}}`；
+    `getScrollOffset` 返回最近一次真实偏移。
+  - 修复 `PageContext.render(callback)`：appservice SDK 的
+    `setData(data, callback)` 走 `triggerRender -> backendContext.render(cb)`，
+    之前忽略回调，address-book 的 `computedSize()` 因此不执行、`_tops` 保持
+    2e10 sentinel，滚动高亮永不更新。
+  - 验证：新增 `test/bootstrap-scroll.test.js` 覆盖 sink→bindscroll/worklet 分发与
+    render 回调；`test:ops` 断言三个 Update* 回调均已安装（70/70）；Linux
+    DevTools 真机 address-book 滚轮滚动后右侧 A-Z 高亮由 A 切换为 B。
 - [ ] **D8** Swiper/PickerView/Input 编程式 API 与事件
   - `SwiperUpdateOnChange/OnScroll`、`SwiperAnimateToPage/JumpToPage`、
     `PickerViewColumnUpdateOnChange/Start/End`、`InputFocusManually/BlurManually`。
@@ -309,8 +326,8 @@
 
 | 套件 | 结果 | 说明 |
 | --- | ---: | --- |
-| `npm test` | **159 / 183** | 24 skipped，0 fail |
-| `npm run test:ops` | **64 / 64** | appservice 操作流回放 |
+| `npm test` | **167 / 191** | 24 skipped，0 fail |
+| `npm run test:ops` | **70 / 70** | appservice 操作流回放 |
 | `npm run test:page` | **14 / 14** | 合成 Skyline 页面 |
 | `npm run test:l5` | **2 / 2** | Linux 确定性基线 + Windows 容差比较 |
 

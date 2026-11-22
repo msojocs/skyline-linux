@@ -38,7 +38,6 @@ widget，不经过 Dart 回调表，不计为缺口。下表的“未接线”�
 
 | 能力 | 回调 | 影响 |
 | --- | --- | --- |
-| 滚动事件 | `ScrollViewUpdateOnScroll` / `OnScrollStart` / `OnScrollEnd` | `bindscroll`/`bindscrolltolower` 等页面事件不触发；address-book 的滚动高亮保持 sentinel |
 | 下拉刷新 | `ScrollViewRequestRefresherRefresh` / `TwoLevel` | `refresher-enabled` 的刷新请求不回调 |
 | Swiper 事件/控制 | `SwiperUpdateOnChange` / `OnScroll`、`SwiperAnimateToPage` / `JumpToPage` | `bindchange`/`bindscroll` 与 `swiper` 实例方法缺失 |
 | 输入框编程式焦点 | `InputFocusManually` / `InputBlurManually` | 点击聚焦可用（`InputFocus`），`wx.hideKeyboard`/编程式 focus 不可用 |
@@ -54,14 +53,15 @@ widget，不经过 Dart 回调表，不计为缺口。下表的“未接线”�
 
 | 特性 | 实现 | 探针 |
 | --- | --- | --- |
+| 滚动事件 | `NewScrollView` 传入 `ScrollStartEvent`/`ScrollEvent`/`ScrollEndEvent`，并用 `ScrollViewUpdateOnScrollStart/OnScroll/OnScrollEnd` 安装；回调更新 `scrollTop` 并经 `SkylineSetScrollEventSink` 投递到 addon JS 线程，bootstrap 分发给 `bindscroll` 回调与 `onScroll-<tag>` worklet | `test/bootstrap-scroll.test.js`：sink → bindscroll/worklet 两条路径；`test:ops` 断言 `scroll callbacks installed #<id> (start=1 scroll=1 end=1)` 与滚动日志；Linux DevTools address-book 滚动后 A-Z 高亮 A→B |
+| `setData(data, callback)` | `PageContext.render(callback)` 在 flush 后调用回调（SDK 的 `triggerRender` 路径）；address-book 的 `computedSize()` 依赖该回调填充 `_tops` | `test/bootstrap-scroll.test.js`：render 回调与 op flush |
 | `pointer-events: none` | 解析为 `PointerEvents.none` 传给 `NewYGNode`；`SkylineGetNodeRect` 增加 `pointerEvents` 字段，appservice 镜像 hit test 跳过该子树 | `native/test/skyline-appservice-ops.test.js`：`pointer-events:none` 覆盖层可穿透滚动；对照组 `pointer-events` auto 覆盖层拦截滚动 |
 | `will-change` | 纯渲染提示，无静态像素差异；不解析（官方探针也不产生差异） | 无行为差异，不设探针 |
 
 ## 5. 后续修复任务
 
-- **D7** 滚动事件：在滚动位置/状态变化时调用
-  `ScrollViewUpdateOnScroll/OnScrollStart/OnScrollEnd`，并用 address-book 的
-  滚动高亮做真机验证。
+- ~~**D7** 滚动事件~~ 已完成：`ScrollViewUpdateOnScroll/OnScrollStart/OnScrollEnd`
+  在滚动位置/状态变化时回调，并已用 address-book 的滚动高亮验证。
 - **D8** Swiper/PickerView/Input 编程式 API 与事件回调。
 - **D9** IntersectionObserver、Selection、Refresher、返回拦截。
 - **D10** 无障碍语义树与 DevTools 自动化快照/内存 API。

@@ -504,7 +504,7 @@ function renderMarkdown(report) {
   lines.push('## 建议的下一步', '');
   lines.push('1. ~~用 Wine 渲染进程补录 24 个 engine-context 契约用例~~（已完成：60 个用例中 50 个可观测、10 个官方崩溃；`test:native` 53/53 通过）。');
   lines.push('2. D2 已完成可视 CSS/标签探针（aspect-ratio/vertical-align/text-overflow/white-space/map）；D6 修复了 aspect-ratio/inline-block/white-space/text-overflow。');
-  lines.push('3. D3 已完成 `pointer-events` 探针与候选回调分类（`docs/callback-coverage.md`）；滚动事件、Swiper/PickerView、IntersectionObserver、Selection、无障碍等仍待 D7-D10。');
+  lines.push('3. D3 已完成 `pointer-events` 探针与候选回调分类（`docs/callback-coverage.md`）；D7 已补齐滚动事件（`ScrollViewUpdateOnScroll/Start/End` + address-book 滚动高亮）；Swiper/PickerView、IntersectionObserver、Selection、无障碍等仍待 D8-D10。');
   lines.push('4. 录制真实页面的 ops 流，在 Wine 官方引擎和 Linux 引擎上重放并做整页对比。');
   lines.push('');
   return lines.join('\n');

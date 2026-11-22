@@ -930,6 +930,12 @@
     };
   }
 
+  // Worklet event handlers are registered by the Skyline component library as
+  // `${eventName}-${viewTag}` (e.g. `onScroll-42`) through
+  // SkylineGlobal.ReanimatedModule.  Keep them so native scroll events can be
+  // delivered to the worklet on the appservice thread.
+  const workletEventHandlers = new Map();
+
   function workletStub() {
     const target = Object.create(null);
     const passthrough = function (value) {
@@ -947,6 +953,14 @@
     target.pushFrame = function () {};
     target.requestFrame = function () {};
     target.getCurrentTime = function () { return Date.now(); };
+    target.registerEventHandler = function (hash, worklet) {
+      if (typeof hash === 'string' && typeof worklet === 'function') {
+        workletEventHandlers.set(hash, worklet);
+      }
+    };
+    target.unregisterEventHandler = function (hash) {
+      workletEventHandlers.delete(hash);
+    };
     return new Proxy(target, {
       get(object, property) {
         if (property in object) return object[property];
@@ -1014,6 +1028,14 @@
       }
     } catch (_error) {}
   }
+
+  // Scroll event callbacks registered by the builtin scroll-view component.
+  // The keys are backend view tags; native scroll events carry the same tag.
+  const scrollEventCallbacks = new Map();
+  const scrollStartEventCallbacks = new Map();
+  const scrollEndEventCallbacks = new Map();
+  // Last reported offset per scroll view (selector-query `getScrollOffset`).
+  const scrollOffsets = new Map();
 
   class BridgeElement {
     constructor(tag, name, ops, windowId) {
@@ -1134,11 +1156,12 @@
     }
     getScrollOffset(callback) {
       const rect = nodeRect(this.windowId, this.viewTag);
+      const state = scrollOffsets.get(this.viewTag);
       const offset = {
-        scrollLeft: 0,
-        scrollTop: 0,
-        scrollWidth: rect ? rect.width : 0,
-        scrollHeight: rect ? rect.height : 0,
+        scrollLeft: state ? state.scrollLeft : 0,
+        scrollTop: state ? state.scrollTop : 0,
+        scrollWidth: state ? state.scrollWidth : (rect ? rect.width : 0),
+        scrollHeight: state ? state.scrollHeight : (rect ? rect.height : 0),
       };
       if (typeof callback === 'function') {
         setTimeout(() => callback(offset), 0);
@@ -1252,7 +1275,13 @@
     // onChangeEvent callback in `attached`).  Stored for the native channels
     // that get wired up later.
     onChangeEvent(callback) { this.changeEventCallback = callback; }
-    onScrollEvent(callback) { this.scrollEventCallback = callback; }
+    onScrollEvent(callback) {
+      if (typeof callback === 'function') {
+        scrollEventCallbacks.set(this.viewTag, callback);
+      } else {
+        scrollEventCallbacks.delete(this.viewTag);
+      }
+    }
     onLoadEvent(callback) { this.loadEventCallback = callback; }
     onErrorEvent(callback) { this.errorEventCallback = callback; }
     onKeyboardValueChange(callback) { this.keyboardValueChangeCallback = callback; }
@@ -1334,9 +1363,20 @@
     requestRefresherRefresh() {}
     requestRefresherTwoLevel() {}
     getScrollPosition() { return 0; }
-    onScrollStartEvent() {}
-    onScrollEvent() {}
-    onScrollEndEvent() {}
+    onScrollStartEvent(callback) {
+      if (typeof callback === 'function') {
+        scrollStartEventCallbacks.set(this.viewTag, callback);
+      } else {
+        scrollStartEventCallbacks.delete(this.viewTag);
+      }
+    }
+    onScrollEndEvent(callback) {
+      if (typeof callback === 'function') {
+        scrollEndEventCallbacks.set(this.viewTag, callback);
+      } else {
+        scrollEndEventCallbacks.delete(this.viewTag);
+      }
+    }
     onScrollToLowerEvent() {}
     onScrollToUpperEvent() {}
     onRefresherPullingEvent() {}
@@ -1480,7 +1520,15 @@
       this.ops.push({ op: 'setAsTab' });
     }
     // Remaining PageContext surface used by the mini program SDK/Dart engine.
-    render() { this.flush(); }
+    // `render(callback)` is the setData completion path: the appservice SDK
+    // calls `triggerRender` -> `backendContext.render(cb)` after applying data
+    // updates and relies on the callback to run `setData(data, callback)`.
+    render(callback) {
+      this.flush();
+      if (typeof callback === 'function') {
+        setTimeout(() => callback(null), 0);
+      }
+    }
     release() { liveContexts.delete(this); }
     recalcStyle() {}
     updateRouteConfig() {}
@@ -1559,6 +1607,11 @@
   globalThis.__skylineDebug = {
     attachedRoots, detachedPortals, lastTouchPoint,
     touchCallbacks: runtimeTouchCallbacks,
+    scrollOffsets,
+    workletEventHandlers,
+    scrollEventCallbacks,
+    scrollStartEventCallbacks,
+    scrollEndEventCallbacks,
     rect: nodeRect,
     hit: hitTestElement,
     scrollTo(windowId, nodeId, top) {
@@ -1795,6 +1848,62 @@
     }
   }
 
+  // Native scroll callbacks (ScrollViewUpdateOnScroll*) arrive on the
+  // appservice thread as `{nodeId, phase, scrollTop, ...}`.  Deliver them to
+  // whichever registration the builtin scroll-view used: a worklet handler
+  // (`onScroll-<tag>`) or the plain JS callback from `bindscroll`.
+  function dispatchNativeScrollEvent(event) {
+    if (!event) return;
+    const tag = event.nodeId;
+    if (!tag) return;
+    const detail = {
+      scrollTop: Number(event.scrollTop) || 0,
+      scrollLeft: Number(event.scrollLeft) || 0,
+      scrollWidth: Number(event.scrollWidth) || 0,
+      scrollHeight: Number(event.scrollHeight) || 0,
+      deltaX: Number(event.deltaX) || 0,
+      deltaY: Number(event.deltaY) || 0,
+    };
+    scrollOffsets.set(tag, detail);
+    const phase = Number(event.phase) || 0;
+    const isStart = phase === 0;
+    const isEnd = phase === 2;
+    const eventName = isStart ? 'onScrollStart' : (isEnd ? 'onScrollEnd' : 'onScroll');
+    const worklet = workletEventHandlers.get(`${eventName}-${tag}`);
+    if (worklet) {
+      const workletEvent = {
+        type: isStart ? 'scrollstart' : (isEnd ? 'scrollend' : 'scroll'),
+        detail,
+        isDrag: !!event.isDrag,
+        boundaryVelocity: Number(event.boundaryVelocity) || 0,
+        timeStamp: Date.now(),
+      };
+      try {
+        // Worklet factories capture shared values in `_closure`; calling with
+        // it as `this` keeps `this._sharedX` references working on the JS
+        // thread fallback.
+        worklet.call(worklet._closure || undefined, workletEvent);
+      } catch (error) {
+        if (typeof native.log === 'function') {
+          native.log(`scroll worklet failed: ${error && error.message}`);
+        }
+      }
+    }
+    const callbacks = isStart ? scrollStartEventCallbacks
+      : (isEnd ? scrollEndEventCallbacks : scrollEventCallbacks);
+    const callback = callbacks.get(tag);
+    if (callback) {
+      try {
+        callback(detail.scrollTop, detail.scrollLeft, detail.scrollWidth,
+                 detail.scrollHeight, detail.deltaX, detail.deltaY);
+      } catch (error) {
+        if (typeof native.log === 'function') {
+          native.log(`scroll callback failed: ${error && error.message}`);
+        }
+      }
+    }
+  }
+
   function dispatchDomTouchEvent(windowId, type, x, y) {
     if (!runtimeTouchCallbacks.length) return;
     if (type === 'touchcancel') {
@@ -1913,6 +2022,20 @@
     workletModule: workletStub(),
     ReanimatedModule: workletStub(),
   };
+
+  // The runtime forwards real ScrollViewUpdateOnScroll/Start/End callbacks
+  // through this sink.
+  if (typeof native.setScrollSink === 'function') {
+    native.setScrollSink(function (event) {
+      try {
+        dispatchNativeScrollEvent(event);
+      } catch (error) {
+        if (typeof native.log === 'function') {
+          native.log(`native scroll dispatch failed: ${error && error.message}`);
+        }
+      }
+    });
+  }
 
   const debugInfo = native.debugInfo();
   // Environment probe: the addon's script may run in a different V8 context

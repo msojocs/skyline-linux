@@ -183,11 +183,11 @@ npm run test:contract
 `spec/skyline-node.win32.json` 与 `npm run l5:windows` 产生的
 `spec/l5-baseline.win32.json` 是提交的基准文件（不含绝对路径）。
 
-### 当前结果（2026-11-20）
+### 当前结果（2026-11-22）
 
 ```
-npm test: 176 tests, 152 pass, 0 fail, 24 skipped
-npm run test:ops: 57 tests, 57 pass
+npm test: 191 tests, 167 pass, 0 fail, 24 skipped
+npm run test:ops: 70 tests, 70 pass
 npm run test:l5: 2 tests, 2 pass (Linux 确定性基线 + Windows 逐像素容差比较)
 ```
 

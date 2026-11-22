@@ -766,6 +766,8 @@ test('appservice ops: host drag gesture scrolls the scroll view', {
     // ShouldGestureResponse) and feeds the scroll position.
     assert.match(logs, /ShouldGestureResponse: 1 -> 1/);
     assert.match(logs, /ShouldAcceptGesture: 1 -> 1/);
+    assert.match(logs,
+      /scroll callbacks installed #3 \(start=1 scroll=1 end=1\)/);
     assert.match(logs, /scroll start\/end: top=0 .*drag=1/);
     assert.match(logs, /scroll: top=[1-9]\d*(\.\d+)? /);
     assert.ok(pixels, 'no frame was captured');

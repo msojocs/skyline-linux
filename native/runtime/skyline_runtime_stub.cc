@@ -20,6 +20,7 @@
 // `skyline-runtime` test checks it.
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -684,6 +685,14 @@ using DispatchTouchEventFn = void (*)(uint8_t type, double x, double y);
 // The kernel declares ScrollViewUpdateScrollTop as (Handle, Float): the
 // argument is a 32-bit float, so passing a double corrupts the value.
 using ScrollViewUpdateScrollTopFn = void (*)(Dart_Handle scroll_view, float top);
+// `ScrollViewUpdateOnScroll*` install the native callbacks that the Dart
+// scroll view invokes when the user scrolls ("Void Function(Handle, Pointer)").
+using ScrollViewUpdateOnScrollFn = void (*)(Dart_Handle scroll_view,
+                                            void* callback);
+using ScrollViewUpdateOnScrollStartFn = void (*)(Dart_Handle scroll_view,
+                                                 void* callback);
+using ScrollViewUpdateOnScrollEndFn = void (*)(Dart_Handle scroll_view,
+                                               void* callback);
 using ConnectorUpdateChildrenFn = void (*)(Dart_Handle connector,
                                            uint8_t stackingPaint,
                                            Dart_Handle children);
@@ -819,6 +828,9 @@ constexpr uint32_t kRequestHttpResourceHash = 670378368u;
 constexpr uint32_t kOnForwardHttpGetResponseHash = 663443835u;
 constexpr uint32_t kGetNodeFromPointHash = 771509372u;
 constexpr uint32_t kScrollViewUpdateScrollTopHash = 390858736u;
+constexpr uint32_t kScrollViewUpdateOnScrollHash = 694938287u;
+constexpr uint32_t kScrollViewUpdateOnScrollEndHash = 721422539u;
+constexpr uint32_t kScrollViewUpdateOnScrollStartHash = 759191700u;
 constexpr uint32_t kNewListBuilderHash = 526654284u;
 constexpr uint32_t kNewListBuilderItemHash = 629516111u;
 constexpr uint32_t kListBuilderAppendChildHash = 707989954u;
@@ -2582,6 +2594,25 @@ struct OpPage {
 };
 
 OpPage* g_page = nullptr;
+
+// Scroll views report native callbacks with `SkylineScrollView.ptr` (the
+// AppNode address) as their first argument.  Keep the reverse mapping so the
+// appservice mirror can be told which view tag scrolled.
+std::unordered_map<intptr_t, uint32_t> g_scroll_view_ids;
+
+// The DevTools addon installs a sink that forwards scroll callbacks to the
+// appservice JS (`bindscroll`, worklet handlers).  The standalone host leaves
+// it null and only writes diagnostics.
+enum : int32_t {
+  kScrollPhaseStart = 0,
+  kScrollPhaseScroll = 1,
+  kScrollPhaseEnd = 2,
+};
+using SkylineScrollEventSink = void (*)(
+    uint32_t node_id, int32_t phase, double scroll_top, double scroll_left,
+    double scroll_width, double scroll_height, double delta_x, double delta_y,
+    uint8_t is_drag, double boundary_velocity);
+std::atomic<SkylineScrollEventSink> g_scroll_event_sink{nullptr};
 
 // Layout geometry published for the appservice selector-query APIs
 // (`createSelectorQuery().boundingClientRect`).  The appservice JS queries node
@@ -6734,28 +6765,103 @@ extern "C" double ScrollNoopContentSize(intptr_t, int32_t, int32_t, double,
                                        double) {
   return std::nan("");
 }
-extern "C" void ScrollNoopStartEnd(intptr_t, double top, double left,
-                                   double width, double height, uint8_t drag) {
+
+// Shared scroll-report path.  Updates the persisted `scrollTop` so a following
+// rebuild (the address-book highlight calls setData on every scroll) keeps the
+// list at the user's position, then forwards the event to the addon when one
+// is installed.
+void DispatchScrollEvent(intptr_t ptr, int32_t phase, double top, double left,
+                         double width, double height, double dx, double dy,
+                         uint8_t drag, double velocity) {
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] scroll start/end: top=%g left=%g size=%gx%g "
-                 "drag=%u\n",
-                 top, left, width, height, static_cast<unsigned>(drag));
+    if (phase == kScrollPhaseScroll) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] scroll: top=%g left=%g delta=(%g,%g) "
+                   "drag=%u velocity=%g\n",
+                   top, left, dx, dy, static_cast<unsigned>(drag), velocity);
+    } else {
+      std::fprintf(stderr,
+                   "[skyline-runtime] scroll start/end: top=%g left=%g "
+                   "size=%gx%g drag=%u\n",
+                   top, left, width, height, static_cast<unsigned>(drag));
+    }
+  }
+  uint32_t node_id = 0;
+  const auto found = g_scroll_view_ids.find(ptr);
+  if (found != g_scroll_view_ids.end()) node_id = found->second;
+  if (node_id != 0 && g_page != nullptr) {
+    AppNode* node = FindNode(node_id);
+    if (node != nullptr && !node->released) {
+      char buffer[64];
+      std::snprintf(buffer, sizeof(buffer), "%g", top);
+      node->attrs["scrollTop"] = buffer;
+    }
+  }
+  SkylineScrollEventSink sink = g_scroll_event_sink.load();
+  if (sink != nullptr) {
+    sink(node_id, phase, top, left, width, height, dx, dy, drag, velocity);
   }
 }
-extern "C" void ScrollNoopScroll(intptr_t, double top, double left,
-                                 double width, double height, double dx,
-                                 double dy, uint8_t drag, double velocity) {
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] scroll: top=%g left=%g delta=(%g,%g) "
-                 "drag=%u velocity=%g\n",
-                 top, left, dx, dy, static_cast<unsigned>(drag), velocity);
-  }
+
+extern "C" void ScrollStartEvent(intptr_t ptr, double top, double left,
+                                 double width, double height, uint8_t drag) {
+  DispatchScrollEvent(ptr, kScrollPhaseStart, top, left, width, height, 0.0,
+                      0.0, drag, 0.0);
+}
+extern "C" void ScrollEndEvent(intptr_t ptr, double top, double left,
+                               double width, double height, uint8_t drag) {
+  DispatchScrollEvent(ptr, kScrollPhaseEnd, top, left, width, height, 0.0, 0.0,
+                      drag, 0.0);
+}
+extern "C" void ScrollEvent(intptr_t ptr, double top, double left, double width,
+                            double height, double dx, double dy, uint8_t drag,
+                            double velocity) {
+  DispatchScrollEvent(ptr, kScrollPhaseScroll, top, left, width, height, dx, dy,
+                      drag, velocity);
 }
 extern "C" void ScrollNoopPtr(intptr_t) {}
 extern "C" void ScrollNoopDouble(intptr_t, double) {}
 extern "C" void ScrollNoopStatus(intptr_t, int32_t, double) {}
+
+// Register the native callbacks through the `ScrollViewUpdateOnScroll*` FFI
+// entry points.  NewScrollView already accepts the same pointers, but the
+// appservice pipeline updates scroll callbacks after creation; wiring both
+// paths keeps the contracts in sync and matches the official renderer.
+void InstallScrollCallbacks(AppNode* node) {
+  if (node == nullptr || node->scroll_view_p == nullptr || g_page == nullptr ||
+      g_page->holder == nullptr) {
+    return;
+  }
+  g_scroll_view_ids[node->address] = node->id;
+  FfiTable* table = g_page->holder->ffi_table;
+  Dart_Handle handle = Dart_HandleFromPersistent(node->scroll_view_p);
+  bool start = false;
+  bool scroll = false;
+  bool end = false;
+  if (void* callback =
+          FindCallback(table, kScrollViewUpdateOnScrollStartHash)) {
+    reinterpret_cast<ScrollViewUpdateOnScrollStartFn>(callback)(
+        handle, reinterpret_cast<void*>(&ScrollStartEvent));
+    start = true;
+  }
+  if (void* callback = FindCallback(table, kScrollViewUpdateOnScrollHash)) {
+    reinterpret_cast<ScrollViewUpdateOnScrollFn>(callback)(
+        handle, reinterpret_cast<void*>(&ScrollEvent));
+    scroll = true;
+  }
+  if (void* callback =
+          FindCallback(table, kScrollViewUpdateOnScrollEndHash)) {
+    reinterpret_cast<ScrollViewUpdateOnScrollEndFn>(callback)(
+        handle, reinterpret_cast<void*>(&ScrollEndEvent));
+    end = true;
+  }
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] scroll callbacks installed #%u "
+                 "(start=%d scroll=%d end=%d)\n",
+                 node->id, start ? 1 : 0, scroll ? 1 : 0, end ? 1 : 0);
+  }
+}
 
 bool AttrBool(const AppNode* node, const char* key, bool fallback) {
   const auto found = node->attrs.find(key);
@@ -8289,9 +8395,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             Dart_Null(), 0, 0.0, style.padding[0], style.padding[1],
             style.padding[2], style.padding[3], 0, 0, 1, 0,
             reinterpret_cast<void*>(&ScrollNoopContentSize),
-            reinterpret_cast<void*>(&ScrollNoopStartEnd),
-            reinterpret_cast<void*>(&ScrollNoopScroll),
-            reinterpret_cast<void*>(&ScrollNoopStartEnd),
+            reinterpret_cast<void*>(&ScrollStartEvent),
+            reinterpret_cast<void*>(&ScrollEvent),
+            reinterpret_cast<void*>(&ScrollEndEvent),
             reinterpret_cast<void*>(&ScrollNoopPtr),
             reinterpret_cast<void*>(&ScrollNoopPtr),
             reinterpret_cast<void*>(&ScrollNoopDouble),
@@ -8306,6 +8412,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         } else {
           inner = scroll;
           node->scroll_view_p = Dart_NewPersistentHandle(scroll);
+          InstallScrollCallbacks(node);
         }
       }
     } else {
@@ -8554,9 +8661,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             0 /* paint order */, 1 /* scrollAnchoring */,
             0 /* innerCorrectionMode */,
             reinterpret_cast<void*>(&ScrollNoopContentSize),
-            reinterpret_cast<void*>(&ScrollNoopStartEnd),
-            reinterpret_cast<void*>(&ScrollNoopScroll),
-            reinterpret_cast<void*>(&ScrollNoopStartEnd),
+            reinterpret_cast<void*>(&ScrollStartEvent),
+            reinterpret_cast<void*>(&ScrollEvent),
+            reinterpret_cast<void*>(&ScrollEndEvent),
             reinterpret_cast<void*>(&ScrollNoopPtr),
             reinterpret_cast<void*>(&ScrollNoopPtr),
             reinterpret_cast<void*>(&ScrollNoopDouble),
@@ -8571,6 +8678,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         } else {
           inner = scroll;
           node->scroll_view_p = Dart_NewPersistentHandle(scroll);
+          InstallScrollCallbacks(node);
         }
       } else if (!child_widgets.empty()) {
         Dart_Handle list =
@@ -11289,6 +11397,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   g_next_address = 0x5000;
   g_builders_by_address.clear();
   g_image_nodes.clear();
+  g_scroll_view_ids.clear();
   for (const rapidjson::Value& op : ops_member->value.GetArray()) {
     ApplyOperation(op);
     const char* kind = MemberText(op, "op");
@@ -11542,6 +11651,7 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
     g_next_address = 0x5000;
     g_builders_by_address.clear();
     g_image_nodes.clear();
+    g_scroll_view_ids.clear();
   }
 
   bool structural = false;
@@ -11870,6 +11980,11 @@ SKYLINE_EXPORT extern "C" int32_t SkylineGetNodeRect(uint32_t node_id,
   out[4] = found->second.z_index;
   out[5] = found->second.pointer_events;
   return 1;
+}
+
+SKYLINE_EXPORT extern "C" void SkylineSetScrollEventSink(
+    appservice::SkylineScrollEventSink sink) {
+  appservice::g_scroll_event_sink.store(sink);
 }
 
 SKYLINE_EXPORT extern "C" void SkylineScrollNodeTo(uint32_t node_id,

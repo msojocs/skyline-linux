@@ -1,5 +1,6 @@
 #include <node_api.h>
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -22,6 +23,12 @@ extern "C" void SkylineApplyLiveOps(const char* json, double window_id);
 extern "C" int32_t SkylineGetNodeRect(uint32_t node_id, float* out);
 // Scroll a materialized scroll-view node to a vertical offset.
 extern "C" void SkylineScrollNodeTo(uint32_t node_id, double top);
+// Install the UI-thread sink that reports scroll start/scroll/end events.
+extern "C" void SkylineSetScrollEventSink(
+    void (*sink)(uint32_t node_id, int32_t phase, double scroll_top,
+                 double scroll_left, double scroll_width, double scroll_height,
+                 double delta_x, double delta_y, uint8_t is_drag,
+                 double boundary_velocity));
 #endif
 
 namespace {
@@ -77,6 +84,24 @@ struct AddonState {
   std::unique_ptr<skyline::Engine> engine;
 };
 
+// The runtime reports scroll events from the engine UI thread; hand them to
+// the appservice JS thread through a threadsafe function installed by the
+// bootstrap (`native.setScrollSink`).
+std::atomic<napi_threadsafe_function> g_scroll_tsfn{nullptr};
+
+struct ScrollEvent {
+  uint32_t node_id = 0;
+  int32_t phase = 0;
+  double scroll_top = 0.0;
+  double scroll_left = 0.0;
+  double scroll_width = 0.0;
+  double scroll_height = 0.0;
+  double delta_x = 0.0;
+  double delta_y = 0.0;
+  bool is_drag = false;
+  double boundary_velocity = 0.0;
+};
+
 AddonState* State(napi_env env) {
   void* data = nullptr;
   if (napi_get_instance_data(env, &data) != napi_ok) return nullptr;
@@ -89,6 +114,15 @@ void CleanupCallbacks(void* argument) {
   // Stop engine threads before the environment and shared-memory views go
   // away; DestroyWindow joins each window's platform thread.
   state->engine.reset();
+  // No scroll events may reach the JS thread while the environment is torn
+  // down.  Clear the runtime sink first, then release the queue.
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSetScrollEventSink(nullptr);
+#endif
+  napi_threadsafe_function scroll_tsfn = g_scroll_tsfn.exchange(nullptr);
+  if (scroll_tsfn != nullptr) {
+    napi_release_threadsafe_function(scroll_tsfn, napi_tsfn_abort);
+  }
   for (auto& [window_id, tsfn] : state->frame_tsfns) {
     (void)window_id;
     if (tsfn) napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
@@ -547,6 +581,101 @@ napi_value OnWindowRasterized(napi_env env, napi_callback_info info) {
   return Undefined(env);
 }
 
+// Runs on the appservice JS thread.  Builds the event object the bootstrap
+// turns into `bindscroll` / worklet callbacks.
+void CallScrollEvent(napi_env env, napi_value js_callback, void* /*context*/,
+                     void* data) {
+  auto* event = static_cast<ScrollEvent*>(data);
+  if (env == nullptr || js_callback == nullptr || event == nullptr) {
+    delete event;
+    return;
+  }
+  napi_value object = nullptr;
+  napi_create_object(env, &object);
+  auto set_number = [&](const char* key, double value) {
+    napi_value number = nullptr;
+    napi_create_double(env, value, &number);
+    napi_set_named_property(env, object, key, number);
+  };
+  set_number("nodeId", static_cast<double>(event->node_id));
+  set_number("phase", static_cast<double>(event->phase));
+  set_number("scrollTop", event->scroll_top);
+  set_number("scrollLeft", event->scroll_left);
+  set_number("scrollWidth", event->scroll_width);
+  set_number("scrollHeight", event->scroll_height);
+  set_number("deltaX", event->delta_x);
+  set_number("deltaY", event->delta_y);
+  set_number("boundaryVelocity", event->boundary_velocity);
+  napi_value drag = nullptr;
+  napi_get_boolean(env, event->is_drag, &drag);
+  napi_set_named_property(env, object, "isDrag", drag);
+  const char* kind = event->phase == 0
+                         ? "scrollStart"
+                         : (event->phase == 2 ? "scrollEnd" : "scroll");
+  napi_value kind_value = nullptr;
+  napi_create_string_utf8(env, kind, NAPI_AUTO_LENGTH, &kind_value);
+  napi_set_named_property(env, object, "kind", kind_value);
+  napi_value undefined = nullptr;
+  napi_get_undefined(env, &undefined);
+  napi_value result = nullptr;
+  napi_call_function(env, undefined, js_callback, 1, &object, &result);
+  delete event;
+}
+
+// Engine UI thread: only queue; JS renders the event on its own thread.
+void AddonScrollEventSink(uint32_t node_id, int32_t phase, double scroll_top,
+                          double scroll_left, double scroll_width,
+                          double scroll_height, double delta_x, double delta_y,
+                          uint8_t is_drag, double boundary_velocity) {
+  napi_threadsafe_function tsfn = g_scroll_tsfn.load();
+  if (tsfn == nullptr) return;
+  auto* event = new ScrollEvent();
+  event->node_id = node_id;
+  event->phase = phase;
+  event->scroll_top = scroll_top;
+  event->scroll_left = scroll_left;
+  event->scroll_width = scroll_width;
+  event->scroll_height = scroll_height;
+  event->delta_x = delta_x;
+  event->delta_y = delta_y;
+  event->is_drag = is_drag != 0;
+  event->boundary_velocity = boundary_velocity;
+  if (napi_call_threadsafe_function(tsfn, event, napi_tsfn_nonblocking) !=
+      napi_ok) {
+    delete event;
+  }
+}
+
+napi_value SetScrollSink(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1] = {nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1 || !IsType(env, argv[0], napi_function)) {
+    return Throw(env, napi_invalid_arg, "setScrollSink expects a function");
+  }
+  napi_value resource_name = nullptr;
+  napi_create_string_utf8(env, "skyline_scroll", NAPI_AUTO_LENGTH,
+                          &resource_name);
+  napi_threadsafe_function tsfn = nullptr;
+  if (napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 32,
+                                      1, nullptr, nullptr, nullptr,
+                                      CallScrollEvent, &tsfn) != napi_ok) {
+    return Throw(env, napi_generic_failure,
+                 "Unable to create scroll event callback");
+  }
+  // Tests load the addon, create a window and expect the Node event loop to
+  // drain; an unref'd TSFN still receives calls but does not hold the loop.
+  napi_unref_threadsafe_function(env, tsfn);
+  napi_threadsafe_function previous = g_scroll_tsfn.exchange(tsfn);
+  if (previous != nullptr) {
+    napi_release_threadsafe_function(previous, napi_tsfn_release);
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSetScrollEventSink(&AddonScrollEventSink);
+#endif
+  return Undefined(env);
+}
+
 napi_value Noop(napi_env env, napi_callback_info info) {
   (void)info;
   return Undefined(env);
@@ -642,6 +771,7 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "dispatchTouch", DispatchTouch);
   Define(env, bridge, "dispatchWheel", DispatchWheel);
   Define(env, bridge, "onWindowRasterized", OnWindowRasterized);
+  Define(env, bridge, "setScrollSink", SetScrollSink);
   Define(env, bridge, "setSafeArea", Noop);
   Define(env, bridge, "dispatch", Noop);
   Define(env, bridge, "notify", Noop);
