@@ -1032,6 +1032,140 @@ test('appservice ops: programmatic input focus and blur', {
   }
 });
 
+test('appservice ops: span/text inline flow keeps the footer row on one line', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors the card_transition detail page footer:
+  //   <view class="footer"><view class="footer-content">
+  //     <input class="footer-input" placeholder="hello"/>
+  //     <span><text class="footer-icon">❤️</text> 317</span>
+  //     <span><text class="footer-icon">⭐️</text> 723</span>
+  //   </view></view>
+  // Skyline's `span`/`<text>` wrappers are inline-level, so the two spans keep
+  // their intrinsic width and `flex:1` leaves the input most of the row.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-footer-'));
+  const fixture = path.join(dir, 'footer.ops.json');
+  fs.writeFileSync(fixture, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1, css:
+        'page, view, span { box-sizing: border-box; } ' +
+        '.footer { font-size: 14px; } ' +
+        '.footer-content { display: flex; flex-direction: row; ' +
+          'align-items: center; height: 50px; } ' +
+        '.footer .footer-input { flex: 1; background-color: #EEEEEE; ' +
+          'margin-left: 15px; margin-right: 15px; padding-left: 15px; ' +
+          'height: 40px; border-radius: 20px; } ' +
+        '.footer span { padding-right: 15px; } ' +
+        '.footer-icon { font-size: 26px; }' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'view', name: 'view' },
+      { op: 'addClass', id: 3, prefix: 'footer', name: 1 },
+      { op: 'createElement', id: 4, tag: 'view', name: 'view' },
+      { op: 'addClass', id: 4, prefix: 'footer-content', name: 1 },
+      { op: 'createElement', id: 5, tag: 'wx-x', name: 'input' },
+      { op: 'addClass', id: 5, prefix: '__wx_display_block__', name: 1 },
+      { op: 'addClass', id: 5, prefix: 'footer-input', name: 1 },
+      { op: 'createElement', id: 6, tag: 'input', name: 'native-input' },
+      { op: 'setStyle', id: 6, value: 'width:100%;height:100%;' },
+      { op: 'setAttributes', id: 6,
+        attrs: { placeholder: 'hello', cursorColor: '#07C160' } },
+      { op: 'appendChild', id: 5, child: 6 },
+      { op: 'createElement', id: 7, tag: 'span', name: 'span' },
+      { op: 'createElement', id: 8, tag: 'text', name: 'text' },
+      { op: 'addClass', id: 8, prefix: 'footer-icon', name: 1 },
+      { op: 'createElement', id: 9, tag: 'text', name: '' },
+      { op: 'setText', id: 9, text: '❤️' },
+      { op: 'appendChild', id: 8, child: 9 },
+      { op: 'createElement', id: 10, tag: 'text', name: '' },
+      { op: 'setText', id: 10, text: '317' },
+      { op: 'appendChild', id: 7, child: 8 },
+      { op: 'appendChild', id: 7, child: 10 },
+      { op: 'createElement', id: 11, tag: 'span', name: 'span' },
+      { op: 'createElement', id: 12, tag: 'text', name: 'text' },
+      { op: 'addClass', id: 12, prefix: 'footer-icon', name: 1 },
+      { op: 'createElement', id: 13, tag: 'text', name: '' },
+      { op: 'setText', id: 13, text: '⭐️' },
+      { op: 'appendChild', id: 12, child: 13 },
+      { op: 'createElement', id: 14, tag: 'text', name: '' },
+      { op: 'setText', id: 14, text: '723' },
+      { op: 'appendChild', id: 11, child: 12 },
+      { op: 'appendChild', id: 11, child: 14 },
+      { op: 'appendChild', id: 4, child: 5 },
+      { op: 'appendChild', id: 4, child: 7 },
+      { op: 'appendChild', id: 4, child: 11 },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(fixture, {
+      timeoutMs: 3000,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    const rectOf = (id) => {
+      const match = new RegExp(
+        `\\[ops-debug\\] rect #${id} left=([-\\d.]+) top=([-\\d.]+) ` +
+        'w=([-\\d.]+) h=([-\\d.]+)').exec(logs);
+      assert.ok(match, `no rect published for node #${id}:\n${logs}`);
+      return {
+        left: Number(match[1]), top: Number(match[2]),
+        w: Number(match[3]), h: Number(match[4]),
+      };
+    };
+
+    const input = rectOf(5);
+    const span1 = rectOf(7);
+    const span2 = rectOf(11);
+    const heart = rectOf(9);
+    const likes = rectOf(10);
+    // `flex:1` gets the remaining row; before the inline defaults the spans
+    // measured a full 320px each and the input collapsed to width 0.
+    assert.equal(input.left, 15);
+    assert.equal(input.h, 40);
+    assert.ok(input.w > 150, `input did not grow: ${JSON.stringify(input)}`);
+    assert.ok(span1.w < 100, `span kept intrinsic width: ${JSON.stringify(span1)}`);
+    assert.ok(span2.w < 100, `span kept intrinsic width: ${JSON.stringify(span2)}`);
+    assert.ok(Math.abs(span1.left - (input.left + input.w + 15)) < 0.5,
+      `span must follow the input: input=${JSON.stringify(input)} ` +
+      `span=${JSON.stringify(span1)}`);
+    assert.ok(span2.left + span2.w <= 320.5,
+      `second span overflowed: ${JSON.stringify(span2)}`);
+    // Heart and `317` share the line box instead of stacking in a column.
+    assert.ok(likes.left > heart.left,
+      `317 must follow the heart inline: heart=${JSON.stringify(heart)} ` +
+      `likes=${JSON.stringify(likes)}`);
+    // The U+FE0F variation selector must not add a second 26px advance.
+    assert.ok(heart.w < 40,
+      `emoji advance includes the variation selector: ${JSON.stringify(heart)}`);
+    assert.ok(Math.abs((heart.top + heart.h) - (likes.top + likes.h)) < 1.5,
+      `317 must share the line bottom: heart=${JSON.stringify(heart)} ` +
+      `likes=${JSON.stringify(likes)}`);
+    assert.ok(pixels, 'no frame was captured');
+    // The native input widget renders the placeholder inside the grey pill.
+    const placeholderPixels = countColor(pixels, (r, g, b) =>
+      r < 160 && g < 160 && b < 160);
+    assert.ok(placeholderPixels > 20,
+      `expected placeholder glyphs to paint (dark pixels=${placeholderPixels})`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('appservice ops: refresher programmatic pull drives callbacks', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

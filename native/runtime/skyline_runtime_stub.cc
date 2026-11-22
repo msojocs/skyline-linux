@@ -1634,11 +1634,15 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
   }
   // Public engines do not apply the private TextStyle flags, but they do honour
   // the public `fontFamilyFallback` list.  The CSS families come first (the
-  // first is the preferred family); common CJK/system families follow so
-  // Chinese text does not fall back to tofu when the host has them.
+  // first is the preferred family); color emoji families follow before the
+  // monochrome CJK/system families.  Without this, U+2764 (`❤️`) is served by
+  // DejaVu Sans as a black glyph even though an emoji font is installed.
   Dart_Handle fallback = Dart_Null();
   {
-    static const char* kFallbackFamilies[] = {"Noto Sans CJK SC",
+    static const char* kFallbackFamilies[] = {"Noto Color Emoji",
+                                              "Apple Color Emoji",
+                                              "Segoe UI Emoji",
+                                              "Noto Sans CJK SC",
                                               "Noto Sans CJK",
                                               "Noto Sans",
                                               "DejaVu Sans"};
@@ -2531,6 +2535,10 @@ struct AppStyle {
   // Flutter TextOverflow index (0 clip, 1 fade, 2 ellipsis, 3 visible).
   int text_overflow = 0;
   bool display_none = false;
+  // True when a rule or inline style declared `display`.  Skyline's native
+  // text/span tags default to inline, so this distinguishes an author override
+  // (`display:block`) from the built-in default.
+  bool has_display = false;
   // CSS display: inline-block / inline participates in the parent's inline
   // formatting context instead of stacking as a block.
   bool inline_block = false;
@@ -4641,6 +4649,7 @@ void ApplyDeclaration(AppStyle* style,
     style->inline_block = display == "inline-block" ||
                           display == "inline-flex" || display == "inline-grid";
     style->inline_level = display == "inline";
+    style->has_display = true;
   } else if (key == "pointer-events") {
     style->pointer_events_none = LowerAscii(value) == "none";
   } else if (key == "overflow" || key == "overflow-x" ||
@@ -5595,6 +5604,21 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
   if (!node->inline_style.empty()) {
     ApplyDeclarations(&style, ParseDeclarations(node->inline_style));
   }
+  // Skyline's text containers are inline-level by default: `span` is the
+  // inline mixing element for text/image/navigator, and `<text>` mirrors the
+  // WebView renderer's inline `wx-text`.  The DevTools host does not serve the
+  // compiled `WASkylineStyle` base sheet, so these native defaults live here.
+  // Raw text nodes (tag `text`, empty name) are measured as text runs and are
+  // unaffected; only the element wrappers take part in inline formatting.
+  if (!style.has_display) {
+    const bool is_text_container =
+        node->name == "text" || (node->tag == "text" && !node->name.empty());
+    const bool is_span_container =
+        node->name == "span" || node->tag == "span";
+    if (is_text_container || is_span_container) {
+      style.inline_level = true;
+    }
+  }
   // `<root-portal>` children are hoisted out of their ancestor's layout and
   // clipping: they render against the page viewport.  Treat the portal box as
   // a viewport-sized fixed container so absolutely positioned children (the
@@ -5767,12 +5791,35 @@ const char* NodeText(const AppNode* node, std::string* storage) {
   return storage->c_str();
 }
 
+// Variation selectors (U+FE0E / U+FE0F) only request a presentation form and
+// have no advance width.  When the selected text font lacks the emoji ligature
+// it paints/meters them as a second full-width glyph, doubling the advance of
+// `❤️`/`⭐️` (26px emoji measured 52px).  The replayed text carries no useful
+// variation-selector information, so drop them before measuring/rendering.
+std::string StripVariationSelectors(const std::string& raw) {
+  std::string out;
+  out.reserve(raw.size());
+  for (size_t i = 0; i < raw.size();) {
+    if (i + 2 < raw.size() &&
+        static_cast<unsigned char>(raw[i]) == 0xEF &&
+        static_cast<unsigned char>(raw[i + 1]) == 0xB8 &&
+        (static_cast<unsigned char>(raw[i + 2]) == 0x8E ||
+         static_cast<unsigned char>(raw[i + 2]) == 0x8F)) {
+      i += 3;
+      continue;
+    }
+    out.push_back(raw[i++]);
+  }
+  return out;
+}
+
 // WXML text follows CSS `white-space: normal`: whitespace runs collapse to a
 // single space and leading/trailing whitespace is dropped.  The SDK hands us
 // the raw template text (indentation and newlines included), which otherwise
 // measures as a huge multiline block (e.g. the A-Z popup letter).
-std::string NormalizeTextWhitespace(const std::string& raw,
+std::string NormalizeTextWhitespace(const std::string& raw_input,
                                     int white_space = 0) {
+  const std::string raw = StripVariationSelectors(raw_input);
   // `pre`/`pre-wrap` preserve spaces and newlines verbatim.
   if (white_space == 2 || white_space == 3) return raw;
   // `pre-line` collapses runs of spaces/tabs but preserves newlines.
@@ -5971,7 +6018,11 @@ bool IsInlineFlowContainer(AppNode* node) {
   if (node == nullptr || node->style.row || node->style.wrap) return false;
   bool has_inline_element = false;
   for (AppNode* child : OrderedFlowChildren(node)) {
-    if (child->tag == "text") continue;
+    // Raw text nodes (tag "text", no element name) are inline runs, but a
+    // text-only container keeps the stretched-text path so text-align applies
+    // across the full container width.  `<text>` element wrappers carry a
+    // name and are inline boxes themselves (Skyline's default display).
+    if (child->tag == "text" && child->name.empty()) continue;
     if (child->style.inline_block || child->style.inline_level) {
       has_inline_element = true;
       continue;
@@ -6715,14 +6766,25 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     float line_top = content_y;
     float line_height = 0.0f;
     auto flush_line = [&]() {
+      // text-align positions each line's inline boxes inside the container.
+      const float line_width = cursor_x - content_x;
+      float align_offset = 0.0f;
+      if (content_w < kInf && line_width < content_w) {
+        if (style.text_align == 2) {
+          align_offset = (content_w - line_width) / 2.0f;
+        } else if (style.text_align == 1) {
+          align_offset = content_w - line_width;
+        }
+      }
       for (const InlineItem& item : line) {
         // inline-block boxes align their bottom margin edge with the line
         // bottom (baseline for the common no-text case).
         const float offset =
             line_height - (item.h + item.margin_top + item.margin_bottom);
+        const float child_x = item.x + align_offset;
         const float child_y = line_top + item.margin_top + offset;
-        LayoutNode(item.node, item.x, child_y, item.w, item.h, metrics,
-                   abs_x + item.x, abs_y + child_y, cb_abs_x, cb_abs_y, cb_w,
+        LayoutNode(item.node, child_x, child_y, item.w, item.h, metrics,
+                   abs_x + child_x, abs_y + child_y, cb_abs_x, cb_abs_y, cb_w,
                    cb_h);
       }
       line_top += line_height;
@@ -9187,10 +9249,18 @@ void InputNoopOnPageBottomPaddingChange(intptr_t, double) {}
 
 Dart_Handle CreateInputStateWidget(NewInputFn newInput, AppNode* node) {
   if (newInput == nullptr || node == nullptr) return nullptr;
-  Dart_Handle value = Dart_NewStringFromCString(node->text.c_str());
-  Dart_Handle type = Dart_NewStringFromCString("text");
-  Dart_Handle placeholder = Dart_NewStringFromCString("");
-  Dart_Handle confirm = Dart_NewStringFromCString("done");
+  // The builtin input forwards its resolved props as camelCase attributes on
+  // the `native-input` element (`placeholder`, `cursorColor`, `maxlength`, ...).
+  std::string value_text = node->text;
+  if (value_text.empty()) value_text = AttrText(node, "value", "");
+  const std::string type_text = AttrText(node, "type", "text");
+  Dart_Handle value = Dart_NewStringFromCString(value_text.c_str());
+  Dart_Handle type = Dart_NewStringFromCString(type_text.c_str());
+  const std::string placeholder_text = AttrText(node, "placeholder", "");
+  Dart_Handle placeholder =
+      Dart_NewStringFromCString(placeholder_text.c_str());
+  const std::string confirm_text = AttrText(node, "confirmType", "done");
+  Dart_Handle confirm = Dart_NewStringFromCString(confirm_text.c_str());
   if (Dart_IsError(value) || Dart_IsError(type) || Dart_IsError(placeholder) ||
       Dart_IsError(confirm)) {
     return nullptr;
@@ -9203,14 +9273,32 @@ Dart_Handle CreateInputStateWidget(NewInputFn newInput, AppNode* node) {
       std::isnan(style.letter_spacing) ? std::nan("") : style.letter_spacing;
   const uint8_t focus =
       g_page != nullptr && g_page->focused_input_id == node->id ? 1 : 0;
+  const double placeholder_font_size =
+      AttrNumber(node, "placeholderFontSize", style.font_size);
+  const uint32_t placeholder_color =
+      ParseColorString(AttrText(node, "placeholderColor", "").c_str(),
+                       0xFF808080u);
+  const uint32_t cursor_color =
+      ParseColorString(AttrText(node, "cursorColor", "").c_str(),
+                       0xFF000000u);
+  const int32_t max_length = static_cast<int32_t>(
+      AttrNumber(node, "maxlength", AttrNumber(node, "maxLength", 140.0)));
   return newInput(
       node->address, reinterpret_cast<void*>(&InputNoopMarkDirty), 1, node->id,
-      0 /* multiLine */, value, type, 0 /* password */, placeholder,
-      style.font_size, static_cast<uint8_t>(style.font_weight), 0xFF999999u,
-      0 /* disable */, -1 /* maxLength */, 0 /* cursorSpacing */, 0xFF000000u,
-      focus, 0 /* autoHeight */, confirm, 0 /* confirmHold */,
+      0 /* multiLine */, value, type,
+      AttrBool(node, "password", false) ? 1 : 0, placeholder,
+      placeholder_font_size, static_cast<uint8_t>(style.font_weight),
+      placeholder_color,
+      AttrBool(node, "disabled", false) || AttrBool(node, "disable", false)
+          ? 1 : 0,
+      max_length, static_cast<int32_t>(AttrNumber(node, "cursorSpacing", 0.0)),
+      cursor_color,
+      focus, AttrBool(node, "autoHeight", false) ? 1 : 0, confirm,
+      AttrBool(node, "confirmHold", false) ? 1 : 0,
       node->input_cursor, node->input_selection_start,
-      node->input_selection_end, 0 /* showConfirmBar */, 1 /* adjustPosition */,
+      node->input_selection_end,
+      AttrBool(node, "showConfirmBar", false) ? 1 : 0,
+      AttrBool(node, "adjustPosition", true) ? 1 : 0,
       node->input_hold_keyboard ? 1 : 0, static_cast<uint8_t>(style.text_align),
       style.color, 0 /* backgroundColor */, 0 /* textDecoration */,
       0 /* textDecorationStyle */, 0u /* decorationColor */,
@@ -9518,6 +9606,25 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     node->text_widget_p = Dart_NewPersistentHandle(inner);
     if (span_handle != nullptr) {
       node->text_span_p = Dart_NewPersistentHandle(span_handle);
+    }
+  } else if (node->name == "native-input" && node->tag == "input" &&
+             g_page != nullptr && g_page->holder != nullptr) {
+    // Builtin `<input>` renders its native editor here (`native-input` is the
+    // input component's shadow child).  The DevTools replay used to keep this
+    // widget off-tree, so the grey footer pill had no placeholder text.
+    auto* newInput = reinterpret_cast<NewInputFn>(
+        FindCallback(g_page->holder->ffi_table, kNewInputHash));
+    if (newInput != nullptr) {
+      DeletePersistent(&node->input_widget_p);
+      Dart_Handle input_widget = CreateInputStateWidget(newInput, node);
+      if (input_widget != nullptr && !Dart_IsError(input_widget) &&
+          !Dart_IsNull(input_widget)) {
+        node->input_widget = input_widget;
+        node->input_widget_p = Dart_NewPersistentHandle(input_widget);
+        inner = input_widget;
+      } else if (Dart_IsError(input_widget)) {
+        ReportDartError("appservice NewInput", input_widget);
+      }
     }
   } else if (node->tag == "texture") {
     // Native view slot (`wx-canvas`, map/video placeholders, ...).  Dart owns
