@@ -677,6 +677,8 @@ using YGNodeSetupTransformFn = void (*)(Dart_Handle yoga_node,
 using YGNodeTransformOriginFn = void (*)(Dart_Handle yoga_node, double origin_x,
                                          double origin_y, double align_x,
                                          double align_y);
+using YGNodeUpdatePointerEventsFn = void (*)(Dart_Handle yoga_node,
+                                             uint8_t pointer_events);
 
 using DispatchTouchEventFn = void (*)(uint8_t type, double x, double y);
 // The kernel declares ScrollViewUpdateScrollTop as (Handle, Float): the
@@ -856,6 +858,7 @@ constexpr uint32_t kInputFocusHash = 453329760u;
 constexpr uint32_t kNewInputHash = 762417174u;
 constexpr uint32_t kYGNodeSetupTransformHash = 620430677u;
 constexpr uint32_t kYGNodeTransformOriginHash = 740488219u;
+constexpr uint32_t kYGNodeUpdatePointerEventsHash = 449412672u;
 
 enum class DemoMode { kStripes, kText, kCard };
 DemoMode g_demo_mode = DemoMode::kStripes;
@@ -2314,6 +2317,9 @@ struct AppStyle {
   // formatting context instead of stacking as a block.
   bool inline_block = false;
   bool inline_level = false;
+  // CSS pointer-events: none.  Passed to NewYGNode as PointerEvents.none; the
+  // YGNode hit test then skips this node and its subtree.
+  bool pointer_events_none = false;
   bool clip = false;  // overflow: hidden/clip
   // Image fit: 0 fill, 1 contain, 2 cover, 3 none, 4 scale-down.
   int object_fit = 0;
@@ -2590,6 +2596,9 @@ struct NodeRectSnapshot {
   // Stacking order among siblings; the appservice hit test uses it to pick the
   // visually topmost target (e.g. a navigation bar above a full-screen image).
   float z_index = 0.0f;
+  // 1 when CSS pointer-events: none; the appservice mirror hit test must skip
+  // this node and its subtree.
+  float pointer_events = 0.0f;
 };
 std::mutex g_rect_mutex;
 std::unordered_map<uint32_t, NodeRectSnapshot> g_rect_snapshot;
@@ -2616,7 +2625,8 @@ void PublishNodeRects() {
     }
     g_rect_snapshot[node->id] = NodeRectSnapshot{
         node->abs_x + tx, node->abs_y + ty, node->measured_w,
-        node->measured_h, static_cast<float>(style.z_index)};
+        node->measured_h, static_cast<float>(style.z_index),
+        style.pointer_events_none ? 1.0f : 0.0f};
   }
 }
 // Captured on the UI thread; the host keyboard channel is called from the
@@ -4225,6 +4235,8 @@ void ApplyDeclaration(AppStyle* style,
     style->inline_block = display == "inline-block" ||
                           display == "inline-flex" || display == "inline-grid";
     style->inline_level = display == "inline";
+  } else if (key == "pointer-events") {
+    style->pointer_events_none = LowerAscii(value) == "none";
   } else if (key == "overflow" || key == "overflow-x" ||
              key == "overflow-y") {
     style->clip = value == "hidden" || value == "clip" || value == "scroll" ||
@@ -8716,8 +8728,13 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
   }
   Dart_Handle yoga_node = newYGNode(
       node->address, buffer, is_root ? 1 : 0, 0, 0, 0, concrete_type,
-      Dart_Null(), 0.0, 0.0, 0.0, 0.0, 1, 0, 0, Dart_Null(), yoga_connector,
-      inner);
+      Dart_Null(), 0.0, 0.0, 0.0, 0.0, 1, 0,
+      style.pointer_events_none ? 1 : 0, Dart_Null(), yoga_connector, inner);
+  if (style.pointer_events_none &&
+      std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr, "[skyline-runtime] pointer-events:none id=%u addr=0x%lx\n",
+                 node->id, static_cast<long>(node->address));
+  }
   if (Dart_IsError(yoga_node)) {
     ReportDartError("appservice NewYGNode", yoga_node);
     return Dart_Null();
@@ -10541,6 +10558,17 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
           }
         }
       }
+      if (before.pointer_events_none != after.pointer_events_none &&
+          node->yoga_node_p != nullptr && g_page != nullptr &&
+          g_page->holder != nullptr) {
+        auto* update = reinterpret_cast<YGNodeUpdatePointerEventsFn>(
+            FindCallback(g_page->holder->ffi_table,
+                         kYGNodeUpdatePointerEventsHash));
+        if (update != nullptr) {
+          update(Dart_HandleFromPersistent(node->yoga_node_p),
+                 after.pointer_events_none ? 1 : 0);
+        }
+      }
     }
     if (node->yoga_node_p != nullptr) {
       yoga_nodes.push_back(Dart_HandleFromPersistent(node->yoga_node_p));
@@ -11840,6 +11868,7 @@ SKYLINE_EXPORT extern "C" int32_t SkylineGetNodeRect(uint32_t node_id,
   out[2] = found->second.width;
   out[3] = found->second.height;
   out[4] = found->second.z_index;
+  out[5] = found->second.pointer_events;
   return 1;
 }
 

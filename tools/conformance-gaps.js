@@ -70,7 +70,7 @@ const PROBE_FOR_CSS = {
 const PROBE_FOR_TAG = {
   map: 'appservice-map',
 };
-const NON_PIXEL_CSS = new Set(['pointer-events', 'will-change']);
+const NON_PIXEL_CSS = new Set(['will-change']);
 
 function parseArgs(argv) {
   const options = {
@@ -453,7 +453,8 @@ function renderMarkdown(report) {
     } else {
       lines.push('（无候选）', '');
     }
-    lines.push('> 注意：候选不等于未实现；部分能力可能由 C++ 直接处理或 Rust/Dart 侧完成。', '');
+    lines.push('> 注意：候选不等于未实现；部分能力可能由 C++ 直接处理或 Rust/Dart 侧完成。');
+    lines.push('> D3 的逐项分类与探针状态见 `docs/callback-coverage.md`。', '');
   }
 
   lines.push('## 5. 真实示例覆盖（awesome-skyline/examples）', '');
@@ -474,7 +475,7 @@ function renderMarkdown(report) {
           suffix = ` — L5 探针 \`${probeName}\` ${probe.status}` +
             (probe.mismatchRatio ? `，失配率 ${probe.mismatchRatio}` : '');
         } else if (NON_PIXEL_CSS.has(entry.key)) {
-          suffix = ' — 无静态像素差异，待行为探针（D3）';
+          suffix = ' — 纯渲染提示，D3 已确认无行为差异';
         }
         lines.push(`- \`${entry.key}\` — ${entry.files.slice(0, 3).join('、')}` +
           `${entry.files.length > 3 ? ` 等 ${entry.files.length} 个文件` : ''}${suffix}`);
@@ -502,8 +503,8 @@ function renderMarkdown(report) {
 
   lines.push('## 建议的下一步', '');
   lines.push('1. ~~用 Wine 渲染进程补录 24 个 engine-context 契约用例~~（已完成：60 个用例中 50 个可观测、10 个官方崩溃；`test:native` 53/53 通过）。');
-  lines.push('2. D2 已完成可视 CSS/标签探针（aspect-ratio/vertical-align/text-overflow/white-space/map）；`pointer-events`/`will-change` 与候选回调由 D3 行为探针覆盖。');
-  lines.push('3. 对第 4 节的候选回调逐一写探针（滚动事件、输入焦点、swiper/observer、snapshot/accessibility 等），确认是 C++ 已覆盖还是确实缺失。');
+  lines.push('2. D2 已完成可视 CSS/标签探针（aspect-ratio/vertical-align/text-overflow/white-space/map）；D6 修复了 aspect-ratio/inline-block/white-space/text-overflow。');
+  lines.push('3. D3 已完成 `pointer-events` 探针与候选回调分类（`docs/callback-coverage.md`）；滚动事件、Swiper/PickerView、IntersectionObserver、Selection、无障碍等仍待 D7-D10。');
   lines.push('4. 录制真实页面的 ops 流，在 Wine 官方引擎和 Linux 引擎上重放并做整页对比。');
   lines.push('');
   return lines.join('\n');

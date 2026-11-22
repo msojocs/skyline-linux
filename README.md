@@ -84,6 +84,7 @@ nowrap/normal、aspect-ratio 已对齐），`map` 逐像素一致，`gridview`/`
 汇总缺口报告：`npm run gaps`（`tools/conformance-gaps.js`）把 Windows API oracle
 覆盖率、L5 逐像素结果、官方符号清单、原生运行时未接线的回调，以及
 `awesome-skyline/examples` 里用到但运行时未解析的 CSS/内置标签汇总成 Markdown。
+候选回调的逐项分类与探针状态见 `docs/callback-coverage.md`。
 报告中的“未解析”是候选缺口，是否与官方 Windows 行为不同仍需用 L5 探针夹具确认。
 
 ## 快速开始

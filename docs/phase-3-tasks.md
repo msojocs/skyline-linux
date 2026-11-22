@@ -251,15 +251,21 @@
     - `map`：maxDelta=0（该 op 流下两边都是空白占位，原生地图内容未被覆盖）。
   - 四个文本/布局差异中 `aspect-ratio` 已在 D6 修复并移出
     `KNOWN_DIVERGENCES`；其余三个保留说明与 0.5% headroom。
-    `pointer-events`/`will-change` 无静态像素差异，移入 D3 行为探针。
-- [ ] **D3** 候选回调行为探针
-  - 重点：`ScrollViewUpdateOnScroll/OnScrollStart/OnScrollEnd`、
-    `SwiperUpdateOnChange/OnScroll`、`InputFocusManually/BlurManually`、
-    `YGNode*IntersectionObserver`、`Selection*`、`Snapshot*`、`Semantics*`、
-    `MeasureText/Input`、`Start/StopUserGesture`、`DumpElementTree`。
-  - 另需行为探针的非像素 CSS：`pointer-events`（覆盖层命中测试）与
-    `will-change`（渲染提示，无静态差异）。
-  - 先区分“C++ 已直接实现”与真正缺失，再按 D2 的方式加 L5/行为夹具。
+    `pointer-events` 已在 D3 实现并加行为探针；`will-change` 无行为差异。
+- [x] **D3** 候选回调行为探针
+  - 产出 `docs/callback-coverage.md`：按“已接线 / 其他路径覆盖 / 确认缺失”
+    分类候选回调，并给出源码 0 引用证据与影响面。
+  - 实现 `pointer-events: none`：解析后传 `PointerEvents.none` 给 `NewYGNode`，
+    `SkylineGetNodeRect` 增加 `pointerEvents` 字段，appservice 镜像 hit test
+    跳过该子树。
+  - 新增两个 `test:ops` 行为探针：`pointer-events:none` 覆盖层可穿透滚动；
+    同几何、无 `pointer-events` 的对照组覆盖层会拦截滚动。
+  - `will-change` 确认无静态/行为差异，不解析、不设探针。
+  - 确认缺口（待后续 D7-D10）：滚动事件、下拉刷新、Swiper/PickerView 事件、
+    编程式输入焦点、IntersectionObserver、Selection、返回拦截、用户手势、
+    无障碍语义、自动化快照/内存 API。
+  - 回归：`test:ops` 70/70（含 2 个 pointer-events 探针）；顺带把
+    “移除背景” 用例的 200ms 更新改为 600ms，消除初始物化竞态。
 - [ ] **D4** 真实页面 ops 录制与整页差分
   - Linux DevTools 与 Windows 原版使用同一份官方 renderer bundle；把 Linux
     侧 `applyPageOps` 的真实 ops 录下来，喂给 Wine 官方引擎与 Linux 引擎，
@@ -285,6 +291,19 @@
     `text-overflow` 在该 op 流下官方也是直接裁剪，剩余 ~1.6% 为文本栅格化。
     L5 基线已记录说明。
   - 回归：`test:ops` 68/68、`test:page` 14/14、`test:l5` 2/2 通过。
+
+- [ ] **D7** 滚动事件回调
+  - 在滚动位置/状态变化时调用 `ScrollViewUpdateOnScroll/OnScrollStart/OnScrollEnd`；
+    用 address-book 的滚动高亮做真机验证。
+- [ ] **D8** Swiper/PickerView/Input 编程式 API 与事件
+  - `SwiperUpdateOnChange/OnScroll`、`SwiperAnimateToPage/JumpToPage`、
+    `PickerViewColumnUpdateOnChange/Start/End`、`InputFocusManually/BlurManually`。
+- [ ] **D9** IntersectionObserver / Selection / Refresher / 返回拦截
+  - `YGNodeAdd/RemoveIntersectionObserver`、`SelectionSetRange`/选区事件、
+    `ScrollViewRequestRefresherRefresh/TwoLevel`、`SetNavigateBackInterception`。
+- [ ] **D10** 无障碍与 DevTools 自动化
+  - `UpdateAccessibility`/`Semantics*`、`SnapshotTakeSnapshot`、
+    `DumpElementTree`、`CollectGarbage`、`SendMessageToRunner` 等。
 
 ## 测试基线（x / y）
 

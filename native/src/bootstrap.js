@@ -1598,6 +1598,9 @@
       if (child.name === 'root-portal' || child.name === 'rootportal') continue;
       const rect = nodeRect(windowId, child.viewTag);
       if (!rect) continue;
+      // CSS pointer-events:none removes the element and its subtree from hit
+      // testing (the native YGNode receives PointerEvents.none as well).
+      if (rect.pointerEvents) continue;
       candidates.push({
         child,
         index: i,

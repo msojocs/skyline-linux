@@ -438,11 +438,13 @@ test('appservice ops: removing a background repaints without a rebuild', {
       { op: 'startRender' },
     ],
     updates: [
-      { afterMs: 200, ops: [{ op: 'removeClass', id: 3, prefix: 'box' }] },
+      // Wait until the initial page is materialized; a 200 ms update could
+      // race the first build and leave the decorated box at its old colour.
+      { afterMs: 600, ops: [{ op: 'removeClass', id: 3, prefix: 'box' }] },
     ],
   }));
   try {
-    const { result, logs, pixels } = runHost(ops, { timeoutMs: 1200, frames: 0 });
+    const { result, logs, pixels } = runHost(ops, { timeoutMs: 2000, frames: 0 });
     assert.equal(result.status, 0,
       `skyline_host failed (status ${result.status}):\n${logs}`);
     assert.ok(pixels, 'no frame was captured');
@@ -918,6 +920,117 @@ test('appservice ops: fixed full-viewport overlay does not steal touches', {
     }
     assert.ok(firstGreen < 100,
       `expected the drag to scroll the list under the overlay, green at y=${firstGreen}`);
+  } finally {
+    try {
+      fs.unlinkSync(script);
+    } catch {
+      // Best effort.
+    }
+  }
+});
+
+test('appservice ops: pointer-events:none overlay does not block touches', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // The fixed overlay covers the viewport and its blue child sits under the
+  // drag origin.  With pointer-events:none the native YGNode is untouchable
+  // (PointerEvents.none) and the mirror hit test skips its subtree, so the
+  // scroll view below must receive the drag.
+  const fixture = path.join(repoRoot, 'test', 'fixtures',
+    'appservice-pointer-events.ops.json');
+  const script = path.join(os.tmpdir(), `skyline-pointer-events-${process.pid}.txt`);
+  fs.writeFileSync(script, [
+    '1200 add 10 100 1',
+    '1300 down 10 100 1',
+    '1400 move 10 60 1',
+    '1500 move 10 40 1',
+    '1600 move 10 20 1',
+    '1700 up 10 20 1',
+    '',
+  ].join('\n'));
+  try {
+    const { result, logs, pixels } = runHost(fixture, {
+      timeoutMs: 2500,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+      args: ['--pointer-script', script],
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.match(logs, /scroll: top=[1-9]\d*(\.\d+)? /);
+    assert.ok(pixels, 'no frame was captured');
+
+    let firstGreen = height;
+    for (let y = 0; y < height; y++) {
+      const [r, g] = pixelAt(pixels, 160, y);
+      if (g > 200 && r < 100) {
+        firstGreen = y;
+        break;
+      }
+    }
+    assert.ok(firstGreen < 100,
+      `expected pointer-events:none to let the drag reach the scroll view, ` +
+      `green at y=${firstGreen}`);
+  } finally {
+    try {
+      fs.unlinkSync(script);
+    } catch {
+      // Best effort.
+    }
+  }
+});
+
+test('appservice ops: default overlay blocks touches (pointer-events control)', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Same geometry without pointer-events:none: the leaf overlay is touchable
+  // and consumes the drag, so the scroll view below stays at the top.
+  const fixture = path.join(repoRoot, 'test', 'fixtures',
+    'appservice-pointer-events-control.ops.json');
+  const script = path.join(os.tmpdir(), `skyline-pointer-control-${process.pid}.txt`);
+  fs.writeFileSync(script, [
+    '1200 add 10 100 1',
+    '1300 down 10 100 1',
+    '1400 move 10 60 1',
+    '1500 move 10 40 1',
+    '1600 move 10 20 1',
+    '1700 up 10 20 1',
+    '',
+  ].join('\n'));
+  try {
+    const { result, logs, pixels } = runHost(fixture, {
+      timeoutMs: 2500,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+      args: ['--pointer-script', script],
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.doesNotMatch(logs, /scroll: top=[1-9]\d*(\.\d+)? /);
+    assert.ok(pixels, 'no frame was captured');
+
+    let firstGreen = height;
+    for (let y = 0; y < height; y++) {
+      const [r, g] = pixelAt(pixels, 160, y);
+      if (g > 200 && r < 100) {
+        firstGreen = y;
+        break;
+      }
+    }
+    assert.ok(firstGreen >= 100,
+      `expected the default overlay to block the drag, green at y=${firstGreen}`);
   } finally {
     try {
       fs.unlinkSync(script);
