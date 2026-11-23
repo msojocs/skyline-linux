@@ -1080,7 +1080,7 @@ test('appservice ops: span/text inline flow keeps the footer row on one line', {
       { op: 'setText', id: 9, text: '❤️' },
       { op: 'appendChild', id: 8, child: 9 },
       { op: 'createElement', id: 10, tag: 'text', name: '' },
-      { op: 'setText', id: 10, text: '317' },
+      { op: 'setText', id: 10, text: '\n\t\t\t\t\t\t317\n\t\t\t\t\t' },
       { op: 'appendChild', id: 7, child: 8 },
       { op: 'appendChild', id: 7, child: 10 },
       { op: 'createElement', id: 11, tag: 'span', name: 'span' },
@@ -1090,7 +1090,7 @@ test('appservice ops: span/text inline flow keeps the footer row on one line', {
       { op: 'setText', id: 13, text: '⭐️' },
       { op: 'appendChild', id: 12, child: 13 },
       { op: 'createElement', id: 14, tag: 'text', name: '' },
-      { op: 'setText', id: 14, text: '723' },
+      { op: 'setText', id: 14, text: '\n\t\t\t\t\t\t723\n\t\t\t\t\t' },
       { op: 'appendChild', id: 11, child: 12 },
       { op: 'appendChild', id: 11, child: 14 },
       { op: 'appendChild', id: 4, child: 5 },
@@ -1137,7 +1137,7 @@ test('appservice ops: span/text inline flow keeps the footer row on one line', {
     // measured a full 320px each and the input collapsed to width 0.
     assert.equal(input.left, 15);
     assert.equal(input.h, 40);
-    assert.ok(input.w > 150, `input did not grow: ${JSON.stringify(input)}`);
+    assert.ok(input.w > 120, `input did not grow: ${JSON.stringify(input)}`);
     assert.ok(span1.w < 100, `span kept intrinsic width: ${JSON.stringify(span1)}`);
     assert.ok(span2.w < 100, `span kept intrinsic width: ${JSON.stringify(span2)}`);
     assert.ok(Math.abs(span1.left - (input.left + input.w + 15)) < 0.5,
@@ -1155,6 +1155,10 @@ test('appservice ops: span/text inline flow keeps the footer row on one line', {
     assert.ok(Math.abs((heart.top + heart.h) - (likes.top + likes.h)) < 1.5,
       `317 must share the line bottom: heart=${JSON.stringify(heart)} ` +
       `likes=${JSON.stringify(likes)}`);
+    // The template indentation before the counters collapses to one space
+    // between the inline boxes (`<text>⭐️</text>\n 723` -> "⭐️ 723").
+    assert.match(logs, /#10 .* text=" 317"/);
+    assert.match(logs, /#14 .* text=" 723"/);
     assert.ok(pixels, 'no frame was captured');
     // The native input widget renders the placeholder inside the grey pill.
     const placeholderPixels = countColor(pixels, (r, g, b) =>

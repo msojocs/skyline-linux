@@ -2629,6 +2629,11 @@ struct AppNode {
   std::vector<AppNode*> children;
   AppNode* parent = nullptr;
   bool released = false;
+  // CSS inline-flow whitespace collapsing: a raw text run between two inline
+  // boxes keeps one collapsed space on the side that has adjacent content.
+  // Set by ComputeInlineWhitespace after ResolveStyles.
+  bool inline_preserve_leading = false;
+  bool inline_preserve_trailing = false;
   // True when this node is a sliver-hosted root (sticky-section child, scroll
   // view child, or list/grid item).  Its layout buffer is origin-relative and
   // must be restored after any page-wide LayoutNode pass.
@@ -5880,21 +5885,35 @@ std::string StripVariationSelectors(const std::string& raw) {
 // single space and leading/trailing whitespace is dropped.  The SDK hands us
 // the raw template text (indentation and newlines included), which otherwise
 // measures as a huge multiline block (e.g. the A-Z popup letter).
+//
+// `preserve_leading`/`preserve_trailing` implement CSS whitespace collapsing
+// across inline boxes: a raw text run that follows/precedes another inline box
+// keeps one collapsed space, while the same whitespace at the edge of a line
+// is dropped (ComputeInlineWhitespace sets the flags).
 std::string NormalizeTextWhitespace(const std::string& raw_input,
-                                    int white_space = 0) {
+                                    int white_space = 0,
+                                    bool preserve_leading = false,
+                                    bool preserve_trailing = false) {
   const std::string raw = StripVariationSelectors(raw_input);
+  const auto is_space = [](unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+  };
+  const bool leading_ws =
+      !raw.empty() && is_space(static_cast<unsigned char>(raw.front()));
+  const bool trailing_ws =
+      !raw.empty() && is_space(static_cast<unsigned char>(raw.back()));
   // `pre`/`pre-wrap` preserve spaces and newlines verbatim.
   if (white_space == 2 || white_space == 3) return raw;
-  // `pre-line` collapses runs of spaces/tabs but preserves newlines.
+  std::string out;
+  out.reserve(raw.size());
   if (white_space == 4) {
-    std::string out;
-    out.reserve(raw.size());
+    // `pre-line` collapses runs of spaces/tabs but preserves newlines.
     bool pending_space = false;
     for (const unsigned char c : raw) {
       if (c == '\n') {
         out.push_back('\n');
         pending_space = false;
-      } else if (c == ' ' || c == '\t' || c == '\r' || c == '\f') {
+      } else if (is_space(c)) {
         pending_space = !out.empty() && out.back() != '\n';
       } else {
         if (pending_space) out.push_back(' ');
@@ -5902,25 +5921,35 @@ std::string NormalizeTextWhitespace(const std::string& raw_input,
         out.push_back(static_cast<char>(c));
       }
     }
-    return out;
-  }
-  // normal/nowrap: whitespace runs collapse to a single space and
-  // leading/trailing whitespace is dropped.
-  std::string out;
-  out.reserve(raw.size());
-  bool pending_space = false;
-  for (const unsigned char c : raw) {
-    if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') {
-      pending_space = !out.empty();
-      continue;
+  } else {
+    // normal/nowrap: whitespace runs collapse to a single space and
+    // leading/trailing whitespace is dropped.
+    bool pending_space = false;
+    for (const unsigned char c : raw) {
+      if (is_space(c)) {
+        pending_space = !out.empty();
+        continue;
+      }
+      if (pending_space) {
+        out.push_back(' ');
+        pending_space = false;
+      }
+      out.push_back(static_cast<char>(c));
     }
-    if (pending_space) {
-      out.push_back(' ');
-      pending_space = false;
-    }
-    out.push_back(static_cast<char>(c));
   }
+  if (preserve_leading && leading_ws) out.insert(out.begin(), ' ');
+  if (preserve_trailing && trailing_ws) out.push_back(' ');
   return out;
+}
+
+// Node-aware text normalization: keeps the inline-flow edge spaces computed by
+// ComputeInlineWhitespace.
+std::string NodeNormalizedText(const AppNode* node) {
+  std::string storage;
+  const std::string raw = NodeText(node, &storage);
+  return NormalizeTextWhitespace(raw, node->style.white_space,
+                                 node->inline_preserve_leading,
+                                 node->inline_preserve_trailing);
 }
 
 // Skyline's default WordBreak is breakAll; Flutter's public paragraph builder
@@ -6093,6 +6122,41 @@ bool IsInlineFlowContainer(AppNode* node) {
     return false;
   }
   return has_inline_element;
+}
+
+// CSS whitespace collapsing across inline boxes.  A raw text run between two
+// inline boxes keeps one collapsed space on the side that has adjacent content
+// (`<text>⭐️</text>\n  723` renders as "⭐️ 723"); whitespace at the start/end
+// of the inline flow is dropped.  Runs in the page-wide measure/build passes
+// after ResolveStyles so the flags are available to text measurement and
+// widget creation.
+void ComputeInlineWhitespace(AppNode* node) {
+  if (node == nullptr) return;
+  node->inline_preserve_leading = false;
+  node->inline_preserve_trailing = false;
+  // Recurse first: a child resets its own flags on entry, so the containing
+  // inline flow must assign them afterwards.
+  for (AppNode* child : node->children) ComputeInlineWhitespace(child);
+  if (IsInlineFlowContainer(node)) {
+    const std::vector<AppNode*> flow = OrderedFlowChildren(node);
+    const auto is_space = [](unsigned char c) {
+      return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+    };
+    for (size_t i = 0; i < flow.size(); ++i) {
+      AppNode* child = flow[i];
+      if (child->tag != "text") continue;
+      std::string storage;
+      const std::string raw = NodeText(child, &storage);
+      if (raw.empty()) continue;
+      if (i > 0 && is_space(static_cast<unsigned char>(raw.front()))) {
+        child->inline_preserve_leading = true;
+      }
+      if (i + 1 < flow.size() &&
+          is_space(static_cast<unsigned char>(raw.back()))) {
+        child->inline_preserve_trailing = true;
+      }
+    }
+  }
 }
 
 // glass-easel splices a fragment into its parent before appending its children
@@ -6286,11 +6350,7 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
   const AppStyle& style = node->style;
 
   const bool is_text = node->tag == "text";
-  std::string text_storage;
-  std::string text =
-      is_text ? NormalizeTextWhitespace(NodeText(node, &text_storage),
-                                        style.white_space)
-              : std::string();
+  std::string text = is_text ? NodeNormalizedText(node) : std::string();
 
   float width = -1.0f;
   if (style.width_percent >= 0.0f) {
@@ -9644,10 +9704,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         }
       }
     }
-    std::string text_storage;
-    const std::string text =
-        NormalizeTextWhitespace(NodeText(node, &text_storage),
-                                style.white_space);
+    const std::string text = NodeNormalizedText(node);
     // NewTextSpan's `height` is the Flutter line-height multiplier, while CSS
     // line-height is in pixels; convert back to a multiplier.
     const double line_height =
@@ -10968,6 +11025,7 @@ bool SyncAppServiceBuilders(RuntimeHolder* holder) {
   if (g_page == nullptr || holder == nullptr) return false;
   AppNode* root = FindNode(g_page->root_id);
   if (root != nullptr) ResolveStyles(root, nullptr);
+  if (root != nullptr) ComputeInlineWhitespace(root);
   bool changed = false;
   std::vector<AppNode*> builders;
   builders.reserve(g_builders_by_address.size());
@@ -12387,11 +12445,18 @@ void ApplyOperation(const rapidjson::Value& op) {
 
 void DebugDumpNode(const AppNode* node, int depth) {
   if (node == nullptr) return;
+  std::string dump_text;
+  if (node->tag == "text") {
+    dump_text = NodeNormalizedText(node);
+    for (char& c : dump_text) {
+      if (c == '\n' || c == '\r') c = ' ';
+    }
+  }
   std::fprintf(stderr,
                "[ops-debug] %*s#%u tag=%s name=%s classes=%zu style(w=%g h=%g "
                "pctw=%g pcth=%g pad=%g,%g,%g,%g margin=%g,%g,%g,%g row=%d "
                "justify=%d align=%d bg=%08x border=%g font=%g) measured=%gx%g "
-               "address=0x%lx\n",
+               "address=0x%lx text=\"%s\"\n",
                depth * 2, "", node->id, node->tag.c_str(), node->name.c_str(),
                node->classes.size(), static_cast<double>(node->style.width),
                static_cast<double>(node->style.height),
@@ -12410,7 +12475,7 @@ void DebugDumpNode(const AppNode* node, int depth) {
                static_cast<double>(node->style.border_width),
                node->style.font_size, static_cast<double>(node->measured_w),
                static_cast<double>(node->measured_h),
-               static_cast<long>(node->address));
+               static_cast<long>(node->address), dump_text.c_str());
   for (const AppNode* child : node->children) {
     if (child->released) continue;
     DebugDumpNode(child, depth + 1);
@@ -12528,9 +12593,7 @@ void SnapshotNode(AppNode* node) {
   node->previous_style = node->style;
   node->has_previous_style = true;
   if (node->tag == "text") {
-    std::string storage;
-    node->previous_text = NormalizeTextWhitespace(NodeText(node, &storage),
-                                                  node->style.white_space);
+    node->previous_text = NodeNormalizedText(node);
   }
   for (AppNode* child : node->children) SnapshotNode(child);
 }
@@ -12657,6 +12720,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
   if (mark_needs_layout == nullptr) return false;
 
   ResolveStyles(root, nullptr);
+  ComputeInlineWhitespace(root);
 
   std::vector<Dart_Handle> yoga_nodes;
   bool rebuild = false;
@@ -12685,10 +12749,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
     if (LayoutAffectingStyleChanged(before, after)) layout_needed = true;
 
     if (node->tag == "text") {
-      std::string storage;
-      const std::string text_value =
-          NormalizeTextWhitespace(NodeText(node, &storage),
-                                  node->style.white_space);
+      const std::string text_value = NodeNormalizedText(node);
       const bool text_changed = text_value != node->previous_text;
       const bool color_changed = before.color != after.color;
       const bool size_changed = std::fabs(before.font_size - after.font_size) > 0.01;
@@ -12925,9 +12986,7 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
     }
     node->previous_style = after;
     if (node->tag == "text") {
-      std::string storage;
-      node->previous_text = NormalizeTextWhitespace(NodeText(node, &storage),
-                                                  node->style.white_space);
+      node->previous_text = NodeNormalizedText(node);
     }
   }
   if (rebuild) return false;
@@ -13003,6 +13062,7 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
   }
 
   ResolveStyles(root, nullptr);
+  ComputeInlineWhitespace(root);
   ClearSliverLayoutMarks();
   const float viewport_w =
       g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
@@ -13533,6 +13593,7 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   // The host contains the root, so laying out the host also lays out the page.
   AppNode* layout_root = is_custom ? host : root;
   ResolveStyles(layout_root, nullptr);
+  ComputeInlineWhitespace(layout_root);
   ClearSliverLayoutMarks();
   const float viewport_w =
       g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
