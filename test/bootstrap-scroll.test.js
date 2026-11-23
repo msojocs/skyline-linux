@@ -847,3 +847,26 @@ test('bootstrap: share-element props are backfilled from component data', () => 
   assert.equal(appliedOps.length, before,
     'unchanged component data is not resent every flush');
 });
+
+test('bootstrap: native-view gesture handlers attach through the proxy API', () => {
+  // The SDK's gesture-handler component calls
+  // `gestureHandlerModule.attachNativeViewGestureHandler` for
+  // `<*-drag-gesture-handler native-view="swiper">`; the proxy node's
+  // recognizer negotiates with the Flutter widget, so the JS module only has
+  // to register the handler (the older scroll-view spelling is
+  // `proxyScrollViewGestureHandler`).
+  const { sandbox } = loadBootstrap();
+  const SkylineGlobal = sandbox.SkylineGlobal;
+  assert.equal(typeof SkylineGlobal.gestureHandlerModule
+    .attachNativeViewGestureHandler, 'function');
+  const context = new SkylineGlobal.PageContext(4, 4);
+  const swiper = context.createElement('swiper', 'swiper');
+  SkylineGlobal.gestureHandlerModule
+    .attachNativeViewGestureHandler(11, 7, { tag: 'swiper' }, swiper);
+  const entry = sandbox.__skylineDebug.gestureHandlers.get(11);
+  assert.ok(entry, 'handler registered');
+  assert.equal(entry.gestureType, 7);
+  assert.equal(entry.node, swiper);
+  SkylineGlobal.gestureHandlerModule.dropGestureHandler(11);
+  assert.equal(sandbox.__skylineDebug.gestureHandlers.has(11), false);
+});

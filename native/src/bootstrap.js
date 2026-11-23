@@ -1098,6 +1098,13 @@
       },
       // `native-view` handlers (e.g. the previewer's swiper) negotiate with the
       // Flutter scrollable/swiper; only the worklet registration is needed.
+      // The SDK's gesture-handler component reaches this through
+      // `attachNativeViewGestureHandler` (proxy nodes) while
+      // `proxyScrollViewGestureHandler` is the older scroll-view spelling.
+      attachNativeViewGestureHandler(handlerTag, gestureType, config,
+                                     hostNode) {
+        this.attachGestureHandler(handlerTag, gestureType, config, hostNode);
+      },
       proxyScrollViewGestureHandler(handlerTag, gestureType, config, hostNode) {
         this.attachGestureHandler(handlerTag, gestureType, config, hostNode);
       },
