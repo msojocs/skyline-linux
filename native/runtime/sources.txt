@@ -1,0 +1,18 @@
+# Runtime translation units and internal headers.
+#
+# [common] is compiled into the standalone libskyline.so (Dart API DL only) and
+# the engine's embedded runtime.  [embedded] is compiled only into the engine
+# embedder target, which defines SKYLINE_EMBEDDED=1.
+#
+# Keep this list in sync with native/engine/patch-skyline-runtime.sh,
+# tools/conformance-gaps.js and native/CMakeLists.txt; all three consume it.
+
+[common]
+skyline_runtime_stub.cc
+internal/skyline_runtime_abi.hh
+internal/skyline_runtime_module.hh
+
+[embedded]
+internal/skyline_runtime_ffi.hh
+internal/skyline_runtime_appservice.hh
+internal/skyline_runtime_embedded.hh

@@ -2,7 +2,8 @@
 
 // D7: scroll events reach the appservice JS bridge.
 //
-// `native/src/bootstrap.js` is embedded into the addon via `bootstrap_js.h`.
+// `native/src/bootstrap/*.js` (ordered by `parts.txt`) is concatenated into
+// the addon via `bootstrap_js.h`.
 // This test evaluates it in a VM with a minimal `__skylineNative` mock and
 // exercises the paths that the DevTools appservice uses:
 //
@@ -18,10 +19,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { loadBootstrapSource } = require('./lib/bootstrap-source');
 
 const repoRoot = path.resolve(__dirname, '..');
-const bootstrapSource = fs.readFileSync(
-  path.join(repoRoot, 'native', 'src', 'bootstrap.js'), 'utf8');
+const bootstrapSource = loadBootstrapSource();
 
 function loadBootstrap() {
   const sink = { value: null };

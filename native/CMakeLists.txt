@@ -17,10 +17,32 @@ if(NOT EXISTS "${NODE_INCLUDE_DIR}/node_api.h")
 endif()
 message(STATUS "Node headers: ${NODE_INCLUDE_DIR}")
 
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/bootstrap.js" SKYLINE_BOOTSTRAP_JS)
+# Bootstrap source: the ordered parts under src/bootstrap (parts.txt) are
+# concatenated into one script.  It runs via napi_run_script and all state is
+# closure-local, so the parts cannot be evaluated as separate scripts.
+set(SKYLINE_BOOTSTRAP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/bootstrap")
+file(STRINGS "${SKYLINE_BOOTSTRAP_DIR}/parts.txt" SKYLINE_BOOTSTRAP_PARTS)
+set(SKYLINE_BOOTSTRAP_JS "")
+set(_skyline_bootstrap_deps "${SKYLINE_BOOTSTRAP_DIR}/parts.txt")
+foreach(_part IN LISTS SKYLINE_BOOTSTRAP_PARTS)
+  string(STRIP "${_part}" _part)
+  if(_part STREQUAL "")
+    continue()
+  endif()
+  set(_part_path "${SKYLINE_BOOTSTRAP_DIR}/${_part}")
+  file(READ "${_part_path}" _part_text)
+  string(APPEND SKYLINE_BOOTSTRAP_JS "${_part_text}")
+  list(APPEND _skyline_bootstrap_deps "${_part_path}")
+endforeach()
+string(FIND "${SKYLINE_BOOTSTRAP_JS}" ")SKYLINEJS\"" _skyline_terminator)
+if(NOT _skyline_terminator EQUAL -1)
+  message(FATAL_ERROR "bootstrap contains the )SKYLINEJS\" raw-string terminator")
+endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/bootstrap_js.h"
-  "// Generated from src/bootstrap.js\n"
+  "// Generated from src/bootstrap/*.js (parts.txt order)\n"
   "static const char kSkylineBootstrapJs[] = R\"SKYLINEJS(\n${SKYLINE_BOOTSTRAP_JS}\n)SKYLINEJS\";\n")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  ${_skyline_bootstrap_deps})
 
 # ---------------------------------------------------------------------------
 # Linux Flutter Engine (phase 2).  When the pinned engine has been built, the
@@ -87,9 +109,33 @@ endif()
 # callbacks into an FFI table.  The stub implements the bootstrap surface and
 # renders the Flutter UI; layout/paint/gesture behaviour is still a no-op.
 # ---------------------------------------------------------------------------
-add_library(skyline_runtime SHARED
-  runtime/skyline_runtime_stub.cc
-)
+# Runtime sources: the manifest is shared with the engine patch script and the
+# conformance scanner.  Only [common] translation units are compiled into the
+# standalone libskyline.so; the engine embedder adds the [embedded] modules.
+set(SKYLINE_RUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/runtime")
+file(STRINGS "${SKYLINE_RUNTIME_DIR}/sources.txt" SKYLINE_RUNTIME_MANIFEST)
+set(_skyline_runtime_section "")
+set(SKYLINE_RUNTIME_SOURCES "")
+foreach(_line IN LISTS SKYLINE_RUNTIME_MANIFEST)
+  string(STRIP "${_line}" _line)
+  if(_line STREQUAL "" OR _line MATCHES "^#")
+    continue()
+  endif()
+  if(_line MATCHES "^\\[([a-z]+)\\]$")
+    set(_skyline_runtime_section "${CMAKE_MATCH_1}")
+    continue()
+  endif()
+  if(_skyline_runtime_section STREQUAL "common" AND _line MATCHES "\\.cc$")
+    list(APPEND SKYLINE_RUNTIME_SOURCES "${SKYLINE_RUNTIME_DIR}/${_line}")
+  endif()
+endforeach()
+if(NOT SKYLINE_RUNTIME_SOURCES)
+  message(FATAL_ERROR "runtime/sources.txt has no [common] sources")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${SKYLINE_RUNTIME_DIR}/sources.txt")
+
+add_library(skyline_runtime SHARED ${SKYLINE_RUNTIME_SOURCES})
 set_target_properties(skyline_runtime PROPERTIES
   PREFIX "lib"
   OUTPUT_NAME "skyline"

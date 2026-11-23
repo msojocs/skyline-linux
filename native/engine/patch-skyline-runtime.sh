@@ -8,9 +8,11 @@
 #
 # The embedded build has the full Dart API (statically linked), so it can call
 # the real `package:skyline` widget constructors (NewYGNode/NewDecoratedBox/
-# CreatePageRoute).  `native/runtime/skyline_runtime_stub.cc` is reused with
-# SKYLINE_EMBEDDED defined; the standalone DL-only library remains available as
-# `native/build/libskyline.so` for bootstrap-only tests.
+# CreatePageRoute).  The runtime sources are copied from `native/runtime`
+# (ordered by `sources.txt`): the [common] translation units build the
+# standalone DL-only library, the [embedded] ones are added to the engine's
+# embedder target with SKYLINE_EMBEDDED=1.  `native/build/libskyline.so` stays
+# available for bootstrap-only tests.
 #
 # After building, `libskyline.so` is symlinked next to the engine so the
 # package:skyline Linux lookup (`DynamicLibrary.open("libskyline.so")`) resolves.
@@ -22,10 +24,21 @@ source "$SCRIPT_DIR/env.sh"
 
 engine_root="$ENGINE_CHECKOUT/engine/src"
 embedder_dir="$engine_root/flutter/shell/platform/embedder"
-source_file="$ENGINE_REPO_ROOT/native/runtime/skyline_runtime_stub.cc"
+runtime_root="$ENGINE_REPO_ROOT/native/runtime"
+runtime_dest="$embedder_dir/skyline_runtime"
+manifest="$runtime_root/sources.txt"
 build_file="$embedder_dir/BUILD.gn"
 export_file="$embedder_dir/embedder_exports.lst"
 link_path="$ENGINE_STAGE/libskyline.so"
+
+# Prints the files of one manifest section (`common` or `embedded`).
+list_runtime_sources() {
+  awk -v want="$1" '
+    /^\[/ { section = $0; gsub(/[\[\]]/, "", section); next }
+    /^#/ || NF == 0 { next }
+    section == want { print }
+  ' "$manifest"
+}
 
 check_only=0
 do_build=1
@@ -57,21 +70,147 @@ export SKYLINE_ENGINE_STAGE="$ENGINE_STAGE"
 link_path="$ENGINE_STAGE/libskyline.so"
 
 [ -d "$embedder_dir" ] || die "missing engine checkout: $embedder_dir (run npm run engine:fetch)"
-[ -f "$source_file" ] || die "missing runtime source: $source_file"
+[ -f "$manifest" ] || die "missing runtime manifest: $manifest"
 
 if [ "$check_only" -eq 1 ]; then
-  [ -f "$embedder_dir/skyline_runtime.cc" ] || die "embedded runtime not installed"
-  grep -q '"skyline_runtime.cc"' "$build_file" || die "BUILD.gn does not compile skyline_runtime.cc"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    [ -f "$runtime_dest/$rel" ] || die "missing copied runtime file: $rel"
+    cmp -s "$runtime_root/$rel" "$runtime_dest/$rel" ||
+      die "stale copied runtime file: $rel (run without --check)"
+  done < <(list_runtime_sources common; list_runtime_sources embedded)
+  grep -q 'BEGIN skyline runtime' "$build_file" ||
+    die "BUILD.gn lacks the generated Skyline runtime block"
+  grep -q 'SKYLINE_EMBEDDED=1' "$build_file" ||
+    die "BUILD.gn lacks the SKYLINE_EMBEDDED define"
+  [ ! -e "$embedder_dir/skyline_runtime.cc" ] ||
+    die "legacy skyline_runtime.cc is still present"
   grep -q 'AdjustDecelerationVelocity;' "$export_file" || die "embedder_exports.lst lacks the Skyline exports"
   [ -e "$link_path" ] || die "missing $link_path (run without --check)"
   log "embedded Skyline runtime is installed"
   exit 0
 fi
 
-{
-  echo '#define SKYLINE_EMBEDDED 1'
-  cat "$source_file"
-} > "$embedder_dir/skyline_runtime.cc"
+python3 - "$runtime_root" "$runtime_dest" "$embedder_dir" <<'PY'
+import re
+import shutil
+import sys
+from pathlib import Path
+
+runtime_root = Path(sys.argv[1])
+runtime_dest = Path(sys.argv[2])
+embedder_dir = Path(sys.argv[3])
+manifest = runtime_root / "sources.txt"
+
+sections = {"common": [], "embedded": []}
+section = None
+for raw in manifest.read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    match = re.fullmatch(r"\[([a-z]+)\]", line)
+    if match:
+        section = match.group(1)
+        if section not in sections:
+            raise SystemExit(f"unknown sources.txt section: {section}")
+        continue
+    if section is None:
+        raise SystemExit(f"runtime source outside a section: {line}")
+    sections[section].append(line)
+
+all_files = sections["common"] + sections["embedded"]
+cc_files = [name for name in all_files if name.endswith(".cc")]
+if not cc_files:
+    raise SystemExit("sources.txt lists no translation units")
+
+expected = set(all_files)
+for rel in all_files:
+    source = runtime_root / rel
+    if not source.is_file():
+        raise SystemExit(f"missing runtime source: {source}")
+    destination = runtime_dest / rel
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists() or destination.read_bytes() != source.read_bytes():
+        shutil.copy2(source, destination)
+
+runtime_dest.mkdir(parents=True, exist_ok=True)
+for path in sorted(runtime_dest.rglob("*")):
+    if path.is_file() and str(path.relative_to(runtime_dest)) not in expected:
+        path.unlink()
+for path in sorted((p for p in runtime_dest.rglob("*") if p.is_dir()),
+                   reverse=True):
+    if not any(path.iterdir()):
+        path.rmdir()
+
+legacy = embedder_dir / "skyline_runtime.cc"
+if legacy.exists():
+    legacy.unlink()
+
+build_path = embedder_dir / "BUILD.gn"
+build = build_path.read_text(encoding="utf-8")
+begin = "# BEGIN skyline runtime (generated by native/engine/patch-skyline-runtime.sh)"
+end = "# END skyline runtime (generated)"
+config_begin = "# BEGIN skyline runtime config (generated by native/engine/patch-skyline-runtime.sh)"
+config_end = "# END skyline runtime config (generated)"
+config_block = (
+    f"{config_begin}\n"
+    f"config(\"skyline_runtime_config\") {{\n"
+    f"  defines = [ \"SKYLINE_EMBEDDED=1\" ]\n"
+    f"}}\n"
+    f"{config_end}\n"
+)
+if config_begin in build:
+    cstart = build.index(config_begin)
+    cend = build.index(config_end) + len(config_end) + 1
+    build = build[:cstart] + config_block + build[cend:]
+else:
+    template_anchor = 'template("embedder_source_set") {'
+    if template_anchor not in build:
+        raise SystemExit("cannot find embedder_source_set template")
+    build = build.replace(template_anchor, config_block + "\n" + template_anchor, 1)
+
+sources = "\n".join(f'        "skyline_runtime/{name}",' for name in cc_files)
+block = (
+    f"    if (target_name == \"embedder\") {{\n"
+    f"      {begin}\n"
+    f"      sources += [\n{sources}\n      ]\n"
+    f"      configs += [ \":skyline_runtime_config\" ]\n"
+    f"      {end}\n"
+    f"    }}\n"
+)
+# Remove the legacy single-file block (with or without its Phase 3 comment).
+legacy_re = re.compile(
+    r'\n    # Phase 3: Skyline runtime[^\n]*\n'
+    r'    if \(target_name == "embedder"\) \{\n'
+    r'      sources \+= \[ "skyline_runtime\.cc" \]\n'
+    r'    \}\n')
+build, removed = legacy_re.subn("\n", build, count=1)
+if not removed:
+    plain_legacy = (
+        '\n    if (target_name == "embedder") {\n'
+        '      sources += [ "skyline_runtime.cc" ]\n'
+        '    }\n'
+    )
+    build = build.replace(plain_legacy, "\n", 1)
+
+if begin in build:
+    start = build.index(begin) - len("    if (target_name == \"embedder\") {\n      ")
+    end_marker = build.index(end) + len(end) + len("\n    }\n")
+    build = build[:start] + block + build[end_marker:]
+else:
+    if begin not in build:
+        anchor = (
+            '      "vsync_waiter_embedder.cc",\n'
+            '      "vsync_waiter_embedder.h",\n'
+            "    ]\n"
+        )
+        if anchor not in build:
+            raise SystemExit("cannot find embedder BUILD.gn sources anchor")
+        build = build.replace(anchor, anchor + "\n" + block, 1)
+if build != build_path.read_text(encoding="utf-8"):
+    build_path.write_text(build, encoding="utf-8")
+    print("patched BUILD.gn")
+PY
 
 python3 - "$embedder_dir" "$ENGINE_REPO_ROOT/spec/kernel-symbols.json" <<'PY'
 import json
@@ -80,30 +219,6 @@ from pathlib import Path
 
 embedder_dir = Path(sys.argv[1])
 spec_path = Path(sys.argv[2])
-
-build_path = embedder_dir / "BUILD.gn"
-build = build_path.read_text(encoding="utf-8")
-if '"skyline_runtime.cc"' not in build:
-    anchor = '''      "vsync_waiter_embedder.cc",
-      "vsync_waiter_embedder.h",
-    ]
-
-    public_deps = [ ":embedder_headers" ]'''
-    replacement = '''      "vsync_waiter_embedder.cc",
-      "vsync_waiter_embedder.h",
-    ]
-
-    # Phase 3: Skyline runtime with full Dart API access (public embedder only).
-    if (target_name == "embedder") {
-      sources += [ "skyline_runtime.cc" ]
-    }
-
-    public_deps = [ ":embedder_headers" ]'''
-    if anchor not in build:
-        raise SystemExit("cannot find embedder BUILD.gn sources anchor")
-    build = build.replace(anchor, replacement, 1)
-    build_path.write_text(build, encoding="utf-8")
-    print("patched BUILD.gn")
 
 export_path = embedder_dir / "embedder_exports.lst"
 exports = export_path.read_text(encoding="utf-8")
