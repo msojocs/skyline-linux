@@ -72,6 +72,10 @@ function runHost(opsPath, options = {}) {
     .toString(36)
     .slice(2, 8)}`;
   const shmPath = `/dev/shm/skyline_${key}.dat`;
+  // Frames are rendered at `width x height` CSS pixels; `--dpr` scales the
+  // shared-memory frame, which is useful for glyph-level assertions.
+  const dpr = options.dpr || 1;
+  const expectedFrameSize = width * height * 4 * dpr * dpr;
   const env = {
     ...process.env,
     ...(options.env || {}),
@@ -83,6 +87,7 @@ function runHost(opsPath, options = {}) {
     '--icu', icu,
     '--width', String(width),
     '--height', String(height),
+    '--dpr', String(dpr),
     '--shm-key', key,
     '--timeout-ms', String(options.timeoutMs || 20000),
     ...(options.frames === undefined ? [] : ['--frames', String(options.frames)]),
@@ -109,8 +114,8 @@ function runHost(opsPath, options = {}) {
       const dataSize = Number(buffer.readBigUInt64LE(0));
       assert.equal(buffer.length, 16 + dataSize);
       const data = buffer.subarray(16);
-      assert.equal(data.readUInt32LE(4), frameSize);
-      pixels = data.subarray(8, 8 + frameSize);
+      assert.equal(data.readUInt32LE(4), expectedFrameSize);
+      pixels = data.subarray(8, 8 + expectedFrameSize);
     }
   } finally {
     try {
@@ -1260,6 +1265,201 @@ test('appservice ops: span/text inline flow keeps the footer row on one line', {
       assert.ok(red > 50,
         `expected a color emoji heart (red pixels=${red})`);
     }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: text ink is not clipped at the measured line box', {
+  skip: prerequisiteSkip() || false,
+  timeout: 90000,
+}, () => {
+  // card_transition's detail paragraphs start with a color emoji.  The emoji
+  // font metrics make that line taller than the replay's 1.2em estimate, so a
+  // two-line paragraph's last line paints below the text node's box.  Skyline
+  // sizes the box and lets ink overflow it (an explicit `height` does not clip
+  // the glyphs either), so the default `text-overflow` must stay `visible`;
+  // Flutter's `clip` shaved the bottom of every paragraph flat.
+  const colorEmojiFont = [
+    '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+    '/usr/share/fonts/noto/NotoColorEmoji.ttf',
+  ].some((candidate) => fs.existsSync(candidate));
+  if (!colorEmojiFont) {
+    // Without the emoji font the line metrics match the estimate and there is
+    // no ink to assert.
+    return;
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-text-ink-'));
+  const writeOps = (name, textOverflow) => {
+    const fixture = path.join(dir, `${name}.ops.json`);
+    fs.writeFileSync(fixture, JSON.stringify({
+      ops: [
+        { op: 'appendStyleSheet', index: 1, css:
+          'page { background: #FFFFFF; } ' +
+          '.box { padding: 10px; } ' +
+          '.p { width: 300px; font-size: 16px; color: #000000; ' +
+            (textOverflow ? `text-overflow: ${textOverflow}; ` : '') + '}' },
+        { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+        { op: 'createElement', id: 3, tag: 'view', name: 'view' },
+        { op: 'addClass', id: 3, prefix: 'box', name: 1 },
+        { op: 'createElement', id: 4, tag: 'text', name: '' },
+        { op: 'addClass', id: 4, prefix: 'p', name: 1 },
+        { op: 'setText', id: 4,
+          text: '🌟 无需为每个页面新建一个 JS 引擎实例（WebView），' +
+            '减少了内存、时间开销' },
+        { op: 'appendChild', id: 3, child: 4 },
+        { op: 'appendChild', id: 2, child: 3 },
+        { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+        { op: 'appendChild', id: 1, child: 2 },
+        { op: 'attach', root: 1 },
+        { op: 'startRender' },
+      ],
+    }));
+    return fixture;
+  };
+
+  const dpr = 2;
+  const inkBelowBox = (run) => {
+    const { logs, pixels } = run;
+    const match = /\[ops-debug\] rect #4 left=([-\d.]+) top=([-\d.]+) w=([-\d.]+) h=([-\d.]+)/
+      .exec(logs);
+    assert.ok(match, `no rect published for the text node:\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    const top = Number(match[2]);
+    const boxHeight = Number(match[4]);
+    const firstRow = Math.ceil((top + boxHeight) * dpr);
+    let dark = 0;
+    for (let y = firstRow; y < firstRow + 6; y++) {
+      for (let x = 0; x < width * dpr; x++) {
+        const offset = (y * width * dpr + x) * 4;
+        if (pixels[offset] < 128 && pixels[offset + 1] < 128 &&
+            pixels[offset + 2] < 128) {
+          dark++;
+        }
+      }
+    }
+    return { dark, firstRow };
+  };
+
+  try {
+    const visibleRun = runHost(writeOps('visible', ''), {
+      dpr, timeoutMs: 15000, env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    assert.equal(visibleRun.result.status, 0,
+      `skyline_host failed (status ${visibleRun.result.status}):\n` +
+      visibleRun.logs);
+    const visible = inkBelowBox(visibleRun);
+    assert.ok(visible.dark > 20,
+      `default text-overflow clipped the last line's ink ` +
+      `(dark rows=${visible.dark}, firstRow=${visible.firstRow})`);
+
+    // Control: an explicit `text-overflow: clip` still clips at the box, so
+    // the assertion above really observes the default (visible) behaviour.
+    const clipRun = runHost(writeOps('clip', 'clip'), {
+      dpr, timeoutMs: 15000, env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    assert.equal(clipRun.result.status, 0,
+      `skyline_host failed (status ${clipRun.result.status}):\n` +
+      clipRun.logs);
+    const clip = inkBelowBox(clipRun);
+    assert.equal(clip.dark, 0,
+      `explicit text-overflow:clip must clip at the box ` +
+      `(dark rows=${clip.dark}, firstRow=${clip.firstRow})`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('appservice ops: container text-overflow reaches the raw text child', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // WXSS declares the ellipsis on the element that owns the text:
+  //   <view class="box">AAAA BBBB CCCC DDDD</view>
+  // The replay materialises the raw text as a child text node, so the style
+  // must be carried down; otherwise the line is cut mid-glyph with no "…"
+  // (Flutter's paragraph only sees the child's own style).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-ellipsis-'));
+  const fixture = path.join(dir, 'ellipsis.ops.json');
+  fs.writeFileSync(fixture, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1, css:
+        'page { background: #FFFFFF; } ' +
+        '.box { width: 120px; height: 24px; font-size: 16px; ' +
+          'color: #000000; overflow: hidden; white-space: nowrap; ' +
+          'text-overflow: ellipsis; margin-bottom: 6px; } ' +
+        '.clip { text-overflow: clip; }' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'createElement', id: 3, tag: 'view', name: 'view' },
+      { op: 'addClass', id: 3, prefix: 'box', name: 1 },
+      { op: 'createElement', id: 4, tag: 'text', name: '' },
+      { op: 'setText', id: 4, text: 'AAAA BBBB CCCC DDDD' },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'createElement', id: 5, tag: 'view', name: 'view' },
+      { op: 'addClass', id: 5, prefix: 'box', name: 1 },
+      { op: 'addClass', id: 5, prefix: 'clip', name: 1 },
+      { op: 'createElement', id: 6, tag: 'text', name: '' },
+      { op: 'setText', id: 6, text: 'AAAA BBBB CCCC DDDD' },
+      { op: 'appendChild', id: 5, child: 6 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'appendChild', id: 2, child: 5 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+
+  const dpr = 2;
+  const { result, logs, pixels } = runHost(fixture, {
+    dpr, timeoutMs: 15000, env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+  });
+  try {
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+    const rectOf = (id) => {
+      const match = new RegExp(
+        `\\[ops-debug\\] rect #${id} left=([-\\d.]+) top=([-\\d.]+) ` +
+        'w=([-\\d.]+) h=([-\\d.]+)').exec(logs);
+      assert.ok(match, `no rect published for node #${id}:\n${logs}`);
+      return {
+        left: Number(match[1]), top: Number(match[2]),
+        w: Number(match[3]), h: Number(match[4]),
+      };
+    };
+    // Rightmost inked column inside the text box's own band.
+    const inkRight = (text) => {
+      const x0 = Math.round(text.left * dpr);
+      const x1 = Math.round((text.left + text.w) * dpr);
+      const y0 = Math.round(text.top * dpr);
+      const y1 = Math.round((text.top + text.h) * dpr);
+      let right = null;
+      for (let x = x0; x < x1; x++) {
+        for (let y = y0; y < y1; y++) {
+          const offset = (y * width * dpr + x) * 4;
+          if (pixels[offset] < 128 && pixels[offset + 1] < 128 &&
+              pixels[offset + 2] < 128) {
+            right = x;
+            break;
+          }
+        }
+      }
+      return { right, edge: x1 };
+    };
+
+    const ellipsisInk = inkRight(rectOf(4));
+    const clipInk = inkRight(rectOf(6));
+    assert.ok(ellipsisInk.right !== null,
+      'ellipsis text painted nothing');
+    // Flutter's ellipsis reserves room before the clip edge; a plain clip
+    // keeps drawing right up to (and into) the edge.
+    assert.ok(ellipsisInk.edge - ellipsisInk.right >= 8,
+      `inherited text-overflow:ellipsis did not add an ellipsis ` +
+      `(rightmost ink=${ellipsisInk.right}, edge=${ellipsisInk.edge})`);
+    assert.ok(clipInk.edge - clipInk.right <= 3,
+      `text-overflow:clip should reach the edge ` +
+      `(rightmost ink=${clipInk.right}, edge=${clipInk.edge})`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

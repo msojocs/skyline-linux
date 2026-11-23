@@ -2596,7 +2596,11 @@ struct AppStyle {
   // CSS white-space: 0 normal, 1 nowrap, 2 pre, 3 pre-wrap, 4 pre-line.
   int white_space = 0;
   // Flutter TextOverflow index (0 clip, 1 fade, 2 ellipsis, 3 visible).
-  int text_overflow = 0;
+  // Skyline does not clip glyph ink to the text box: the native runtime sizes
+  // the node from the real paragraph, and text that overflows the declared box
+  // (e.g. a fixed height) paints outside it, like CSS.  Default to `visible`
+  // so an approximate replay measurement never cuts descenders or emoji.
+  int text_overflow = 3;
   bool display_none = false;
   // True when a rule or inline style declared `display`.  Skyline's native
   // text/span tags default to inline, so this distinguishes an author override
@@ -4857,9 +4861,11 @@ void ApplyDeclaration(AppStyle* style,
                                                      : 0;
   } else if (key == "text-overflow") {
     const std::string text_overflow = LowerAscii(value);
-    style->text_overflow = text_overflow == "ellipsis" ? 2
-                            : text_overflow == "fade"  ? 1
-                                                       : 0;
+    style->text_overflow = text_overflow == "ellipsis"   ? 2
+                            : text_overflow == "fade"    ? 1
+                            : text_overflow == "clip"    ? 0
+                            : text_overflow == "visible" ? 3
+                                                         : 3;
   } else if (key == "aspect-ratio") {
     // CSS syntax: `auto`, `<ratio>`, or `auto <ratio>`, where a ratio is
     // `number` or `number / number`.
@@ -5641,6 +5647,11 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
     style.text_align = parent->text_align;
     style.font_families = parent->font_families;
     style.white_space = parent->white_space;
+    // `text-overflow` is declared on the block container in WXSS (e.g.
+    // `<view class="ellipsis">text</view>`), while the replay renders the
+    // container's raw text as a child text node.  Carry the value down so the
+    // text widget applies the ellipsis; a child declaration still wins.
+    style.text_overflow = parent->text_overflow;
   }
 
   if (g_page != nullptr) {

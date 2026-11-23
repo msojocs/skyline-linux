@@ -81,7 +81,7 @@ const KNOWN_DIVERGENCES = {
     samplesInformational: true,
   },
   'appservice-text-overflow': {
-    note: 'official clips at the same point in this op stream (no ellipsis); residual is text rasterization (~1.6%)',
+    note: 'Linux applies the container-inherited ellipsis (real WXSS pages); the official engine clips in this synthetic op stream, so residual is the ellipsis plus text rasterization (~1.5%)',
     compare: true,
     headroom: 0.005,
     samplesInformational: true,
