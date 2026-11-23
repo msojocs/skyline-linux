@@ -133,7 +133,8 @@ recompiles the official application against the public SDK:
 
 ```bash
 npm run ui:patch          # dart_ui_compat/{application,mmtrace,skyline_ext}.dart
-                          # + apply.py; rebuilds platform_strong.dill
+                          # + patches/*.patch via git apply;
+                          # rebuilds platform_strong.dill
 npm run kernel:skyline    # tools/reconstruct-kernel-sources.js + frontend_server
 npm run test:kernel       # static + compile-level assertions
 npm run engine:build      # core snapshot now contains Application etc.
@@ -147,7 +148,7 @@ npm run test:page         # real CreatePageRoute -> YGNode -> DecoratedBox page
 Result (2026-11-19): kernel 80.8 MB, SDK hash `a29e08c72e`; the public engine
 loads it without `Invalid SDK hash` and reaches
 `package:sample/devtools.dart main`.  The stub Linux runtime
-(`native/runtime/skyline_runtime_stub.cc`, 73 exports) lets the real
+(`native/runtime/`, 73 exports) lets the real
 `initSkylineForDevtools` path run to `runApp` and present a 320×240 frame,
 including the native→Dart `RunApplication` callback triggered by
 `NotifyFlutterReady`:
@@ -177,7 +178,8 @@ Dart API and exports it from `libflutter_engine.so`.  It builds a real page via
 | `build-empty-page.sh` | compiles an app to `kernel_blob.bin` (`--patched-sdk`, `SKYLINE_APP_DIR`) | yes |
 | `fetch-engine.sh` | depot_tools + `gclient sync` for the pinned engine | yes |
 | `build-engine.sh` | `gn gen` + `ninja flutter_engine`, stages the host artifacts | yes |
-| `dart_ui_compat/` | recovered private `dart:ui` sources + `apply.py` patches | yes |
+| `dart_ui_compat/` | recovered private `dart:ui` sources | yes |
+| `patches/` | unified diff patches applied to the pinned engine sources | yes |
 | `patch-dart-ui.sh` | installs the compat layer, rebuilds/stages the patched SDK | yes |
 | `build-skyline-kernel.sh` | reconstructs the official sources and compiles the app | yes |
 | `patch-skyline-runtime.sh` | embeds the runtime in `libflutter_engine.so` (full Dart API) | yes |

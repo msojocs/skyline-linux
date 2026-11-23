@@ -272,8 +272,9 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   `package:flutter`、1072 个其他包）并生成 `package_config.json`；产物写入
   `native/engine/work/`，仓库不提交官方源码。
 - `native/engine/dart_ui_compat/`：从官方 `isolate_snapshot_data` 恢复的私有
-  `dart:ui` 源码（`application.dart`、`mmtrace.dart`）与增量补丁脚本
-  (`apply.py`)；涵盖 `Application`、`WindowStatus`、`createNativeParagraph`、
+  `dart:ui` 源码（`application.dart`、`mmtrace.dart`、`skyline_ext.dart`）与
+  `native/engine/patches/` 中的 unified diff 补丁；涵盖 `Application`、
+  `WindowStatus`、`createNativeParagraph`、
   `warmUpFont`、`PlatformDispatcher` 的刷新率/GC/阈值/慢栈回调、
   `FramePhase.vsyncTarget`、`TextStyle.lineHeight` 及私有文本编码标志等。
 - `native/engine/patch-dart-ui.sh` + `build-skyline-kernel.sh`：给固定引擎打补丁、
@@ -282,7 +283,8 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
 - 2026-11-19 实测：重编译 kernel 80.8 MB，SDK hash `a29e08c72e`；公开引擎不再报
   `Invalid SDK hash`，可执行到 `package:sample/devtools.dart main`。
   `apps/dart-ui-compat-smoke` 在重建后的引擎上验证兼容层运行时行为并输出绿帧。
-- `native/runtime/skyline_runtime_stub.cc`：Linux 版运行时，导出
+- `native/runtime/`：Linux 版运行时（入口 `skyline_runtime_stub.cc` + `appservice_*`
+  回放模块），导出
   `spec/kernel-symbols.json` 中的全部 73 个符号，实现
   `InitDartAPIDLSkyline` / `AllocateFfiTable` / `Register` /
   `ShareRuntimeFromRuntimeShell` / `CreateWindow` 等引导路径。

@@ -92,8 +92,8 @@ SkParagraph。`backgroundUseLineMetrics` 在 `TextLine::paintBackground` 与
 ## 3. stub Linux 运行时与 appservice 第一帧
 
 `package:skyline` 在 Linux 上按名称打开 `libskyline.so`（`skylineAddonPath` 仅在
-Windows 分支使用）。`native/runtime/skyline_runtime_stub.cc` 提供 ABI 兼容的
-stub：
+Windows 分支使用）。`native/runtime/`（入口 `skyline_runtime_stub.cc` + 按
+`sources.txt` 拆分的 `appservice_*` 模块）提供 ABI 兼容的 stub：
 
 - 从 `lookupFunction<Native, Dart>` 出现处提取 73 个符号的真实返回类型
   （`Void` / `IntPtr` / `Handle` / `Bool` / `Int32` / `Double` / 结构体），
@@ -138,9 +138,10 @@ npm run test:appservice
 `Float32List` 与 Widget 对象，也无法在 native→Dart callback 中安全地创建对象。
 因此增加嵌入式变体：
 
-- `native/engine/patch-skyline-runtime.sh` 将 `skyline_runtime_stub.cc` 以
-  `SKYLINE_EMBEDDED` 复制进 `flutter/shell/platform/embedder/skyline_runtime.cc`，
-  在 `BUILD.gn` 的 `embedder` target 中编译，并把 73 个符号加入
+- `native/engine/patch-skyline-runtime.sh` 按 `sources.txt` 将 `native/runtime`
+  的源码以 `SKYLINE_EMBEDDED` 复制进
+  `flutter/shell/platform/embedder/skyline_runtime/`，在 `BUILD.gn` 的
+  `embedder` target 中编译，并把 73 个符号加入
   `embedder_exports.lst`；重建后 `libflutter_engine.so` 直接导出这些符号，并在同目录
   创建 `libskyline.so` 符号链接。
 - 页面构造在 `NotifyFlutterReady` 之后投递到 UI task runner：
@@ -283,7 +284,8 @@ native/engine/out/linux-x64-debug/patched_sdk/      platform_strong.dill + vm_ou
    差异，Linux/Windows 与官方 Windows 一样继续使用 ICU。`ignoreClusterLetterSpacing`
    同样只作为 SkParagraph 样式标志保留，公开 line breaker 未改变簇间距行为。
 3. `Canvas.clipRRect(clipOp: difference)` 已用 `Path.combine` 差值路径 +
-   `clipPath` 模拟（见 `apply.py`）；`intersect` 仍走原生快速路径。
+   `clipPath` 模拟（见 `native/engine/patches/dart-ui-compat.patch`）；
+   `intersect` 仍走原生快速路径。
 4. 多 `Application`（每个 Shell 一个）未实现；公开引擎是单应用模型，兼容层复用
    单例 `PlatformDispatcher`。
 5. 每次修改兼容层后必须 `npm run ui:patch && npm run engine:build`，否则 kernel

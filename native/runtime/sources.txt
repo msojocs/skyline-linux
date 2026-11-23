@@ -2,7 +2,9 @@
 #
 # [common] is compiled into the standalone libskyline.so (Dart API DL only) and
 # the engine's embedded runtime.  [embedded] is compiled only into the engine
-# embedder target, which defines SKYLINE_EMBEDDED=1.
+# embedder target, which defines SKYLINE_EMBEDDED=1.  The embedded replay is
+# split into `appservice_*` modules; `skyline_runtime_stub.cc` keeps the
+# bootstrap/ABI surface and the exported no-op stubs shared by both builds.
 #
 # Keep this list in sync with native/engine/patch-skyline-runtime.sh,
 # tools/conformance-gaps.js and native/CMakeLists.txt; all three consume it.
@@ -16,3 +18,33 @@ internal/skyline_runtime_module.hh
 internal/skyline_runtime_ffi.hh
 internal/skyline_runtime_appservice.hh
 internal/skyline_runtime_embedded.hh
+internal/skyline_runtime_support.hh
+internal/skyline_runtime_demo.hh
+internal/skyline_runtime_css.hh
+internal/skyline_runtime_selector.hh
+internal/skyline_runtime_node.hh
+internal/skyline_runtime_layout.hh
+internal/skyline_runtime_gesture.hh
+internal/skyline_runtime_image.hh
+internal/skyline_runtime_widget.hh
+internal/skyline_runtime_builder.hh
+internal/skyline_runtime_ops.hh
+internal/skyline_runtime_update.hh
+internal/skyline_runtime_page.hh
+
+appservice_support.cc
+appservice_demo.cc
+appservice_model.cc
+appservice_css.cc
+appservice_selector.cc
+appservice_node.cc
+appservice_layout.cc
+appservice_gesture.cc
+appservice_image.cc
+appservice_widget.cc
+appservice_builder.cc
+appservice_ops.cc
+appservice_update.cc
+appservice_page.cc
+appservice_bridge.cc
+appservice_channel.cc

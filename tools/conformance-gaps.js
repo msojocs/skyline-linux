@@ -28,7 +28,25 @@ const zlib = require('node:zlib');
 const { spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
-const runtimeSource = path.join(repoRoot, 'native', 'runtime', 'skyline_runtime_stub.cc');
+const runtimeDir = path.join(repoRoot, 'native', 'runtime');
+
+// The runtime is split into modules listed in sources.txt (entry TU plus the
+// appservice_* replay modules and their internal headers).  Concatenate them so
+// the scanner sees the same declarations as the compiler.
+function readRuntimeSource() {
+  try {
+    const manifest = fs.readFileSync(path.join(runtimeDir, 'sources.txt'), 'utf8');
+    const files = manifest.split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#') && !/^\[.+\]$/.test(line));
+    if (!files.length) return null;
+    return files
+      .map((file) => fs.readFileSync(path.join(runtimeDir, file), 'utf8'))
+      .join('\n');
+  } catch {
+    return null;
+  }
+}
 const symbolsPath = path.join(repoRoot, 'spec', 'kernel-symbols.json');
 const oraclePath = path.join(repoRoot, 'spec', 'skyline-node.win32.json');
 const l5BasePath = path.join(repoRoot, 'spec', 'l5-baseline.win32.json');
@@ -254,8 +272,8 @@ function symbolInventory(options) {
 // -- 4. Runtime callback wiring -------------------------------------------
 
 function runtimeWiring() {
-  if (!fs.existsSync(runtimeSource)) return { available: false };
-  const source = fs.readFileSync(runtimeSource, 'utf8');
+  const source = readRuntimeSource();
+  if (source === null) return { available: false };
   const constants = new Map();
   for (const match of source.matchAll(/constexpr\s+uint32_t\s+(k\w+Hash)\s*=\s*(\d+)u/g)) {
     constants.set(match[1], Number(match[2]));
@@ -299,14 +317,16 @@ function runtimeWiring() {
 // -- 5. Real example coverage ---------------------------------------------
 
 function runtimeCssKeys() {
-  const source = fs.readFileSync(runtimeSource, 'utf8');
+  const source = readRuntimeSource();
+  if (source === null) return new Set();
   const keys = new Set();
   for (const match of source.matchAll(/\bkey\s*==\s*"([^"]+)"/g)) keys.add(match[1]);
   return keys;
 }
 
 function runtimeTags() {
-  const source = fs.readFileSync(runtimeSource, 'utf8');
+  const source = readRuntimeSource();
+  if (source === null) return new Set();
   const tags = new Set();
   for (const match of source.matchAll(/\b(?:node->name|node->tag|name|tag)\s*==\s*"([^"]+)"/g)) {
     tags.add(match[1].toLowerCase());
@@ -441,7 +461,7 @@ function renderMarkdown(report) {
   lines.push('## 4. 原生运行时回调接线', '');
   const wiring = report.wiring;
   if (!wiring.available) {
-    lines.push('不可用：缺少 native/runtime/skyline_runtime_stub.cc', '');
+    lines.push('不可用：缺少 native/runtime/sources.txt 或其列出的运行时源码', '');
   } else {
     lines.push(`C++ 通过 FindCallback 调用 ${wiring.invokedCount}/${wiring.registered} 个官方注册回调；` +
       `其余 ${wiring.notInvokedCount} 个中，New/Update/Append/Set 等属性构造类由 C++ 直接实现，` +

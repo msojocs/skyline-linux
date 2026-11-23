@@ -4,11 +4,18 @@
 #
 #   bash native/engine/patch-dart-ui.sh [--check] [--engine]
 #
-# The layer is additive: it adds new parts (`application.dart`, `mmtrace.dart`,
-# `skyline_ext.dart`) and a small block of static PlatformDispatcher helpers.
-# It deliberately does not take the private engine's changes to the
-# embedder-facing hooks (`_addView`, `render`, `updateSemantics`, ...), whose
-# signatures must match the public C++ engine.
+# The layer is additive: it copies three new `dart:ui` parts (`application.dart`,
+# `mmtrace.dart`, `skyline_ext.dart`) and applies unified diff patches from
+# `native/engine/patches/` to the pinned engine sources.  It deliberately does
+# not take the private engine's changes to the embedder-facing hooks
+# (`_addView`, `render`, `updateSemantics`, ...), whose signatures must match the
+# public C++ engine.
+#
+# Patches are grouped by the repository that owns the files:
+#   dart-ui-compat.patch    flutter/lib/ui/*.dart + text/paragraph_builder.*
+#   txt-text-flags.patch    flutter/txt/src/** private text flags
+#   skia-text.patch         third_party/skia skparagraph + fontconfig
+#   dart-io-platform.patch  third_party/dart sdk/lib/io/platform.dart
 #
 # --check   verify the compat layer is present without modifying anything
 # --engine  also rebuild `flutter_engine` (regenerates the core snapshots)
@@ -19,10 +26,20 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/env.sh"
 
 ui_dir="$ENGINE_CHECKOUT/engine/src/flutter/lib/ui"
-engine_src="$ENGINE_CHECKOUT/engine/src"
 out_dir="$ENGINE_BUILD_DIR"
 compat_dir="$SCRIPT_DIR/dart_ui_compat"
+patches_dir="$SCRIPT_DIR/patches"
 patched_sdk_dir="$ENGINE_STAGE/patched_sdk"
+
+# `repo|patch` pairs.  The gclient root is the git worktree that tracks
+# `engine/src/flutter/lib/ui` and `flutter/txt`; skia and dart are nested
+# repositories of their own, so each patch applies from its own root.
+patch_specs=(
+  "$ENGINE_CHECKOUT|$patches_dir/dart-ui-compat.patch"
+  "$ENGINE_CHECKOUT|$patches_dir/txt-text-flags.patch"
+  "$ENGINE_CHECKOUT/engine/src/flutter/third_party/skia|$patches_dir/skia-text.patch"
+  "$ENGINE_CHECKOUT/engine/src/flutter/third_party/dart|$patches_dir/dart-io-platform.patch"
+)
 
 check_only=0
 build_engine=0
@@ -31,7 +48,7 @@ for arg in "$@"; do
     --check) check_only=1 ;;
     --engine) build_engine=1 ;;
     -h|--help)
-      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown argument: $arg" ;;
@@ -39,38 +56,56 @@ for arg in "$@"; do
 done
 
 [ -d "$ui_dir" ] || die "missing engine checkout: $ui_dir (run npm run engine:fetch)"
+[ -d "$patches_dir" ] || die "missing patch directory: $patches_dir"
 
-if [ "$check_only" -eq 1 ]; then
+for spec in "${patch_specs[@]}"; do
+  repo=${spec%%|*}
+  patch=${spec#*|}
+  [ -f "$patch" ] || die "missing compat patch: $patch"
+  git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+    die "not a git worktree: $repo (run npm run engine:fetch)"
+done
+
+check_parts() {
+  local part
   for part in application.dart mmtrace.dart skyline_ext.dart; do
     [ -f "$ui_dir/$part" ] || die "dart:ui compat part missing: $ui_dir/$part"
     grep -q "part '$part';" "$ui_dir/ui.dart" || die "ui.dart does not declare $part"
   done
-  grep -q "static bool isUseParallelPipeline()" "$ui_dir/platform_dispatcher.dart" \
-    || die "platform_dispatcher.dart lacks isUseParallelPipeline"
-  grep -q "result\[0\] |= 1 << 22;" "$ui_dir/text.dart" \
-    || die "text.dart lacks the private text flag encoding"
-  grep -q "kTSLineHeightIndex" "$ui_dir/text/paragraph_builder.cc" \
-    || die "paragraph_builder.cc lacks the private text flag decoding"
-  grep -q "background_use_line_metrics" "$engine_src/flutter/txt/src/txt/paragraph_style.h" \
-    || die "txt paragraph_style.h lacks backgroundUseLineMetrics"
-  grep -q "getBackgroundUseLineMetrics()" \
-    "$engine_src/flutter/third_party/skia/modules/skparagraph/src/TextLine.cpp" \
-    || die "SkParagraph TextLine.cpp lacks backgroundUseLineMetrics"
-  grep -q "matchFamilyStyle(familyName.c_str(), fontStyle)" \
-    "$engine_src/flutter/third_party/skia/modules/skparagraph/src/FontCollection.cpp" \
-    || die "SkParagraph FontCollection.cpp lacks primary color emoji fallback"
-  grep -q "FcPatternGetWithBinding(pattern, object, id" \
-    "$engine_src/flutter/third_party/skia/src/ports/SkFontMgr_fontconfig.cpp" \
-    || die "SkFontMgr_fontconfig.cpp lacks the weak-binding lookup"
+}
+
+patch_is_applied() {
+  git -C "$1" apply --reverse --check "$2" >/dev/null 2>&1
+}
+
+if [ "$check_only" -eq 1 ]; then
+  check_parts
+  for spec in "${patch_specs[@]}"; do
+    repo=${spec%%|*}
+    patch=${spec#*|}
+    patch_is_applied "$repo" "$patch" ||
+      die "compat patch not applied: $(basename "$patch") (run without --check)"
+  done
   log "dart:ui compat layer is installed"
   exit 0
 fi
 
-for part in application.dart mmtrace.dart skyline_ext.dart; do
-  cp "$compat_dir/$part" "$ui_dir/$part"
-done
+check_parts
 
-python3 "$compat_dir/apply.py" "$ENGINE_CHECKOUT/engine/src"
+for spec in "${patch_specs[@]}"; do
+  repo=${spec%%|*}
+  patch=${spec#*|}
+  name=$(basename "$patch")
+  if patch_is_applied "$repo" "$patch"; then
+    log "already applied: $name"
+    continue
+  fi
+  if ! git -C "$repo" apply --check "$patch" 2>/dev/null; then
+    die "$name does not apply to $repo; the checkout is neither clean nor patched (re-run npm run engine:fetch or revert the engine sources)"
+  fi
+  git -C "$repo" apply "$patch"
+  log "applied: $name"
+done
 
 log "dart:ui compat layer installed in $ui_dir"
 

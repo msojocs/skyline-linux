@@ -92,7 +92,8 @@
       return native.setSafeArea(args[0], args[1], args[2], args[3]);
     }],
     ['notifyResourceLoad', function (...args) { return native.notify('notifyResourceLoad', args); }],
-    ['notifyHttpRequestComplete', function (requestId, errno, status, headers, buffer) {
+    ['notifyHttpRequestComplete', function (...args) {
+      const [requestId, errno, status, headers, buffer] = args;
       if (typeof native.log === 'function') {
         native.log(`notifyHttpRequestComplete ${requestId} ` +
           `len=${buffer && typeof buffer.length === 'number' ? buffer.length : 0}`);

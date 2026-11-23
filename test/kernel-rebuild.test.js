@@ -97,44 +97,55 @@ test('dart:ui compat: recovered source surface is present', () => {
   assert.match(mmtrace, /const pragma entryPoint/);
 });
 
-test('dart:ui compat: apply.py patches every required engine file', () => {
-  const script = fs.readFileSync(path.join(compatDir, 'apply.py'), 'utf8');
+test('dart:ui compat: patches cover every required engine file', () => {
+  const patchesDir = path.join(repoRoot, 'native', 'engine', 'patches');
+  const patches = fs.readdirSync(patchesDir)
+    .filter((name) => name.endsWith('.patch'))
+    .map((name) => fs.readFileSync(path.join(patchesDir, name), 'utf8'))
+    .join('\n');
   for (const file of [
-    'flutter/lib/ui/ui.dart',
-    'flutter/lib/ui/painting.dart',
-    'flutter/lib/ui/platform_dispatcher.dart',
-    'flutter/lib/ui/window.dart',
-    'flutter/lib/ui/text.dart',
-    'flutter/lib/ui/text/paragraph_builder.h',
-    'flutter/lib/ui/text/paragraph_builder.cc',
-    'flutter/txt/src/txt/text_style.h',
-    'flutter/txt/src/txt/paragraph_style.h',
-    'flutter/txt/src/skia/paragraph_builder_skia.cc',
-    'flutter/third_party/skia/modules/skparagraph/include/TextStyle.h',
-    'flutter/third_party/skia/modules/skparagraph/include/ParagraphStyle.h',
-    'flutter/third_party/skia/modules/skparagraph/src/TextLine.cpp',
-    'flutter/third_party/skia/modules/skparagraph/src/ParagraphCache.cpp',
-    'flutter/third_party/dart/sdk/lib/io/platform.dart',
+    'src/flutter/lib/ui/ui.dart',
+    'src/flutter/lib/ui/painting.dart',
+    'src/flutter/lib/ui/platform_dispatcher.dart',
+    'src/flutter/lib/ui/window.dart',
+    'src/flutter/lib/ui/text.dart',
+    'src/flutter/lib/ui/text/paragraph_builder.h',
+    'src/flutter/lib/ui/text/paragraph_builder.cc',
+    'src/flutter/txt/src/txt/text_style.h',
+    'src/flutter/txt/src/txt/paragraph_style.h',
+    'src/flutter/txt/src/skia/paragraph_builder_skia.cc',
+    'modules/skparagraph/include/TextStyle.h',
+    'modules/skparagraph/include/ParagraphStyle.h',
+    'modules/skparagraph/src/TextLine.cpp',
+    'modules/skparagraph/src/ParagraphCache.cpp',
+    'sdk/lib/io/platform.dart',
   ]) {
-    assert.ok(script.includes(file), `apply.py does not patch ${file}`);
+    assert.ok(patches.includes(file), `compat patches do not touch ${file}`);
   }
 
   // The private text flags are encoded exactly like the recovered dart:ui:
   // TextStyle bits 20..22, ParagraphStyle bits 13..15, with lineHeight passed
   // separately to ParagraphBuilder::Create/pushStyle.
   for (const marker of [
-    'result[0] |= 1 << 20;\\n',
-    'result[0] |= 1 << 21;\\n',
-    'result[0] |= 1 << 22;\\n',
-    'result[0] |= 1 << 13;\\n',
-    'result[0] |= 1 << 14;\\n',
-    'result[0] |= 1 << 15;\\n',
+    'result[0] |= 1 << 20;',
+    'result[0] |= 1 << 21;',
+    'result[0] |= 1 << 22;',
+    'result[0] |= 1 << 13;',
+    'result[0] |= 1 << 14;',
+    'result[0] |= 1 << 15;',
     'kPSBackgroundUseLineMetricsMask',
     'kTSUseCoreTextWordBreakMask',
     'getBackgroundUseLineMetrics()',
   ]) {
-    assert.ok(script.includes(marker), `private text flag patch marker missing: ${marker}`);
+    assert.ok(patches.includes(marker), `private text flag patch marker missing: ${marker}`);
   }
+
+  const script = fs.readFileSync(
+    path.join(repoRoot, 'native', 'engine', 'patch-dart-ui.sh'), 'utf8');
+  assert.ok(script.includes('patches_dir'), 'patch-dart-ui.sh does not use patches/');
+  assert.ok(script.includes('git -C "$repo" apply'), 'patch-dart-ui.sh does not git apply patches');
+  assert.equal(script.includes('apply.py'), false,
+    'patch-dart-ui.sh still invokes apply.py');
 });
 
 const reconstructedKernel = path.join(workApp, 'build', 'flutter_assets', 'kernel_blob.bin');

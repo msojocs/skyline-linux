@@ -1,13 +1,13 @@
 # 候选回调/行为覆盖矩阵（D3）
 
 来源：`npm run gaps` 列出的“事件/观察/命令”候选，加上对
-`native/runtime/skyline_runtime_stub.cc` 的逐符号核对。
+`native/runtime/appservice_*.cc` 的逐符号核对。
 
 判定方法：
 
 ```bash
 # 候选名在运行时源码中的出现次数（0 = 原生侧从未调用该注册回调）
-rg -n '\bScrollViewUpdateOnScroll\b' native/runtime/skyline_runtime_stub.cc
+rg -n '\bScrollViewUpdateOnScroll\b' native/runtime
 ```
 
 `New*`/`Append*`/`Insert*`/`Update*` 属性构造类回调由 C++ 直接构建 Flutter

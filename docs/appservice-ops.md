@@ -409,7 +409,7 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
 
 ### 4.1 节点表
 
-`native/runtime/skyline_runtime_stub.cc` 的 `appservice::` 命名空间维护
+`native/runtime/appservice_*.cc` 的 `appservice::` 命名空间维护
 `id -> AppNode` 表。`fragment` 在 `appendChild`/`splice` 时展开为透明容器；
 `release` 后不再参与测量与物化。
 

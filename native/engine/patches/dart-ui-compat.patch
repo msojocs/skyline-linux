@@ -1,0 +1,507 @@
+diff --git a/engine/src/flutter/lib/ui/painting.dart b/engine/src/flutter/lib/ui/painting.dart
+index 1be8596..7db1420 100644
+--- a/engine/src/flutter/lib/ui/painting.dart
++++ b/engine/src/flutter/lib/ui/painting.dart
+@@ -5908,7 +5908,7 @@ abstract class Canvas {
+   /// If multiple draw commands intersect with the clip boundary, this can result
+   /// in incorrect blending at the clip boundary. See [saveLayer] for a
+   /// discussion of how to address that and some examples of using [clipRRect].
+-  void clipRRect(RRect rrect, {bool doAntiAlias = true});
++  void clipRRect(RRect rrect, {ClipOp clipOp = ClipOp.intersect, bool doAntiAlias = true});
+ 
+   /// Reduces the clip region to the intersection of the current clip and the
+   /// given rounded superellipse.
+@@ -6655,8 +6655,16 @@ base class _NativeCanvas extends NativeFieldWrapperClass1 implements Canvas {
+   );
+ 
+   @override
+-  void clipRRect(RRect rrect, {bool doAntiAlias = true}) {
++  void clipRRect(RRect rrect, {ClipOp clipOp = ClipOp.intersect, bool doAntiAlias = true}) {
+     assert(_rrectIsValid(rrect));
++    if (clipOp == ClipOp.difference) {
++      final Path outer = Path()
++        ..addRect(rrect.outerRect.inflate(100000.0));
++      final Path inner = Path()..addRRect(rrect);
++      clipPath(Path.combine(PathOperation.difference, outer, inner),
++          doAntiAlias: doAntiAlias);
++      return;
++    }
+     _clipRRect(rrect._getValue32(), doAntiAlias);
+   }
+ 
+diff --git a/engine/src/flutter/lib/ui/platform_dispatcher.dart b/engine/src/flutter/lib/ui/platform_dispatcher.dart
+index 770835c..54e0b0f 100644
+--- a/engine/src/flutter/lib/ui/platform_dispatcher.dart
++++ b/engine/src/flutter/lib/ui/platform_dispatcher.dart
+@@ -1521,6 +1521,52 @@ class PlatformDispatcher {
+   // configurationId does not match any configuration.
+   @Native<Double Function(Double, Int)>(symbol: 'PlatformConfigurationNativeApi::GetScaledFontSize')
+   external static double _getScaledFontSize(double unscaledFontSize, int configurationId);
++
++  // ---- Skyline compatibility ------------------------------------------------
++  // These members exist in the private engine's dart:ui and are used by
++  // package:skyline.  Where the public engine has no matching native hook the
++  // implementation is a safe no-op (or a documented constant).
++
++  /// Returns the display refresh rate in Hz.
++  double getDisplayRefreshRate() => 60.0;
++
++  /// Runs a garbage collection. The call is advisory; the public engine has
++  /// no PlatformConfigurationNativeApi::CollectGarbage hook.
++  void collectGarbage() {}
++
++  /// Sets the UI runner slow-frame threshold (ANR detection not ported).
++  void setUiRunnerThreshold(int milliseconds, {bool check_anr = true}) {}
++
++  /// Sets the raster runner slow-frame threshold (ANR detection not ported).
++  void setRasterRunnerThreshold(int milliseconds, {bool check_anr = true}) {}
++
++  /// Schedules a frame without waiting for VSync.
++  void scheduleFrameIgnoreVsync() => scheduleFrame();
++
++  /// Marks a startup timing checkpoint (startup tracing not ported).
++  void recordStartupTiming(String name) {}
++
++  SlowRunnerStackCallback _skylineSlowRunnerStackCallback =
++      (String name, int milliseconds, List<String> stackTraces) {};
++
++  /// Callback invoked when a runner exceeds its stack-report threshold.
++  SlowRunnerStackCallback get onReportSlowRunnerStack =>
++      _skylineSlowRunnerStackCallback;
++
++  set onReportSlowRunnerStack(SlowRunnerStackCallback? callback) {
++    if (callback != null) {
++      _skylineSlowRunnerStackCallback = callback;
++    }
++  }
++
++  // Skyline compatibility: the private engine implements these through
++  // `PlatformConfigurationNativeApi::{Is,Set}UseParallelPipeline`.  The public
++  // engine has no such hooks yet, so keep the state in Dart.
++  static bool _skylineUseParallelPipeline = false;
++  static bool isUseParallelPipeline() => _skylineUseParallelPipeline;
++  static void setUseParallelPipeline(bool enable) {
++    _skylineUseParallelPipeline = enable;
++  }
+ }
+ 
+ /// A color specified in the operating system UI color palette.
+@@ -1984,6 +2030,13 @@ enum FramePhase {
+   /// This is useful for correlating time raster finish time with the system
+   /// clock to integrate with other profiling tools.
+   rasterFinishWallTime,
++
++  /// When the frame should be rendered on screen (Skyline addition).
++  vsyncTarget,
++
++  /// When the frame actually starts rendering, excluding acquireFrame
++  /// (Skyline addition).
++  compositeFrameStart,
+ }
+ 
+ enum _FrameTimingInfo {
+@@ -2060,15 +2113,27 @@ class FrameTiming {
+   /// To get the [FrameTiming] of your app, see [PlatformDispatcher.onReportTimings].
+   FrameTiming._(this._data) : assert(_data.length == _dataLength);
+ 
+-  static final int _dataLength = FramePhase.values.length + _FrameTimingInfo.values.length;
++  // The public engine reports the six original FramePhase timestamps plus
++  // the five _FrameTimingInfo fields.  The Skyline-only phases below are
++  // derived in timestampInMicroseconds, so the native payload length stays 11.
++  static final int _dataLength = 6 + _FrameTimingInfo.values.length;
+ 
+   /// This is a raw timestamp in microseconds from some epoch. The epoch in all
+   /// [FrameTiming] is the same, but it may not match [DateTime]'s epoch.
+-  int timestampInMicroseconds(FramePhase phase) => _data[phase.index];
++  int timestampInMicroseconds(FramePhase phase) {
++    switch (phase) {
++      case FramePhase.vsyncTarget:
++        return _data[FramePhase.vsyncStart.index];
++      case FramePhase.compositeFrameStart:
++        return _data[FramePhase.buildStart.index];
++      default:
++        return _data[phase.index];
++    }
++  }
+ 
+   Duration _rawDuration(FramePhase phase) => Duration(microseconds: _data[phase.index]);
+ 
+-  int _rawInfo(_FrameTimingInfo info) => _data[FramePhase.values.length + info.index];
++  int _rawInfo(_FrameTimingInfo info) => _data[6 + info.index];
+ 
+   /// The duration to build the frame on the UI thread.
+   ///
+diff --git a/engine/src/flutter/lib/ui/text.dart b/engine/src/flutter/lib/ui/text.dart
+index 8632253..e7e166c 100644
+--- a/engine/src/flutter/lib/ui/text.dart
++++ b/engine/src/flutter/lib/ui/text.dart
+@@ -1594,12 +1594,15 @@ Int32List _encodeTextStyle(
+   double? letterSpacing,
+   double? wordSpacing,
+   double? height,
++  double? lineHeight,
+   Locale? locale,
+   Paint? background,
+   Paint? foreground,
+   List<Shadow>? shadows,
+   List<FontFeature>? fontFeatures,
+   List<FontVariation>? fontVariations,
++  bool ignoreClusterLetterSpacing,
++  bool useCoreTextWordBreak,
+ ) {
+   final Int32List result = Int32List(9);
+   // The 0th bit of result[0] is reserved for leadingDistribution.
+@@ -1679,6 +1682,15 @@ Int32List _encodeTextStyle(
+     result[0] |= 1 << 19;
+     // Passed separately to native.
+   }
++  if (lineHeight != null) {
++    result[0] |= 1 << 20;
++  }
++  if (ignoreClusterLetterSpacing != false) {
++    result[0] |= 1 << 21;
++  }
++  if (useCoreTextWordBreak != false) {
++    result[0] |= 1 << 22;
++  }
+ 
+   return result;
+ }
+@@ -1736,6 +1748,9 @@ class TextStyle {
+     double? letterSpacing,
+     double? wordSpacing,
+     double? height,
++    double? lineHeight,
++    bool ignoreClusterLetterSpacing = false,
++    bool useCoreTextWordBreak = false,
+     TextLeadingDistribution? leadingDistribution,
+     Locale? locale,
+     Paint? background,
+@@ -1763,12 +1778,15 @@ class TextStyle {
+          letterSpacing,
+          wordSpacing,
+          height,
++         lineHeight,
+          locale,
+          background,
+          foreground,
+          shadows,
+          fontFeatures,
+          fontVariations,
++         ignoreClusterLetterSpacing,
++         useCoreTextWordBreak,
+        ),
+        _leadingDistribution = leadingDistribution,
+        _fontFamily = fontFamily ?? '',
+@@ -1777,6 +1795,8 @@ class TextStyle {
+        _letterSpacing = letterSpacing,
+        _wordSpacing = wordSpacing,
+        _height = height,
++       _lineHeight = lineHeight,
++       _useCoreTextWordBreak = useCoreTextWordBreak,
+        _decorationThickness = decorationThickness,
+        _locale = locale,
+        _background = background,
+@@ -1792,6 +1812,8 @@ class TextStyle {
+   final double? _letterSpacing;
+   final double? _wordSpacing;
+   final double? _height;
++  final double? _lineHeight;
++  final bool _useCoreTextWordBreak;
+   final double? _decorationThickness;
+   final Locale? _locale;
+   final Paint? _background;
+@@ -1813,6 +1835,7 @@ class TextStyle {
+         other._letterSpacing == _letterSpacing &&
+         other._wordSpacing == _wordSpacing &&
+         other._height == _height &&
++        other._lineHeight == _lineHeight &&
+         other._decorationThickness == _decorationThickness &&
+         other._locale == _locale &&
+         other._background == _background &&
+@@ -1909,12 +1932,15 @@ Int32List _encodeParagraphStyle(
+   String? fontFamily,
+   double? fontSize,
+   double? height,
++  double? lineHeight,
+   TextHeightBehavior? textHeightBehavior,
+   FontWeight? fontWeight,
+   FontStyle? fontStyle,
+   StrutStyle? strutStyle,
+   String? ellipsis,
+   Locale? locale,
++  bool ignoreClusterLetterSpacing,
++  bool backgroundUseLineMetrics,
+ ) {
+   final Int32List result = Int32List(7); // also update paragraph_builder.cc
+   if (textAlign != null) {
+@@ -1967,6 +1993,15 @@ Int32List _encodeParagraphStyle(
+     result[0] |= 1 << 12;
+     // Passed separately to native.
+   }
++  if (lineHeight != null) {
++    result[0] |= 1 << 13;
++  }
++  if (ignoreClusterLetterSpacing) {
++    result[0] |= 1 << 14;
++  }
++  if (backgroundUseLineMetrics) {
++    result[0] |= 1 << 15;
++  }
+   return result;
+ }
+ 
+@@ -2040,6 +2075,9 @@ class ParagraphStyle {
+     String? fontFamily,
+     double? fontSize,
+     double? height,
++    double? lineHeight,
++    bool ignoreClusterLetterSpacing = false,
++    bool backgroundUseLineMetrics = false,
+     TextHeightBehavior? textHeightBehavior,
+     FontWeight? fontWeight,
+     FontStyle? fontStyle,
+@@ -2053,16 +2091,21 @@ class ParagraphStyle {
+          fontFamily,
+          fontSize,
+          height,
++         lineHeight,
+          textHeightBehavior,
+          fontWeight,
+          fontStyle,
+          strutStyle,
+          ellipsis,
+          locale,
++         ignoreClusterLetterSpacing,
++         backgroundUseLineMetrics,
+        ),
+        _fontFamily = fontFamily,
+        _fontSize = fontSize,
+        _height = height,
++       _lineHeight = lineHeight,
++       _backgroundUseLineMetrics = backgroundUseLineMetrics,
+        _strutStyle = strutStyle,
+        _ellipsis = ellipsis,
+        _locale = locale,
+@@ -2073,6 +2116,8 @@ class ParagraphStyle {
+   final String? _fontFamily;
+   final double? _fontSize;
+   final double? _height;
++  final double? _lineHeight;
++  final bool _backgroundUseLineMetrics;
+   final StrutStyle? _strutStyle;
+   final String? _ellipsis;
+   final Locale? _locale;
+@@ -2090,6 +2135,7 @@ class ParagraphStyle {
+         other._fontFamily == _fontFamily &&
+         other._fontSize == _fontSize &&
+         other._height == _height &&
++        other._lineHeight == _lineHeight &&
+         other._strutStyle == _strutStyle &&
+         other._ellipsis == _ellipsis &&
+         other._locale == _locale &&
+@@ -3548,12 +3594,13 @@ base class _NativeParagraphBuilder extends NativeFieldWrapperClass1 implements P
+       strutFontFamilies,
+       style._fontSize ?? 0,
+       style._height ?? 0,
++      style._lineHeight ?? 0,
+       style._ellipsis ?? '',
+       _encodeLocale(style._locale),
+     );
+   }
+ 
+-  @Native<Void Function(Handle, Handle, Handle, Handle, Handle, Double, Double, Handle, Handle)>(
++  @Native<Void Function(Handle, Handle, Handle, Handle, Handle, Double, Double, Double, Handle, Handle)>(
+     symbol: 'ParagraphBuilder::Create',
+   )
+   external void _constructor(
+@@ -3563,6 +3610,7 @@ base class _NativeParagraphBuilder extends NativeFieldWrapperClass1 implements P
+     List<Object?>? strutFontFamily,
+     double fontSize,
+     double height,
++    double lineHeight,
+     String ellipsis,
+     String locale,
+   );
+@@ -3629,6 +3677,7 @@ base class _NativeParagraphBuilder extends NativeFieldWrapperClass1 implements P
+       style._letterSpacing ?? 0,
+       style._wordSpacing ?? 0,
+       style._height ?? 0,
++      style._lineHeight ?? 0,
+       style._decorationThickness ?? 0,
+       _encodeLocale(style._locale),
+       style._background?._objects,
+@@ -3651,6 +3700,7 @@ base class _NativeParagraphBuilder extends NativeFieldWrapperClass1 implements P
+       Double,
+       Double,
+       Double,
++      Double,
+       Handle,
+       Handle,
+       Handle,
+@@ -3668,6 +3718,7 @@ base class _NativeParagraphBuilder extends NativeFieldWrapperClass1 implements P
+     double letterSpacing,
+     double wordSpacing,
+     double height,
++    double lineHeight,
+     double decorationThickness,
+     String locale,
+     List<Object?>? backgroundObjects,
+diff --git a/engine/src/flutter/lib/ui/text/paragraph_builder.cc b/engine/src/flutter/lib/ui/text/paragraph_builder.cc
+index f3bd83c..5e1750a 100644
+--- a/engine/src/flutter/lib/ui/text/paragraph_builder.cc
++++ b/engine/src/flutter/lib/ui/text/paragraph_builder.cc
+@@ -76,6 +76,16 @@ const int kTSTextShadowsMask = 1 << kTSTextShadowsIndex;
+ const int kTSFontFeaturesMask = 1 << kTSFontFeaturesIndex;
+ const int kTSFontVariationsMask = 1 << kTSFontVariationsIndex;
+ 
++// Private Skyline additions (encoded by `_encodeTextStyle`).
++const int kTSLineHeightIndex = 20;
++const int kTSIgnoreClusterLetterSpacingIndex = 21;
++const int kTSUseCoreTextWordBreakIndex = 22;
++
++const int kTSLineHeightMask = 1 << kTSLineHeightIndex;
++const int kTSIgnoreClusterLetterSpacingMask =
++    1 << kTSIgnoreClusterLetterSpacingIndex;
++const int kTSUseCoreTextWordBreakMask = 1 << kTSUseCoreTextWordBreakIndex;
++
+ // ParagraphStyle
+ 
+ const int kPSTextAlignIndex = 1;
+@@ -104,6 +114,17 @@ const int kPSStrutStyleMask = 1 << kPSStrutStyleIndex;
+ const int kPSEllipsisMask = 1 << kPSEllipsisIndex;
+ const int kPSLocaleMask = 1 << kPSLocaleIndex;
+ 
++// Private Skyline additions (encoded by `_encodeParagraphStyle`).
++const int kPSLineHeightIndex = 13;
++const int kPSIgnoreClusterLetterSpacingIndex = 14;
++const int kPSBackgroundUseLineMetricsIndex = 15;
++
++const int kPSLineHeightMask = 1 << kPSLineHeightIndex;
++const int kPSIgnoreClusterLetterSpacingMask =
++    1 << kPSIgnoreClusterLetterSpacingIndex;
++const int kPSBackgroundUseLineMetricsMask =
++    1 << kPSBackgroundUseLineMetricsIndex;
++
+ // TextShadows decoding
+ 
+ constexpr uint32_t kColorDefault = 0xFF000000;
+@@ -152,12 +173,13 @@ void ParagraphBuilder::Create(Dart_Handle wrapper,
+                               const std::vector<std::string>& strutFontFamilies,
+                               double fontSize,
+                               double height,
++                              double lineHeight,
+                               const std::u16string& ellipsis,
+                               const std::string& locale) {
+   UIDartState::ThrowIfUIOperationsProhibited();
+   auto res = fml::MakeRefCounted<ParagraphBuilder>(
+       encoded_handle, strutData, fontFamily, strutFontFamilies, fontSize,
+-      height, ellipsis, locale);
++      height, lineHeight, ellipsis, locale);
+   res->AssociateWithDartWrapper(wrapper);
+ }
+ 
+@@ -231,6 +253,7 @@ ParagraphBuilder::ParagraphBuilder(
+     const std::vector<std::string>& strutFontFamilies,
+     double fontSize,
+     double height,
++    double lineHeight,
+     const std::u16string& ellipsis,
+     const std::string& locale) {
+   int32_t mask = 0;
+@@ -280,6 +303,14 @@ ParagraphBuilder::ParagraphBuilder(
+     if (mask & kPSMaxLinesMask) {
+       style.max_lines = encoded[kPSMaxLinesIndex];
+     }
++
++    if (mask & kPSLineHeightMask) {
++      style.line_height = lineHeight;
++    }
++    style.ignore_cluster_letter_spacing =
++        (mask & kPSIgnoreClusterLetterSpacingMask) != 0;
++    style.background_use_line_metrics =
++        (mask & kPSBackgroundUseLineMetricsMask) != 0;
+   }
+ 
+   if (mask & kPSStrutStyleMask) {
+@@ -373,6 +404,7 @@ void ParagraphBuilder::pushStyle(const tonic::Int32List& encoded,
+                                  double letterSpacing,
+                                  double wordSpacing,
+                                  double height,
++                                 double lineHeight,
+                                  double decorationThickness,
+                                  const std::string& locale,
+                                  Dart_Handle background_objects,
+@@ -450,6 +482,14 @@ void ParagraphBuilder::pushStyle(const tonic::Int32List& encoded,
+     style.has_height_override = style.height != kTextHeightNone;
+   }
+ 
++  if (mask & kTSLineHeightMask) {
++    style.line_height = lineHeight;
++  }
++  style.ignore_cluster_letter_spacing =
++      (mask & kTSIgnoreClusterLetterSpacingMask) != 0;
++  style.use_core_text_word_break =
++      (mask & kTSUseCoreTextWordBreakMask) != 0;
++
+   if (mask & kTSLocaleMask) {
+     style.locale = locale;
+   }
+diff --git a/engine/src/flutter/lib/ui/text/paragraph_builder.h b/engine/src/flutter/lib/ui/text/paragraph_builder.h
+index 895cae1..ec2aaad 100644
+--- a/engine/src/flutter/lib/ui/text/paragraph_builder.h
++++ b/engine/src/flutter/lib/ui/text/paragraph_builder.h
+@@ -29,6 +29,7 @@ class ParagraphBuilder : public RefCountedDartWrappable<ParagraphBuilder> {
+                      const std::vector<std::string>& strutFontFamilies,
+                      double fontSize,
+                      double height,
++                     double lineHeight,
+                      const std::u16string& ellipsis,
+                      const std::string& locale);
+ 
+@@ -40,6 +41,7 @@ class ParagraphBuilder : public RefCountedDartWrappable<ParagraphBuilder> {
+                  double letterSpacing,
+                  double wordSpacing,
+                  double height,
++                 double lineHeight,
+                  double decorationThickness,
+                  const std::string& locale,
+                  Dart_Handle background_objects,
+@@ -75,6 +77,7 @@ class ParagraphBuilder : public RefCountedDartWrappable<ParagraphBuilder> {
+                             const std::vector<std::string>& strutFontFamilies,
+                             double fontSize,
+                             double height,
++                            double lineHeight,
+                             const std::u16string& ellipsis,
+                             const std::string& locale);
+ 
+diff --git a/engine/src/flutter/lib/ui/ui.dart b/engine/src/flutter/lib/ui/ui.dart
+index b370493..bebfaf6 100644
+--- a/engine/src/flutter/lib/ui/ui.dart
++++ b/engine/src/flutter/lib/ui/ui.dart
+@@ -23,6 +23,9 @@ import 'dart:nativewrappers';
+ import 'dart:typed_data';
+ 
+ part 'annotations.dart';
++part 'skyline_ext.dart';
++part 'mmtrace.dart';
++part 'application.dart';
+ part 'channel_buffers.dart';
+ part 'compositing.dart';
+ part 'geometry.dart';
+diff --git a/engine/src/flutter/lib/ui/window.dart b/engine/src/flutter/lib/ui/window.dart
+index a27906a..d673ffc 100644
+--- a/engine/src/flutter/lib/ui/window.dart
++++ b/engine/src/flutter/lib/ui/window.dart
+@@ -339,6 +339,11 @@ class FlutterView {
+   ///  * [MediaQuery.of], a simpler mechanism to access this data.
+   List<DisplayFeature> get displayFeatures => _viewConfiguration.displayFeatures;
+ 
++  /// Represents the status of the window corresponding to this view.
++  ///
++  /// The public engine always reports [WindowStatus.normal].
++  WindowStatus get windowStatus => WindowStatus.normal;
++
+   /// Updates the view's rendering on the GPU with the newly provided [Scene].
+   ///
+   /// This function must be called within the scope of the

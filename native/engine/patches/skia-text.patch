@@ -1,0 +1,245 @@
+diff --git a/modules/skparagraph/include/ParagraphStyle.h b/modules/skparagraph/include/ParagraphStyle.h
+index 98ec228..555e2ca 100644
+--- a/modules/skparagraph/include/ParagraphStyle.h
++++ b/modules/skparagraph/include/ParagraphStyle.h
+@@ -84,6 +84,7 @@ struct ParagraphStyle {
+                this->fEllipsisUtf16 == rhs.fEllipsisUtf16 &&
+                this->fTextDirection == rhs.fTextDirection && this->fTextAlign == rhs.fTextAlign &&
+                this->fDefaultTextStyle == rhs.fDefaultTextStyle &&
++               this->fBackgroundUseLineMetrics == rhs.fBackgroundUseLineMetrics &&
+                this->fReplaceTabCharacters == rhs.fReplaceTabCharacters;
+     }
+ 
+@@ -127,6 +128,15 @@ struct ParagraphStyle {
+     bool getApplyRoundingHack() const { return fApplyRoundingHack; }
+     void setApplyRoundingHack(bool value) { fApplyRoundingHack = value; }
+ 
++    // Private Skyline addition: span backgrounds and selection boxes use
++    // the full line box instead of the run's font metrics.
++    bool getBackgroundUseLineMetrics() const {
++        return fBackgroundUseLineMetrics;
++    }
++    void setBackgroundUseLineMetrics(bool value) {
++        fBackgroundUseLineMetrics = value;
++    }
++
+ private:
+     StrutStyle fStrutStyle;
+     TextStyle fDefaultTextStyle;
+@@ -139,6 +149,7 @@ private:
+     TextHeightBehavior fTextHeightBehavior;
+     bool fHintingIsOn;
+     bool fReplaceTabCharacters;
++    bool fBackgroundUseLineMetrics = false;
+     bool fApplyRoundingHack = true;
+ };
+ }  // namespace textlayout
+diff --git a/modules/skparagraph/include/TextStyle.h b/modules/skparagraph/include/TextStyle.h
+index 4bc2fb9..5003b6d 100644
+--- a/modules/skparagraph/include/TextStyle.h
++++ b/modules/skparagraph/include/TextStyle.h
+@@ -266,6 +266,18 @@ public:
+     void setHalfLeading(bool halfLeading) { fHalfLeading = halfLeading; }
+     bool getHalfLeading() const { return fHalfLeading; }
+ 
++    // Private Skyline additions.
++    void setIgnoreClusterLetterSpacing(bool value) {
++        fIgnoreClusterLetterSpacing = value;
++    }
++    bool getIgnoreClusterLetterSpacing() const {
++        return fIgnoreClusterLetterSpacing;
++    }
++    void setUseCoreTextWordBreak(bool value) {
++        fUseCoreTextWordBreak = value;
++    }
++    bool getUseCoreTextWordBreak() const { return fUseCoreTextWordBreak; }
++
+     void setLetterSpacing(SkScalar letterSpacing) { fLetterSpacing = letterSpacing; }
+     SkScalar getLetterSpacing() const { return fLetterSpacing; }
+ 
+@@ -311,6 +323,9 @@ private:
+     // true: half leading.
+     // false: scale ascent/descent with fHeight.
+     bool fHalfLeading = false;
++    // Private Skyline additions.
++    bool fIgnoreClusterLetterSpacing = false;
++    bool fUseCoreTextWordBreak = false;
+     SkString fLocale = {};
+     SkScalar fLetterSpacing = 0.0;
+     SkScalar fWordSpacing = 0.0;
+diff --git a/modules/skparagraph/src/FontCollection.cpp b/modules/skparagraph/src/FontCollection.cpp
+index 2458ab5..4421c0a 100644
+--- a/modules/skparagraph/src/FontCollection.cpp
++++ b/modules/skparagraph/src/FontCollection.cpp
+@@ -135,14 +135,23 @@ std::vector<sk_sp<SkTypeface>> FontCollection::findTypefaces(const std::vector<S
+ 
+ sk_sp<SkTypeface> FontCollection::matchTypeface(const SkString& familyName, SkFontStyle fontStyle) {
+     for (const auto& manager : this->getFontManagerOrder()) {
+-        sk_sp<SkFontStyleSet> set(manager->matchFamily(familyName.c_str()));
+-        if (!set || set->count() == 0) {
+-            continue;
++        // Skyline/Linux compatibility: ask the manager for an exact
++        // family+style match first.  FcFontMatch honours the strong family
++        // binding; the matchFamily StyleSet path sorts only by style and, in
++        // a zh_CN locale, picks one of the strong CJK fallbacks instead of the
++        // requested color emoji family.  That kept color emoji fonts from
++        // being usable as the primary TextStyle.fontFamily.
++        sk_sp<SkTypeface> direct =
++            manager->matchFamilyStyle(familyName.c_str(), fontStyle);
++        if (direct) {
++            return direct;
+         }
+-
+-        sk_sp<SkTypeface> match(set->matchStyle(fontStyle));
+-        if (match) {
+-            return match;
++        sk_sp<SkFontStyleSet> set(manager->matchFamily(familyName.c_str()));
++        if (set && set->count() > 0) {
++            sk_sp<SkTypeface> match(set->matchStyle(fontStyle));
++            if (match) {
++                return match;
++            }
+         }
+     }
+ 
+diff --git a/modules/skparagraph/src/ParagraphCache.cpp b/modules/skparagraph/src/ParagraphCache.cpp
+index f0ad958..b296820 100644
+--- a/modules/skparagraph/src/ParagraphCache.cpp
++++ b/modules/skparagraph/src/ParagraphCache.cpp
+@@ -144,6 +144,7 @@ uint32_t ParagraphCacheKey::computeHash() const {
+     hash = mix(hash, SkGoodHash()(relax(fParagraphStyle.getHeight())));
+     hash = mix(hash, SkGoodHash()(fParagraphStyle.getTextDirection()));
+     hash = mix(hash, SkGoodHash()(fParagraphStyle.getReplaceTabCharacters() ? 1 : 0));
++    hash = mix(hash, SkGoodHash()(fParagraphStyle.getBackgroundUseLineMetrics() ? 1 : 0));
+ 
+     auto& strutStyle = fParagraphStyle.getStrutStyle();
+     if (strutStyle.getStrutEnabled()) {
+@@ -196,6 +197,10 @@ bool ParagraphCacheKey::operator==(const ParagraphCacheKey& other) const {
+         return false;
+     }
+ 
++    if (fParagraphStyle.getBackgroundUseLineMetrics() != other.fParagraphStyle.getBackgroundUseLineMetrics()) {
++        return false;
++    }
++
+     for (int i = 0; i < fTextStyles.size(); ++i) {
+         auto& tsa = fTextStyles[i];
+         auto& tsb = other.fTextStyles[i];
+diff --git a/modules/skparagraph/src/TextLine.cpp b/modules/skparagraph/src/TextLine.cpp
+index fc7e6d4..53a70ba 100644
+--- a/modules/skparagraph/src/TextLine.cpp
++++ b/modules/skparagraph/src/TextLine.cpp
+@@ -401,7 +401,14 @@ void TextLine::paintBackground(ParagraphPainter* painter,
+                                const TextStyle& style,
+                                const ClipContext& context) const {
+     if (style.hasBackground()) {
+-        painter->drawRect(context.clip.makeOffset(this->offset() + SkPoint::Make(x, y)),
++        SkRect rect = context.clip;
++        if (fOwner->paragraphStyle().getBackgroundUseLineMetrics()) {
++            // Use the full line box (including strut and leading) instead
++            // of this run's font metrics.
++            rect.fTop = 0.0f;
++            rect.fBottom = this->height();
++        }
++        painter->drawRect(rect.makeOffset(this->offset() + SkPoint::Make(x, y)),
+                           style.getBackgroundPaintOrID());
+     }
+ }
+@@ -1194,6 +1201,11 @@ void TextLine::getRectsForRange(TextRange textRange0,
+             }
+ 
+             auto paragraphStyle = fOwner->paragraphStyle();
++            RectHeightStyle effectiveRectHeightStyle = rectHeightStyle;
++            if (paragraphStyle.getBackgroundUseLineMetrics()) {
++                // Selection boxes follow the line box as well.
++                effectiveRectHeightStyle = RectHeightStyle::kMax;
++            }
+ 
+             // Found a run that intersects with the text
+             auto context = this->measureTextInsideOneRun(
+@@ -1201,7 +1213,7 @@ void TextLine::getRectsForRange(TextRange textRange0,
+             SkRect clip = context.clip;
+             clip.offset(lineContext.fTextShift - context.fTextShift, 0);
+ 
+-            switch (rectHeightStyle) {
++            switch (effectiveRectHeightStyle) {
+                 case RectHeightStyle::kMax:
+                     // TODO: Change it once flutter rolls into google3
+                     //  (probably will break things if changed before)
+diff --git a/modules/skparagraph/src/TextStyle.cpp b/modules/skparagraph/src/TextStyle.cpp
+index 492f94f..dcc5cb4 100644
+--- a/modules/skparagraph/src/TextStyle.cpp
++++ b/modules/skparagraph/src/TextStyle.cpp
+@@ -23,6 +23,8 @@ TextStyle TextStyle::cloneForPlaceholder() {
+     result.fIsPlaceholder = true;
+     result.fFontFeatures = fFontFeatures;
+     result.fHalfLeading = fHalfLeading;
++    result.fIgnoreClusterLetterSpacing = fIgnoreClusterLetterSpacing;
++    result.fUseCoreTextWordBreak = fUseCoreTextWordBreak;
+     result.fBaselineShift = fBaselineShift;
+     result.fFontArguments = fFontArguments;
+     return result;
+@@ -61,6 +63,10 @@ bool TextStyle::equals(const TextStyle& other) const {
+     if (fHalfLeading != other.fHalfLeading) {
+         return false;
+     }
++    if (fIgnoreClusterLetterSpacing != other.fIgnoreClusterLetterSpacing ||
++        fUseCoreTextWordBreak != other.fUseCoreTextWordBreak) {
++        return false;
++    }
+     if (fBaselineShift != other.fBaselineShift) {
+         return false;
+     }
+@@ -111,6 +117,8 @@ bool TextStyle::equalsByFonts(const TextStyle& that) const {
+            nearlyEqual(fHeight, that.fHeight) &&
+            nearlyEqual(fBaselineShift, that.fBaselineShift) &&
+            nearlyEqual(fFontSize, that.fFontSize) &&
++           fIgnoreClusterLetterSpacing == that.fIgnoreClusterLetterSpacing &&
++           fUseCoreTextWordBreak == that.fUseCoreTextWordBreak &&
+            fLocale == that.fLocale;
+ }
+ 
+@@ -156,6 +164,8 @@ bool TextStyle::matchOneAttribute(StyleType styleType, const TextStyle& other) c
+                    fFontSize == other.fFontSize &&
+                    fHeight == other.fHeight &&
+                    fHalfLeading == other.fHalfLeading &&
++                   fIgnoreClusterLetterSpacing == other.fIgnoreClusterLetterSpacing &&
++                   fUseCoreTextWordBreak == other.fUseCoreTextWordBreak &&
+                    fBaselineShift == other.fBaselineShift &&
+                    fFontArguments == other.fFontArguments;
+         default:
+diff --git a/src/ports/SkFontMgr_fontconfig.cpp b/src/ports/SkFontMgr_fontconfig.cpp
+index 26827fd..23d92cb 100644
+--- a/src/ports/SkFontMgr_fontconfig.cpp
++++ b/src/ports/SkFontMgr_fontconfig.cpp
+@@ -183,6 +183,22 @@ enum SkWeakReturn {
+ static SkWeakReturn is_weak(FcPattern* pattern, const char object[], int id) {
+     FCLocker::AssertHeld();
+ 
++#if FC_VERSION >= 21301
++    // Fontconfig 2.13.1+ exposes the binding directly.  The legacy
++    // heuristic below misclassifies the weak fallback chains that modern
++    // fontconfig substitutes into a pattern (emoji/Noto aliases plus
++    // zh_CN's strong CJK families), so remove_weak keeps hundreds of weak
++    // families as "strong".
++    FcValue direct_value;
++    FcValueBinding direct_binding;
++    if (FcPatternGetWithBinding(pattern, object, id, &direct_value,
++                                &direct_binding) != FcResultMatch) {
++        return kNoId_WeakReturn;
++    }
++    return direct_binding == FcValueBindingWeak ? kIsWeak_WeakReturn
++                                                : kIsStrong_WeakReturn;
++#else
++
+     FcResult result;
+ 
+     // Create a copy of the pattern with only the value 'pattern'['object'['id']] in it.
+@@ -242,6 +258,7 @@ static SkWeakReturn is_weak(FcPattern* pattern, const char object[], int id) {
+     FcPatternGetLangSet(match, FC_LANG, 0, &matchLangSet);
+     return FcLangEqual == FcLangSetHasLang(matchLangSet, (const FcChar8*)"matchlang")
+                         ? kIsWeak_WeakReturn : kIsStrong_WeakReturn;
++#endif
+ }
+ 
+ /** Removes weak elements from either FC_FAMILY or FC_POSTSCRIPT_NAME objects in the property.

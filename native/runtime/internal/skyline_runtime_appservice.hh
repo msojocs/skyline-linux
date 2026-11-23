@@ -3,6 +3,19 @@
 #include "skyline_runtime_abi.hh"
 #include "skyline_runtime_ffi.hh"
 
+// Page-route configuration passed to CreatePageRoute.  Used by the synthetic
+// demo pages (global scope) and the appservice route materializer.
+struct SkylinePageConfig {
+  uint32_t backgroundColorContent;
+  void* pageUrl;
+};
+
+// Live DevTools bridge state (defined in appservice_model.cc).
+extern std::mutex g_live_ops_mutex;
+extern std::string g_pending_live_ops;
+extern bool g_live_ready;
+extern fml::RefPtr<fml::TaskRunner> g_live_ui_runner;
+
 namespace appservice {
 
 inline constexpr float kInf = 1e30f;
@@ -490,6 +503,12 @@ struct NodeMetric {
   float h = 0.0f;
 };
 
+// Measured box size returned by the measurement pass.
+struct SizeF {
+  float w = 0.0f;
+  float h = 0.0f;
+};
+
 // Shared process-global state.  Definitions live in appservice_model.cc; a
 // module owns state that only it uses instead of listing it here.
 extern std::unordered_map<intptr_t, AppNode*> g_image_nodes;
@@ -524,5 +543,23 @@ extern fml::RefPtr<fml::TaskRunner> g_ui_task_runner;
 extern std::unique_ptr<rapidjson::Document> g_ops_document;
 extern int g_next_rule_order;
 extern intptr_t g_next_address;
+
+
+// -- shared state helpers (defined in appservice_model.cc) -------------------
+bool DeferFixedChild(AppNode* child);
+bool EndsWith(const std::string& value, const std::string& suffix);
+bool StartsWith(const std::string& value, const std::string& prefix);
+float ResolvePercentExtent(float available, float percent);
+std::string JsonEscapeString(const std::string& value);
+std::string LowerAscii(const std::string& value);
+std::string TrimAscii(const std::string& value);
+std::unordered_map<std::string, sk_sp<flutter::DlImage>>& ImageCache();
+std::vector<sk_sp<flutter::DlImage>>& RetiredImages();
+std::vector<std::string> SplitChar(const std::string& value, char separator);
+std::vector<std::string> SplitWhitespace(const std::string& value);
+void CacheImage(const std::string& key, const sk_sp<flutter::DlImage>& image);
+void EmitJsonEvent(const std::string& json);
+void PublishNodeRects();
+void ResetDeferredFixedNodes();
 
 }  // namespace appservice

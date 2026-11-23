@@ -1,0 +1,17 @@
+diff --git a/sdk/lib/io/platform.dart b/sdk/lib/io/platform.dart
+index 6e36cacb..be9d02bb 100644
+--- a/sdk/lib/io/platform.dart
++++ b/sdk/lib/io/platform.dart
+@@ -166,6 +166,12 @@ abstract final class Platform {
+   @pragma("vm:platform-const")
+   static final bool isFuchsia = (operatingSystem == "fuchsia");
+ 
++  /// Check if the current platform is ohos.
++  ///
++  /// Private Flutter engine / Skyline addition; the public Dart SDK does not
++  /// define this operating system.
++  static final bool isOhos = (operatingSystem == "ohos");
++
+   /// The environment for this process as a map from string key to string value.
+   ///
+   /// The map is unmodifiable,

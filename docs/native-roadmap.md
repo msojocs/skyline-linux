@@ -142,8 +142,9 @@
   `package:sample/devtools.dart`。产物写入 `native/engine/work/`，不提交。
 - **dart:ui 兼容层**：从官方 `isolate_snapshot_data` 恢复私有
   `application.dart` / `mmtrace.dart` 及平台补丁，落在
-  `native/engine/dart_ui_compat/`；`patch-dart-ui.sh` 把新 part 与增量补丁
-  （`apply.py`）应用到固定引擎，重建 `platform_strong.dill`。
+  `native/engine/dart_ui_compat/`；`patch-dart-ui.sh` 把新 part 与
+  `native/engine/patches/*.patch`（unified diff，按引擎/ skia / dart 仓库分别
+  `git apply`）应用到固定引擎，重建 `platform_strong.dill`。
   覆盖 `Application`、`WindowStatus`、`createNativeParagraph`、`warmUpFont`、
   `PlatformDispatcher` 的刷新率/GC/阈值/慢栈、`FramePhase.vsyncTarget`、
   `TextStyle.lineHeight` 等；详见
@@ -155,8 +156,8 @@
   `apps/dart-ui-compat-smoke` + `npm run test:ui-compat` 验证
   `Application.put/find/get`、`WindowStatus`、`FramePhase.vsyncTarget` 等运行时行为，
   并输出一帧 64×48 纯绿 RGBA。
-- **stub Linux 运行时（2026-11-19）**：`native/runtime/skyline_runtime_stub.cc`
-  构建 `libskyline.so`，导出官方清单中的全部 73 个符号，实现
+- **stub Linux 运行时（2026-11-19）**：`native/runtime/`（入口
+  `skyline_runtime_stub.cc` + `appservice_*` 回放模块）构建 `libskyline.so`，导出官方清单中的全部 73 个符号，实现
   `InitDartAPIDLSkyline`、`AllocateFfiTable`/`Register`、
   `ShareRuntimeFromRuntimeShell`、`CreateWindow` 等引导路径。宿主新增
   `--entrypoint-arg`/`--no-shutdown`；`npm run test:appservice` 已跑通

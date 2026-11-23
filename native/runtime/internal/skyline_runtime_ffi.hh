@@ -488,29 +488,29 @@ using AccessibilityBoldTextEnabledFn = uint8_t (*)();
 // embedder to apply accessibility *features*, kind 1 enables the semantics
 // tree (the two are separate engine APIs).
 using SkylineAccessibilitySink = void (*)(int32_t kind, int32_t value);
-std::atomic<SkylineAccessibilitySink> g_accessibility_sink{nullptr};
-std::atomic<int32_t> g_accessibility_enabled{0};
-std::atomic<int32_t> g_accessibility_bold_text{0};
+inline std::atomic<SkylineAccessibilitySink> g_accessibility_sink{nullptr};
+inline std::atomic<int32_t> g_accessibility_enabled{0};
+inline std::atomic<int32_t> g_accessibility_bold_text{0};
 // DevTools shell HTTP bridge: the addon proxies `setHttpRequestCallback`
 // (window.fetch in the pageframe renderer) so network requests show up in the
 // DevTools Network panel instead of an in-engine dart:io socket.
 using SkylineHttpRequestSink = void (*)(uint32_t request_id, const char* url);
 using SkylineHasHttpRequestCallbackFn = int32_t (*)();
-std::atomic<SkylineHttpRequestSink> g_shell_http_request{nullptr};
-std::atomic<SkylineHasHttpRequestCallbackFn> g_shell_http_available{nullptr};
+inline std::atomic<SkylineHttpRequestSink> g_shell_http_request{nullptr};
+inline std::atomic<SkylineHasHttpRequestCallbackFn> g_shell_http_available{nullptr};
 
-bool ShellHttpAvailable() {
+inline bool ShellHttpAvailable() {
   auto* has = g_shell_http_available.load();
   return has != nullptr && has() != 0;
 }
 
-void RequestShellHttp(uint32_t request_id, const std::string& url) {
+inline void RequestShellHttp(uint32_t request_id, const std::string& url) {
   auto sink = g_shell_http_request.load();
   if (sink != nullptr) sink(request_id, url.c_str());
 }
 // SnapshotTakeSnapshot is synchronous: SceneToImage runs inside the call, so
 // this carries the DevTools request id into the snapshot callback.
-std::atomic<int32_t> g_pending_node_snapshot_request{0};
+inline std::atomic<int32_t> g_pending_node_snapshot_request{0};
 using ConnectorUpdateChildrenFn = void (*)(Dart_Handle connector,
                                            uint8_t stackingPaint,
                                            Dart_Handle children);
@@ -600,6 +600,10 @@ using CreatePageRouteFn = void (*)(
     void* config);
 
 inline constexpr uint32_t kCreatePageRouteHash = 662439267u;
+// Direct-render image invalidation callbacks (used by the image and update
+// modules).
+inline constexpr uint32_t kBackgroundImageMarkNeedPaintHash = 741124659u;
+inline constexpr uint32_t kImageMarkNeedPaintHash = 753875657u;
 inline constexpr uint32_t kNewDecoratedBoxHash = 548213892u;
 inline constexpr uint32_t kNewYGNodeHash = 644570152u;
 inline constexpr uint32_t kNewYGConnectorHash = 517238689u;

@@ -5,7 +5,7 @@
 // `tools/record-skyline-ops.js` runs the official Skyline renderer bundle
 // (exparser + skyline-js) in Node's V8 and captures the node-operation stream
 // that the bundle would send to `skyline.node`'s native bindings.  The embedded
-// runtime (native/runtime/skyline_runtime_stub.cc) replays that stream through
+// runtime (native/runtime/appservice_*.cc) replays that stream through
 // the real `package:skyline` callbacks, replacing the hand-written widget
 // descriptors.
 //

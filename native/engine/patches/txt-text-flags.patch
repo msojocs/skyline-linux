@@ -1,0 +1,111 @@
+diff --git a/engine/src/flutter/txt/src/skia/paragraph_builder_skia.cc b/engine/src/flutter/txt/src/skia/paragraph_builder_skia.cc
+index c7c8b15..d3254ac 100644
+--- a/engine/src/flutter/txt/src/skia/paragraph_builder_skia.cc
++++ b/engine/src/flutter/txt/src/skia/paragraph_builder_skia.cc
+@@ -102,8 +102,18 @@ skt::ParagraphStyle ParagraphBuilderSkia::TxtToSkia(const ParagraphStyle& txt) {
+ 
+   text_style.setFontStyle(MakeSkFontStyle(txt.font_weight, txt.font_style));
+   text_style.setFontSize(SkDoubleToScalar(txt.font_size));
+-  text_style.setHeight(SkDoubleToScalar(txt.height));
+-  text_style.setHeightOverride(txt.has_height_override);
++  // Skyline's lineHeight is an absolute px value; SkParagraph consumes a
++  // multiplier of the font size.  Prefer it when both are present.
++  if (txt.line_height > 0 && txt.font_size > 0) {
++    text_style.setHeight(
++        SkDoubleToScalar(txt.line_height / txt.font_size));
++    text_style.setHeightOverride(true);
++  } else {
++    text_style.setHeight(SkDoubleToScalar(txt.height));
++    text_style.setHeightOverride(txt.has_height_override);
++  }
++  text_style.setIgnoreClusterLetterSpacing(
++      txt.ignore_cluster_letter_spacing);
+   text_style.setFontFamilies({SkString(txt.font_family.c_str())});
+   text_style.setLocale(SkString(txt.locale.c_str()));
+   skia.setTextStyle(text_style);
+@@ -132,6 +142,7 @@ skt::ParagraphStyle ParagraphBuilderSkia::TxtToSkia(const ParagraphStyle& txt) {
+   skia.setEllipsis(txt.ellipsis);
+   skia.setTextHeightBehavior(
+       static_cast<skt::TextHeightBehavior>(txt.text_height_behavior));
++  skia.setBackgroundUseLineMetrics(txt.background_use_line_metrics);
+ 
+   skia.turnHintingOff();
+   skia.setReplaceTabCharacters(true);
+@@ -162,9 +173,16 @@ skt::TextStyle ParagraphBuilderSkia::TxtToSkia(const TextStyle& txt) {
+   skia.setFontSize(SkDoubleToScalar(txt.font_size));
+   skia.setLetterSpacing(SkDoubleToScalar(txt.letter_spacing));
+   skia.setWordSpacing(SkDoubleToScalar(txt.word_spacing));
+-  skia.setHeight(SkDoubleToScalar(txt.height));
+-  skia.setHeightOverride(txt.has_height_override);
++  if (txt.line_height > 0 && txt.font_size > 0) {
++    skia.setHeight(SkDoubleToScalar(txt.line_height / txt.font_size));
++    skia.setHeightOverride(true);
++  } else {
++    skia.setHeight(SkDoubleToScalar(txt.height));
++    skia.setHeightOverride(txt.has_height_override);
++  }
+   skia.setHalfLeading(txt.half_leading);
++  skia.setIgnoreClusterLetterSpacing(txt.ignore_cluster_letter_spacing);
++  skia.setUseCoreTextWordBreak(txt.use_core_text_word_break);
+ 
+   skia.setLocale(SkString(txt.locale.c_str()));
+   if (txt.background.has_value()) {
+diff --git a/engine/src/flutter/txt/src/txt/paragraph_style.cc b/engine/src/flutter/txt/src/txt/paragraph_style.cc
+index 54fc7a3..2a933f1 100644
+--- a/engine/src/flutter/txt/src/txt/paragraph_style.cc
++++ b/engine/src/flutter/txt/src/txt/paragraph_style.cc
+@@ -19,6 +19,8 @@ TextStyle ParagraphStyle::GetTextStyle() const {
+   result.locale = locale;
+   result.height = height;
+   result.has_height_override = has_height_override;
++  result.line_height = line_height;
++  result.ignore_cluster_letter_spacing = ignore_cluster_letter_spacing;
+   return result;
+ }
+ 
+diff --git a/engine/src/flutter/txt/src/txt/paragraph_style.h b/engine/src/flutter/txt/src/txt/paragraph_style.h
+index 4f319a5..761791f 100644
+--- a/engine/src/flutter/txt/src/txt/paragraph_style.h
++++ b/engine/src/flutter/txt/src/txt/paragraph_style.h
+@@ -63,6 +63,10 @@ class ParagraphStyle {
+   double font_size = 14;
+   double height = 1;
+   bool has_height_override = false;
++  // Private Skyline additions.
++  double line_height = 0;
++  bool ignore_cluster_letter_spacing = false;
++  bool background_use_line_metrics = false;
+   size_t text_height_behavior = TextHeightBehavior::kAll;
+ 
+   // Strut properties. strut_enabled must be set to true for the rest of the
+diff --git a/engine/src/flutter/txt/src/txt/text_style.cc b/engine/src/flutter/txt/src/txt/text_style.cc
+index 1ca8299..2009a14 100644
+--- a/engine/src/flutter/txt/src/txt/text_style.cc
++++ b/engine/src/flutter/txt/src/txt/text_style.cc
+@@ -51,6 +51,11 @@ bool TextStyle::equals(const TextStyle& other) const {
+   if (half_leading != other.half_leading) {
+     return false;
+   }
++  if (line_height != other.line_height ||
++      ignore_cluster_letter_spacing != other.ignore_cluster_letter_spacing ||
++      use_core_text_word_break != other.use_core_text_word_break) {
++    return false;
++  }
+   if (locale != other.locale) {
+     return false;
+   }
+diff --git a/engine/src/flutter/txt/src/txt/text_style.h b/engine/src/flutter/txt/src/txt/text_style.h
+index 285d13e..e72f1ce 100644
+--- a/engine/src/flutter/txt/src/txt/text_style.h
++++ b/engine/src/flutter/txt/src/txt/text_style.h
+@@ -43,6 +43,10 @@ class TextStyle {
+   double word_spacing = 0.0;
+   double height = 1.0;
+   bool has_height_override = false;
++  // Private Skyline additions.
++  double line_height = 0.0;
++  bool ignore_cluster_letter_spacing = false;
++  bool use_core_text_word_break = false;
+   std::string locale;
+   std::optional<flutter::DlPaint> background;
+   std::optional<flutter::DlPaint> foreground;
