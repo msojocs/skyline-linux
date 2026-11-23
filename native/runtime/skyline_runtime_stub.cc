@@ -9924,7 +9924,10 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     Dart_Handle swiper = newSwiper(
         node->address, 0 /* layoutType */, 0 /* transformerType */,
         0 /* indicatorType */, AttrBool(node, "indicatorDots", false) ? 1 : 0,
-        0.0f, 0.0f, -1.0, -1.0, 3.0f, 6.0f, 3.0f, 6.0f, 6.0f, dot_color,
+        0.0f, 0.0f,
+        // Unset alignment: SkylineSwiper only accepts [-1, 1]; NaN keeps its
+        // default (bottom-centre for horizontal, right-centre for vertical).
+        std::nan(""), std::nan(""), 3.0f, 6.0f, 3.0f, 6.0f, 6.0f, dot_color,
         active_color, vertical ? 1 : 0, vertical ? 1 : 3,
         AttrBool(node, "circular", false) ? 1 : 0,
         AttrBool(node, "autoplay", false) ? 1 : 0,
