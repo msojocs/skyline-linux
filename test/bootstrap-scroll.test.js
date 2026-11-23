@@ -870,3 +870,45 @@ test('bootstrap: native-view gesture handlers attach through the proxy API', () 
   SkylineGlobal.gestureHandlerModule.dropGestureHandler(11);
   assert.equal(sandbox.__skylineDebug.gestureHandlers.has(11), false);
 });
+
+test('bootstrap: timing-style worklet animations run onStart/onFrame', () => {
+  // `wx.worklet.timing()` returns a factory; assigning it to a shared value
+  // must call `onStart(animation, startValue, now, previous)` and then
+  // `onFrame(animation, now)` each tick.  The old zero-argument calls left
+  // `startTime` undefined, so progress became NaN and the value jumped
+  // straight to the target (half-screen's open/close sheet never slid).
+  const { sandbox } = loadBootstrap();
+  const M = sandbox.SkylineGlobal.ReanimatedModule;
+  const value = M.makeMutable(100);
+  const seen = {};
+  const frames = [];
+  const animation = function () {
+    return {
+      type: 'timing',
+      current: 0,
+      onStart(descriptor, start, now, previous) {
+        seen.type = descriptor && descriptor.type;
+        seen.start = start;
+        seen.now = typeof now;
+        seen.previous = previous;
+        descriptor.startValue = start;
+        descriptor.current = start;
+      },
+      onFrame(descriptor, now) {
+        frames.push([descriptor.startValue, typeof now]);
+        descriptor.current = descriptor.startValue + frames.length;
+        return frames.length >= 3;
+      },
+    };
+  };
+  animation.__worklet = true;
+  value.value = animation;
+  assert.equal(seen.type, 'timing', 'onStart receives its descriptor');
+  assert.equal(seen.start, 100, 'onStart receives the current shared value');
+  assert.equal(seen.now, 'number', 'onStart receives a timestamp');
+  assert.equal(seen.previous, null, 'no previous animation on the first run');
+  assert.equal(frames.length, 3, 'onFrame runs until it reports finished');
+  assert.deepEqual(frames[0], [100, 'number'],
+    'onFrame receives the descriptor and a timestamp');
+  assert.equal(value.value, 103, 'the shared value follows animation.current');
+});

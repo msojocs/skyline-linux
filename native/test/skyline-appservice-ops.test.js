@@ -2263,6 +2263,66 @@ test('appservice ops: published grid rects follow the scroll offset', {
   }
 });
 
+test('appservice ops: animated transforms republish hit-test rects', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // `applyAnimatedStyle` translates the half-screen sheet with
+  // `transform: translateY(...)` (a paint-only targeted update, no rebuild).
+  // The published rect snapshot must follow it, otherwise the sheet's hit
+  // area stays at its closed position and taps inside the open sheet (the
+  // close button, the comment list) all miss.
+  const ops = [
+    { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+    { op: 'setStyle', id: 2, value: 'width:320px;height:240px;background:#FFFFFF;' },
+    { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+    { op: 'setStyle', id: 3,
+      value: 'position:absolute;left:0;top:0;width:320px;height:240px;' +
+             'background:#FF0000;transform:translateY(100%);' },
+    { op: 'appendChild', id: 2, child: 3 },
+    { op: 'attach', root: 2 },
+    { op: 'startRender' },
+  ];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-anim-rect-'));
+  const fixture = path.join(dir, 'anim-rect.ops.json');
+  fs.writeFileSync(fixture, JSON.stringify({
+    ops,
+    updates: [
+      { afterMs: 300, ops: [
+        { op: 'setStyle', id: 3,
+          value: 'position:absolute;left:0;top:0;width:320px;height:240px;' +
+                 'background:#FF0000;transform:translateY(0px);' },
+      ] },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(fixture, {
+      timeoutMs: 1200,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    const tops = [...logs.matchAll(
+      /\[ops-debug\] rect #3 left=([-\d.]+) top=([-\d.]+)/g,
+    )].map((match) => Number(match[2]));
+    assert.ok(tops.length >= 2,
+      `expected rect publishes before and after the transform update:\n${logs}`);
+    assert.equal(tops[0], 240,
+      'the closed sheet is published at translateY(100%)');
+    assert.equal(tops[tops.length - 1], 0,
+      'the paint-only transform update republishes the open position');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('appservice ops: image nodes paint through NewDirectRenderWidget', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

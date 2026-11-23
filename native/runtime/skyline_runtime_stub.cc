@@ -12974,6 +12974,12 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
   std::vector<Dart_Handle> yoga_nodes;
   bool rebuild = false;
   bool layout_needed = false;
+  // Paint-only style updates can still move the published box: animated
+  // transforms (half-screen's sheet slides with `translateY`) change the
+  // appservice hit-test geometry.  Republish the rect snapshot even when no
+  // layout pass is required, otherwise the sheet's hit area stays at its
+  // closed position and taps/scroll inside it miss.
+  bool rects_dirty = false;
 
   std::vector<AppNode*> pending;
   pending.push_back(root);
@@ -13182,6 +13188,9 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
           !SameFloatOrNan(before.transform_origin_y_percent,
                           after.transform_origin_y_percent) ||
           !SameFloatOrNan(before.transform_origin_z, after.transform_origin_z);
+      if (transform_changed) {
+        rects_dirty = true;
+      }
       if (transform_changed && node->yoga_node_p != nullptr &&
           g_page != nullptr && g_page->holder != nullptr) {
         auto* setup = reinterpret_cast<YGNodeSetupTransformFn>(FindCallback(
@@ -13218,17 +13227,20 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
           }
         }
       }
-      if (before.pointer_events_none != after.pointer_events_none &&
-          node->yoga_node_p != nullptr && g_page != nullptr &&
-          g_page->holder != nullptr) {
-        auto* update = reinterpret_cast<YGNodeUpdatePointerEventsFn>(
-            FindCallback(g_page->holder->ffi_table,
-                         kYGNodeUpdatePointerEventsHash));
-        if (update != nullptr) {
-          update(Dart_HandleFromPersistent(node->yoga_node_p),
-                 after.pointer_events_none ? 1 : 0);
+      if (before.pointer_events_none != after.pointer_events_none) {
+        rects_dirty = true;
+        if (node->yoga_node_p != nullptr && g_page != nullptr &&
+            g_page->holder != nullptr) {
+          auto* update = reinterpret_cast<YGNodeUpdatePointerEventsFn>(
+              FindCallback(g_page->holder->ffi_table,
+                           kYGNodeUpdatePointerEventsHash));
+          if (update != nullptr) {
+            update(Dart_HandleFromPersistent(node->yoga_node_p),
+                   after.pointer_events_none ? 1 : 0);
+          }
         }
       }
+      if (before.z_index != after.z_index) rects_dirty = true;
     }
     if (node->yoga_node_p != nullptr) {
       yoga_nodes.push_back(Dart_HandleFromPersistent(node->yoga_node_p));
@@ -13240,8 +13252,13 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
   }
   if (rebuild) return false;
   // Paint-only batch (colour / highlight / opacity): the layout snapshot is
-  // still valid, so skip the page-wide measure + layout pass.
-  if (!layout_needed) return true;
+  // still valid, so skip the page-wide measure + layout pass.  An animated
+  // transform/pointer-events/z-index change still alters the published rects
+  // the appservice hit test reads, so refresh the snapshot in that case.
+  if (!layout_needed) {
+    if (rects_dirty) PublishNodeRects();
+    return true;
+  }
 
   const float viewport_w =
       g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;

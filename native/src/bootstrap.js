@@ -1298,15 +1298,27 @@
       }
     }
     function startAnimation(descriptor) {
+      const previousAnimation = animation;
       animation = descriptor;
+      const startValue = current;
+      const startTime = Date.now();
+      // Reanimated's animation contract: `onStart(animation, value, now,
+      // previousAnimation)` seeds `startValue`/`startTime`, then
+      // `onFrame(animation, now)` advances `animation.current`.  Calling
+      // either with the wrong arity leaves a `timing()` with NaN progress,
+      // which collapses the animation into an instant jump to the target
+      // (half-screen's open/close sheet never slid).
       if (typeof descriptor.onStart === 'function') {
-        try { descriptor.onStart(); } catch (_error) {}
+        try {
+          descriptor.onStart(descriptor, startValue, startTime,
+                             previousAnimation || null);
+        } catch (_error) {}
       }
       const tick = () => {
         if (animation !== descriptor) return;
         let finished = false;
         try {
-          finished = !!descriptor.onFrame(Date.now());
+          finished = !!descriptor.onFrame(descriptor, Date.now());
         } catch (_error) {
           finished = true;
         }
