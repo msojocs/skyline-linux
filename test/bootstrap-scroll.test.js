@@ -513,6 +513,84 @@ test('bootstrap: gesture handlers dispatch drag worklets for custom routes', () 
   assert.equal(events.length, dropped, 'dropped handlers stop receiving events');
 });
 
+test('bootstrap: swiper drags do not bubble to an outer pan gesture handler', () => {
+  const { sandbox } = loadBootstrap();
+  const fullPage = {
+    left: 0, top: 0, right: 390, bottom: 844, width: 390, height: 844,
+    zIndex: 0, pointerEvents: 0,
+  };
+  const rects = new Map();
+  sandbox.__skylineNative.getNodeRect = (windowId, viewTag) =>
+    rects.get(viewTag) || fullPage;
+
+  const SkylineGlobal = sandbox.SkylineGlobal;
+  const context = new SkylineGlobal.PageContext(4, 4);
+  // card_transition detail: <pan-gesture-handler><view>...<swiper><swiper-item>
+  // <image/></swiper-item></swiper>...text...</view></pan-gesture-handler>
+  const wrapper = context.createElement('empty', 'view');
+  const swiper = context.createElement('swiper', 'swiper');
+  const item = context.createElement('swiper-item', 'swiper-item');
+  const image = context.createElement('image', 'image');
+  item.appendChild(image);
+  swiper.appendChild(item);
+  wrapper.appendChild(swiper);
+  context.attach(wrapper);
+  const swiperRect = {
+    left: 0, top: 0, right: 390, bottom: 520, width: 390, height: 520,
+    zIndex: 0, pointerEvents: 0,
+  };
+  for (const node of [swiper, item, image]) rects.set(node.viewTag, swiperRect);
+  rects.set(wrapper.viewTag, fullPage);
+
+  const events = [];
+  SkylineGlobal.ReanimatedModule.registerEventHandler(
+    'onGestureHandlerEvent-9', (event) => events.push(event));
+  SkylineGlobal.GestureHandlerModule.attachGestureHandler(9, 3, {}, wrapper);
+  const shell = new sandbox.SkylineShell();
+  const states = () => events.map((event) => event.state);
+  const rightDrag = (x0, y0) => {
+    shell.dispatchTouchStartEvent(4, x0, y0);
+    shell.dispatchTouchMoveEvent(4, x0 + 30, y0 + 2);
+    shell.dispatchTouchMoveEvent(4, x0 + 190, y0 + 4);
+    shell.dispatchTouchEndEvent(4, x0 + 310, y0 + 4);
+  };
+
+  // Horizontal swipe on the slideshow: the swiper pages, the outer pan handler
+  // (custom-route back) must not start.  Only the POSSIBLE state is emitted.
+  rightDrag(10, 300);
+  assert.deepEqual(states(), [0],
+    'swiper swipe must not reach the route-back worklet');
+
+  // A perpendicular drag over the swiper still bubbles (page scroll / pan).
+  events.length = 0;
+  shell.dispatchTouchStartEvent(4, 200, 300);
+  shell.dispatchTouchMoveEvent(4, 202, 330);
+  shell.dispatchTouchMoveEvent(4, 205, 500);
+  shell.dispatchTouchEndEvent(4, 205, 640);
+  assert.deepEqual(states(), [0, 1, 2, 2, 3],
+    'vertical drags over a horizontal swiper still bubble');
+
+  // A horizontal drag outside the swiper keeps driving the route back gesture.
+  events.length = 0;
+  rightDrag(10, 700);
+  assert.deepEqual(states(), [0, 1, 2, 2, 3],
+    'drag outside the swiper must still reach the pan worklet');
+
+  // A vertical swiper consumes vertical drags, not horizontal ones.
+  swiper.attrs.vertical = '1';
+  events.length = 0;
+  rightDrag(10, 300);
+  assert.deepEqual(states(), [0, 1, 2, 2, 3],
+    'horizontal drags over a vertical swiper still bubble');
+  events.length = 0;
+  shell.dispatchTouchStartEvent(4, 200, 300);
+  shell.dispatchTouchMoveEvent(4, 202, 330);
+  shell.dispatchTouchMoveEvent(4, 205, 500);
+  shell.dispatchTouchEndEvent(4, 205, 640);
+  assert.deepEqual(states(), [0],
+    'vertical drags on a vertical swiper are consumed by the swiper');
+});
+
 test('bootstrap: shared values drive timing animations to completion', () => {
   const { sandbox } = loadBootstrap();
   const mutable = sandbox.SkylineGlobal.ReanimatedModule.makeMutable(1);

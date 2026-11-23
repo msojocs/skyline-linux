@@ -799,18 +799,24 @@
   const GESTURE_STATE_CANCELLED = 4;
   const GESTURE_SLOP = 6;
 
-  function gestureHandlerAt(windowId, x, y) {
+  function gestureHitElement(windowId, x, y) {
     const root = attachedRoots.get(windowId);
-    let hit = null;
     try {
-      hit = root ? hitTestElement(windowId, root, x, y) : null;
-    } catch (_error) {}
+      return root ? hitTestElement(windowId, root, x, y) : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function gestureHandlerAt(windowId, x, y) {
+    const hit = gestureHitElement(windowId, x, y);
     for (let node = hit; node; node = node.parent) {
       const entry = gestureHandlersByNode.get(node.viewTag);
       if (entry) return entry;
     }
     // Zero-area wrappers (auto-sized absolute containers) are not hit, so fall
     // back to the registered handler boxes and prefer the current page.
+    const root = attachedRoots.get(windowId);
     let best = null;
     let bestArea = Infinity;
     for (const entry of gestureHandlers.values()) {
@@ -829,6 +835,34 @@
       if (area < bestArea) { best = entry; bestArea = area; }
     }
     return best;
+  }
+
+  // A drag that starts inside a native swiper belongs to the swiper's own
+  // paging recognizer.  When the gesture handler is registered on an ancestor
+  // (card-transition wraps the whole page in a `<pan-gesture-handler>`), the
+  // swiper wins the negotiation for drags along its paging axis; otherwise the
+  // custom-route back animation also runs while the slideshow pages.  Handlers
+  // registered inside a swiper keep receiving their events.
+  function gestureSwiperAxis(windowId, x, y, entry) {
+    if (!entry || !entry.node) return null;
+    let swiper = null;
+    for (let node = gestureHitElement(windowId, x, y); node;
+         node = node.parent) {
+      if (node.name === 'swiper' || node.tag === 'swiper') {
+        swiper = node;
+        break;
+      }
+    }
+    if (!swiper) return null;
+    let wrapsSwiper = false;
+    for (let node = swiper; node; node = node.parent) {
+      if (node === entry.node) { wrapsSwiper = true; break; }
+    }
+    if (!wrapsSwiper) return null;
+    const attrs = swiper.attrs || {};
+    const vertical = attrs.vertical === '1' || attrs.vertical === 'true' ||
+      attrs.vertical === true;
+    return vertical ? 'vertical' : 'horizontal';
   }
 
   function gesturePayload(entry, state, x, y, deltaX, deltaY, vx, vy) {
@@ -914,6 +948,7 @@
     entry.moved = false;
     entry.active = false;
     entry.cancelled = false;
+    entry.swiperAxis = gestureSwiperAxis(windowId, x, y, entry);
     emitGesture(entry, GESTURE_STATE_POSSIBLE, x, y, 0, 0, 0, 0);
     if (entry.gestureType === GESTURE_LONG_PRESS) {
       longPressTimer = setTimeout(() => {
@@ -950,6 +985,16 @@
           Math.abs(totalY) <= Math.abs(totalX)) return;
       if (entry.gestureType === GESTURE_HORIZONTAL_DRAG &&
           Math.abs(totalX) <= Math.abs(totalY)) return;
+      // The swiper claims drags along its paging axis; do not start an outer
+      // pan/back gesture for them.  A perpendicular drag still bubbles.
+      if (entry.swiperAxis) {
+        const horizontalDrag = Math.abs(totalX) >= Math.abs(totalY);
+        if ((entry.swiperAxis === 'horizontal') === horizontalDrag) {
+          entry.cancelled = true;
+          return;
+        }
+        entry.swiperAxis = null;
+      }
       gestureCancelLongPress();
       if (!gestureShouldRespond(entry, x, y, totalX, totalY)) return;
       const accept = gestureWorklet('shouldAcceptGesture', entry);
@@ -973,6 +1018,7 @@
     gestureCancelLongPress();
     if (!entry) return;
     activeGesture = null;
+    entry.swiperAxis = null;
     if (entry.gestureType === GESTURE_TAP ||
         entry.gestureType === GESTURE_DOUBLE_TAP) {
       if (!entry.moved && !cancelled) {
@@ -1025,6 +1071,7 @@
           startY: 0,
           lastX: 0,
           lastY: 0,
+          swiperAxis: null,
         };
         gestureHandlers.set(tag, entry);
         if (hostNode && hostNode.viewTag) {
