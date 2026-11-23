@@ -785,3 +785,65 @@ test('bootstrap: derived getter recomputes from its dependencies', () => {
   assert.equal(out.value, 20);
   assert.ok(notified >= 1, 'derived notifies its listeners');
 });
+
+test('bootstrap: share-element hero frames reach the onFrame worklet', () => {
+  // Native `HandleHeroOnFrame` forwards the begin/end/current rects and the
+  // transition progress; the builtin share-element registered its
+  // `worklet:onframe` handler as `onFrame-<viewTag>`.
+  const { sandbox, jsonSink } = loadBootstrap();
+  const events = [];
+  sandbox.SkylineGlobal.ReanimatedModule.registerEventHandler(
+    'onFrame-39', (event) => events.push(event));
+  jsonSink.value(JSON.stringify({
+    type: 'heroFrame',
+    hash: 'onFrame-39',
+    direction: 1,
+    progress: 0.25,
+    begin: { left: 0, top: 88, right: 390, bottom: 88 },
+    end: { left: 4, top: 91, right: 193, bottom: 423 },
+    current: { left: 1, top: 88, right: 340, bottom: 170 },
+  }));
+  assert.equal(events.length, 1, 'frame callback invoked');
+  assert.equal(events[0].direction, 1, 'pop direction');
+  assert.equal(events[0].progress, 0.25);
+  assert.equal(events[0].begin.width, 390);
+  assert.equal(events[0].end.width, 189);
+  assert.equal(events[0].current.left, 1);
+  assert.equal(sandbox.__skylineDebug.heroFrameEvents.length, 1);
+});
+
+test('bootstrap: share-element props are backfilled from component data', () => {
+  // glass-easel runs the builtin component's property observers before its
+  // backend element exists, so `transition-on-gesture`/`rect-tween-type`/
+  // `shuttle-on-*` never reach `setAttributes`.  The flush backfill resends
+  // the resolved values from the component data so NewHero gets them.
+  const { sandbox, appliedOps } = loadBootstrap();
+  const SkylineGlobal = sandbox.SkylineGlobal;
+  const context = new SkylineGlobal.PageContext(4, 4);
+  const element = context.createElement('share-element', 'share-element');
+  element.__wxElement = {
+    data: {
+      key: 'se-key0',
+      transitionOnGesture: true,
+      rectTweenType: 'cubic-bezier(0.4, 0.0, 0.2, 1.0)',
+      shuttleOnPush: 'from',
+      shuttleOnPop: 'to',
+    },
+  };
+  context.flush();
+  assert.ok(appliedOps.length > 0, 'flush applies the hero attrs');
+  const payload = JSON.parse(appliedOps[appliedOps.length - 1].json).ops;
+  const attrs = payload.find((op) => op.op === 'setAttributes');
+  assert.ok(attrs, 'setAttributes op emitted');
+  assert.deepEqual(attrs.attrs, {
+    tag: 'se-key0',
+    transitionOnGesture: true,
+    rectTweenType: 'cubic-bezier(0.4, 0.0, 0.2, 1.0)',
+    shuttleOnPush: 'from',
+    shuttleOnPop: 'to',
+  });
+  const before = appliedOps.length;
+  context.flush();
+  assert.equal(appliedOps.length, before,
+    'unchanged component data is not resent every flush');
+});

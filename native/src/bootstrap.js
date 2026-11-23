@@ -1866,6 +1866,12 @@
   const accessibilityEvents = [];
   const snapshotEvents = [];
   const userGestureEvents = [];
+  // `<share-element>` hero frame callbacks (native HandleHeroOnFrame).
+  const heroFrameEvents = [];
+  // Backend elements for share-element components; used to recover WXML props
+  // that glass-easel observers saw before the backend element existed.
+  const heroElements = new Map();
+  const heroAttributeSignature = new WeakMap();
   // Refresher callbacks registered by the builtin scroll-view component.
   const refresherPullingCallbacks = new Map();
   const refresherWillRefreshCallbacks = new Map();
@@ -1895,6 +1901,9 @@
       this.viewTag = ++nextBridgeTag;
       this.ops.push({ op: 'createElement', id: this.viewTag, tag, name });
       bridgeElements.set(this.viewTag, this);
+      if (tag === 'share-element' || name === 'share-element') {
+        heroElements.set(this.viewTag, this);
+      }
     }
     get tagName() { return this.tag; }
     get id() { return this._id; }
@@ -2399,6 +2408,7 @@
     }
     release() {
       bridgeElements.delete(this.viewTag);
+      heroElements.delete(this.viewTag);
       scrollEventCallbacks.delete(this.viewTag);
       swiperScrollEventCallbacks.delete(this.viewTag);
       scrollStartEventCallbacks.delete(this.viewTag);
@@ -2583,6 +2593,11 @@
     flush() {
       // A page can render repeatedly (route changes, setData, reLaunch); keep
       // flushing the accumulated ops instead of latching after the first send.
+      // `backfillHeroAttributes` must run before serialisation so the
+      // share-element props reach native in the same batch as the page
+      // `attach`; the runtime materialises the page after the whole batch, so
+      // the Hero then gets the real tag/gesture/shuttle values.
+      backfillHeroAttributes();
       if (this.flushing || this.ops.length === 0) return;
       this.flushing = true;
       if (this.flushTimer !== null) {
@@ -2651,6 +2666,8 @@
     accessibilityEvents,
     snapshotEvents,
     userGestureEvents,
+    heroFrameEvents,
+    heroElements,
     bridgeElements,
     gestureHandlers,
     rect: nodeRect,
@@ -3382,6 +3399,32 @@
       }
       return;
     }
+    // `<share-element>` Hero flight frame: native HandleHeroOnFrame reports
+    // the begin/end/current rects and progress while the route transition
+    // animates.  The component registered its `worklet:onframe` handler as
+    // `onFrame-<viewTag>`.
+    if (event.type === 'heroFrame') {
+      heroFrameEvents.push(event);
+      if (heroFrameEvents.length > 240) heroFrameEvents.shift();
+      const worklet = workletEventHandlers.get(String(event.hash || ''));
+      if (worklet) {
+        try {
+          worklet.call(worklet._closure || undefined, {
+            type: 'frame',
+            direction: Number(event.direction) || 0,
+            progress: Number(event.progress) || 0,
+            begin: rectPayload(event.begin),
+            end: rectPayload(event.end),
+            current: rectPayload(event.current),
+          });
+        } catch (error) {
+          if (typeof native.log === 'function') {
+            native.log(`hero frame worklet failed: ${error && error.message}`);
+          }
+        }
+      }
+      return;
+    }
     if (event.type === 'appSnapshot' || event.type === 'nodeSnapshot') {
       snapshotEvents.push(event);
       return;
@@ -3615,10 +3658,46 @@
       `pageGlobal=${pageGlobal} globalGlobal=${globalGlobal} ` +
       `contextMaps=${contextMaps} wjb=${typeof WeixinJSBridge !== 'undefined' ? 'yes' : 'no'}`);
   }
+  // Glass-easel runs the builtin share-element component's property observers
+  // during init, before its backend element (`$$`) exists.  The observer
+  // updates for `transition-on-gesture`, `rect-tween-type` and
+  // `shuttle-on-push/pop` are dropped there, so the native Hero would never
+  // see the kebab-case WXML props.  The component data still carries the
+  // resolved values: forward them once the backend element is linked (and
+  // again if a setData changes them).
+  function backfillHeroAttributes() {
+    for (const element of heroElements.values()) {
+      if (!element || element.viewTag == null) continue;
+      const wxElement = element.__wxElement;
+      const data = wxElement && wxElement.data;
+      if (!data) continue;
+      const wanted = {};
+      if (typeof data.key === 'string' && data.key) wanted.tag = data.key;
+      if (typeof data.transitionOnGesture === 'boolean') {
+        wanted.transitionOnGesture = data.transitionOnGesture;
+      }
+      if (typeof data.rectTweenType === 'string') {
+        wanted.rectTweenType = data.rectTweenType;
+      }
+      if (typeof data.shuttleOnPush === 'string' && data.shuttleOnPush) {
+        wanted.shuttleOnPush = data.shuttleOnPush;
+      }
+      if (typeof data.shuttleOnPop === 'string' && data.shuttleOnPop) {
+        wanted.shuttleOnPop = data.shuttleOnPop;
+      }
+      if (!Object.keys(wanted).length) continue;
+      const signature = JSON.stringify(wanted);
+      if (heroAttributeSignature.get(element) === signature) continue;
+      heroAttributeSignature.set(element, signature);
+      element.setAttributes(wanted);
+    }
+  }
+
   // The official PageContext applies each mutation immediately; our bridge
   // batches ops until an explicit flush.  The miniprogram SDK does not call
   // render()/flush() for ordinary setData updates, so coalesce them here.
   const liveFlushTimer = setInterval(() => {
+    backfillHeroAttributes();
     for (const context of liveContexts) {
       if (context.rendered && context.ops.length > 0) {
         try {

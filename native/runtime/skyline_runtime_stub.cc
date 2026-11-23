@@ -778,6 +778,22 @@ using SelectionSetRangeFn = void (*)(Dart_Handle selection,
                                      int32_t start_offset,
                                      intptr_t end_span, int32_t end_offset);
 
+// `<share-element>` is the Skyline builtin that participates in Flutter's Hero
+// flights.  Native creates a `SkylineHero` for every share-element that has a
+// `key` and updates it in place when the WXML properties change.  The Dart
+// frame callback is invoked while the flight animates and returns the rect the
+// shuttle should occupy; the runtime forwards the frame data to the JS
+// `onFrame-<viewTag>` worklet (registered by the builtin component).
+using NewHeroFn = Dart_Handle (*)(intptr_t ptr, void* mark_dirty,
+                                  Dart_Handle tag, uint8_t gesture,
+                                  Dart_Handle on_frame,
+                                  Dart_Handle rect_tween_type,
+                                  Dart_Handle shuttle_on_push,
+                                  Dart_Handle shuttle_on_pop, Dart_Handle child);
+using UpdateHeroTagFn = void (*)(Dart_Handle hero, Dart_Handle tag);
+using UpdateHeroGestureFn = void (*)(Dart_Handle hero, uint8_t gesture);
+using UpdateHeroStringFn = void (*)(Dart_Handle hero, Dart_Handle value);
+
 // Refresher programmatic open/close.
 using ScrollViewRequestRefresherFn = void (*)(Dart_Handle scroll_view,
                                               uint8_t open, int32_t duration,
@@ -1068,6 +1084,13 @@ constexpr uint32_t kCollectGarbageHash = 655232023u;
 constexpr uint32_t kSendMessageToRunnerHash = 517490473u;
 constexpr uint32_t kRelaunchAppHash = 390635245u;
 constexpr uint32_t kShutdownApplicationHash = 539287559u;
+// `<share-element>` hero flights (package:skyline/widgets/hero.dart).
+constexpr uint32_t kNewHeroHash = 454206811u;
+constexpr uint32_t kUpdateHeroTagHash = 506784048u;
+constexpr uint32_t kUpdateHeroGestureHash = 665789340u;
+constexpr uint32_t kUpdateHeroRectTweenTypeHash = 654694293u;
+constexpr uint32_t kUpdateHeroShuttleOnPushHash = 482852632u;
+constexpr uint32_t kUpdateHeroShuttleOnPopHash = 397872794u;
 constexpr uint32_t kStartUserGestureHash = 662129673u;
 constexpr uint32_t kStopUserGestureHash = 638807572u;
 // stringHash('NavigatorPop') / stringHash('UpdateAnimationController'): the
@@ -2682,6 +2705,10 @@ struct AppNode {
   Dart_PersistentHandle semantics_p = nullptr;
   Dart_Handle snapshot_widget = nullptr;
   Dart_PersistentHandle snapshot_p = nullptr;
+  // `<share-element>` Hero widget (SkylineHero).  The frame callback drives
+  // the `onFrame-<viewTag>` worklet while a route transition animates.
+  Dart_Handle hero_widget = nullptr;
+  Dart_PersistentHandle hero_p = nullptr;
   // Float64List(16) backing YGNodeSetupTransform while the Matrix4 reads it.
   Dart_PersistentHandle transform_p = nullptr;
   // Decoded image backing a `<image>` node's direct-render paint callback.
@@ -8177,8 +8204,10 @@ void ResetNodeHandlesSelf(AppNode* node, bool include_layout) {
   DeletePersistent(&node->input_widget_p);
   DeletePersistent(&node->semantics_p);
   DeletePersistent(&node->snapshot_p);
+  DeletePersistent(&node->hero_p);
   node->semantics_widget = nullptr;
   node->snapshot_widget = nullptr;
+  node->hero_widget = nullptr;
   node->input_widget = nullptr;
   if (node->builder_p != nullptr || !node->builder_items.empty()) {
     g_builders_by_address.erase(node->address);
@@ -9728,6 +9757,88 @@ Dart_Handle WrapSnapshot(AppNode* node, Dart_Handle inner) {
   return snapshot;
 }
 
+// -- share-element Hero flights --------------------------------------------
+// The builtin `<share-element>` component forwards its resolved props as
+// camelCase attributes (`tag`, `onFrame`, `transitionOnGesture`,
+// `rectTweenType`, `shuttleOnPush`, `shuttleOnPop`) through `setAttributes`.
+// Native builds a `SkylineHero` around the element so Flutter's Hero machinery
+// can fly the shared content between the two routes; the `onFrame-<viewTag>`
+// worklet registered by the component is driven by HandleHeroOnFrame.
+extern "C" void HeroMarkDirty(intptr_t /*ptr*/) {}
+
+Dart_Handle HeroStringHandle(const std::string& value) {
+  return Dart_NewStringFromCString(value.c_str());
+}
+
+std::string HeroAttrText(const AppNode* node, const char* camel,
+                         const char* kebab, const char* fallback) {
+  std::string value = AttrText(node, camel, "");
+  if (value.empty()) value = AttrText(node, kebab, "");
+  return value.empty() ? std::string(fallback) : value;
+}
+
+bool HeroAttrBool(const AppNode* node, const char* camel,
+                  const char* kebab, bool fallback) {
+  if (node->attrs.count(camel)) return AttrBool(node, camel, fallback);
+  if (node->attrs.count(kebab)) return AttrBool(node, kebab, fallback);
+  return fallback;
+}
+
+Dart_Handle WrapHero(AppNode* node, Dart_Handle inner) {
+  if (node == nullptr || Dart_IsNull(inner) || g_page == nullptr ||
+      g_page->holder == nullptr) {
+    return inner;
+  }
+  auto* new_hero = reinterpret_cast<NewHeroFn>(
+      FindCallback(g_page->holder->ffi_table, kNewHeroHash));
+  if (new_hero == nullptr) return inner;
+  const std::string tag = HeroAttrText(node, "tag", "key", "");
+  if (tag.empty()) return inner;
+  const std::string on_frame_attr = HeroAttrText(node, "onFrame", "onframe", "");
+  // The component registers its worklet as `onFrame-<viewTag>`; native passes
+  // that hash to Dart so the frame callback lands on the right handler.
+  const std::string on_frame =
+      on_frame_attr.empty() ? "" : "onFrame-" + std::to_string(node->id);
+  const bool gesture = HeroAttrBool(node, "transitionOnGesture",
+                                    "transition-on-gesture", false);
+  const std::string rect_tween_type =
+      HeroAttrText(node, "rectTweenType", "rect-tween-type", "");
+  const std::string shuttle_on_push =
+      HeroAttrText(node, "shuttleOnPush", "shuttle-on-push", "to");
+  const std::string shuttle_on_pop =
+      HeroAttrText(node, "shuttleOnPop", "shuttle-on-pop", "to");
+  Dart_Handle tag_handle = HeroStringHandle(tag);
+  Dart_Handle on_frame_handle = HeroStringHandle(on_frame);
+  Dart_Handle rect_tween_handle = HeroStringHandle(rect_tween_type);
+  Dart_Handle shuttle_push_handle = HeroStringHandle(shuttle_on_push);
+  Dart_Handle shuttle_pop_handle = HeroStringHandle(shuttle_on_pop);
+  if (Dart_IsError(tag_handle) || Dart_IsError(on_frame_handle) ||
+      Dart_IsError(rect_tween_handle) || Dart_IsError(shuttle_push_handle) ||
+      Dart_IsError(shuttle_pop_handle)) {
+    return inner;
+  }
+  Dart_Handle hero = new_hero(
+      node->address, reinterpret_cast<void*>(&HeroMarkDirty), tag_handle,
+      gesture ? 1 : 0, on_frame_handle, rect_tween_handle, shuttle_push_handle,
+      shuttle_pop_handle, inner);
+  if (Dart_IsError(hero) || Dart_IsNull(hero)) {
+    if (Dart_IsError(hero)) ReportDartError("appservice NewHero", hero);
+    return inner;
+  }
+  DeletePersistent(&node->hero_p);
+  node->hero_widget = hero;
+  node->hero_p = Dart_NewPersistentHandle(hero);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] hero #%u tag=%s gesture=%d onFrame=%s "
+                 "tween=%s push=%s pop=%s\n",
+                 node->id, tag.c_str(), gesture ? 1 : 0, on_frame.c_str(),
+                 rect_tween_type.c_str(), shuttle_on_push.c_str(),
+                 shuttle_on_pop.c_str());
+  }
+  return hero;
+}
+
 // The Skyline widget constructors (`YGConnector`, `Swiper`, ...) mutate their
 // `children` list (custom routes call `connector.children.clear()` and
 // `add(...)` in `buildTransitions`).  `Dart_NewList` creates a fixed-length
@@ -10669,6 +10780,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     }
   }
 
+  if (IsShareElementNode(node)) {
+    inner = WrapHero(node, inner);
+  }
   if (IsSnapshotNode(node)) {
     inner = WrapSnapshot(node, inner);
   }
@@ -11391,6 +11505,70 @@ void ApplyNodeAttribute(AppNode* node, const char* name,
     if (update != nullptr) {
       update(Dart_HandleFromPersistent(node->snapshot_p), flag ? 1 : 0);
     }
+  } else if (IsShareElementNode(node) && node->hero_p != nullptr &&
+             g_page != nullptr && g_page->holder != nullptr) {
+    // WXML property changes (`key`, `transition-on-gesture`, `rect-tween-type`,
+    // `shuttle-on-push/pop`) update the existing SkylineHero in place instead
+    // of rebuilding the page.
+    Dart_Handle hero = Dart_HandleFromPersistent(node->hero_p);
+    if (!Dart_IsError(hero) && !Dart_IsNull(hero)) {
+      const bool is_tag = std::strcmp(name, "tag") == 0 ||
+                          std::strcmp(name, "key") == 0;
+      const bool is_gesture = std::strcmp(name, "transitionOnGesture") == 0 ||
+                              std::strcmp(name, "transition-on-gesture") == 0;
+      const char* string_hash = nullptr;
+      if (std::strcmp(name, "rectTweenType") == 0 ||
+          std::strcmp(name, "rect-tween-type") == 0) {
+        string_hash = "rect";
+      } else if (std::strcmp(name, "shuttleOnPush") == 0 ||
+                 std::strcmp(name, "shuttle-on-push") == 0) {
+        string_hash = "push";
+      } else if (std::strcmp(name, "shuttleOnPop") == 0 ||
+                 std::strcmp(name, "shuttle-on-pop") == 0) {
+        string_hash = "pop";
+      }
+      if (is_tag) {
+        auto* update = reinterpret_cast<UpdateHeroTagFn>(
+            FindCallback(g_page->holder->ffi_table, kUpdateHeroTagHash));
+        if (update != nullptr && value.IsString()) {
+          Dart_Handle handle = Dart_NewStringFromCString(value.GetString());
+          if (!Dart_IsError(handle)) update(hero, handle);
+        }
+      } else if (is_gesture) {
+        auto* update = reinterpret_cast<UpdateHeroGestureFn>(
+            FindCallback(g_page->holder->ffi_table, kUpdateHeroGestureHash));
+        if (update != nullptr) update(hero, flag ? 1 : 0);
+      } else if (string_hash != nullptr && value.IsString()) {
+        uint32_t hash = string_hash[0] == 'r'
+                            ? kUpdateHeroRectTweenTypeHash
+                            : (string_hash[0] == 'p'
+                                   ? kUpdateHeroShuttleOnPushHash
+                                   : kUpdateHeroShuttleOnPopHash);
+        auto* update = reinterpret_cast<UpdateHeroStringFn>(
+            FindCallback(g_page->holder->ffi_table, hash));
+        if (update != nullptr) {
+          Dart_Handle handle = Dart_NewStringFromCString(value.GetString());
+          if (!Dart_IsError(handle)) update(hero, handle);
+        }
+      }
+    }
+  }
+  if (IsShareElementNode(node) && node->hero_p == nullptr &&
+      (std::strcmp(name, "tag") == 0 || std::strcmp(name, "key") == 0 ||
+       std::strcmp(name, "onFrame") == 0 || std::strcmp(name, "onframe") == 0 ||
+       std::strcmp(name, "transitionOnGesture") == 0 ||
+       std::strcmp(name, "transition-on-gesture") == 0 ||
+       std::strcmp(name, "rectTweenType") == 0 ||
+       std::strcmp(name, "rect-tween-type") == 0 ||
+       std::strcmp(name, "shuttleOnPush") == 0 ||
+       std::strcmp(name, "shuttle-on-push") == 0 ||
+       std::strcmp(name, "shuttleOnPop") == 0 ||
+       std::strcmp(name, "shuttle-on-pop") == 0) &&
+      g_page != nullptr) {
+    // The builtin component forwards its props after the element was built
+    // (the glass-easel observers fire before `$$` exists).  Rebuild once so
+    // the Hero is materialized with the resolved tag/gesture/shuttle values.
+    g_page->force_rebuild = true;
   }
   if (IsSemanticsAttribute(name)) UpdateNodeSemantics(node);
 }
@@ -15965,6 +16143,85 @@ SKYLINE_EXPORT extern "C" void YogaCalculateLayout(intptr_t /*nodeAddress*/,
 #endif
 }
 
-SKYLINE_EXPORT extern "C" SkylineNativeRect HandleHeroOnFrame(...) {
-  return SkylineNativeRect{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+namespace {
+
+void AppendHeroRect(std::string* json, const char* name,
+                    const SkylineNativeRect* rect) {
+  double left = 0.0;
+  double top = 0.0;
+  double right = 0.0;
+  double bottom = 0.0;
+  double width = 0.0;
+  double height = 0.0;
+  if (rect != nullptr) {
+    left = rect->left;
+    top = rect->top;
+    right = rect->right;
+    bottom = rect->bottom;
+    width = rect->width;
+    height = rect->height;
+  }
+  char buffer[256];
+  std::snprintf(buffer, sizeof(buffer),
+                "\"%s\":{\"left\":%.4f,\"top\":%.4f,\"right\":%.4f,"
+                "\"bottom\":%.4f,\"width\":%.4f,\"height\":%.4f}",
+                name, left, top, right, bottom, width, height);
+  *json += buffer;
+}
+
+}  // namespace
+
+// Dart's `SkylineHero` calls this while a route transition (push, pop or a
+// user-gesture back swipe) animates the shared element.  The builtin
+// share-element component registered its `worklet:onframe` handler as
+// `onFrame-<viewTag>`; forward the frame data to JS so app code can drive
+// shared values (card scale/opacity, the route's source/destination rects).
+// The shuttle rect is returned unchanged: the JS worklet only mutates shared
+// values, it does not choose the geometry.
+SKYLINE_EXPORT extern "C" SkylineNativeRect HandleHeroOnFrame(
+    intptr_t /*runtime_ptr*/, Dart_Handle event_hash,
+    const SkylineNativeRect* begin, const SkylineNativeRect* end,
+    const SkylineNativeRect* current, double progress, int32_t direction) {
+  SkylineNativeRect result =
+      current != nullptr ? *current
+                         : SkylineNativeRect{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+#ifdef SKYLINE_EMBEDDED
+  if (event_hash == nullptr || Dart_IsError(event_hash) ||
+      Dart_IsNull(event_hash)) {
+    return result;
+  }
+  const char* hash = nullptr;
+  if (Dart_IsError(Dart_StringToCString(event_hash, &hash)) ||
+      hash == nullptr || *hash == '\0') {
+    return result;
+  }
+  std::string json;
+  json.reserve(320);
+  json += "{\"type\":\"heroFrame\",\"hash\":\"";
+  json += appservice::JsonEscapeString(hash);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] hero frame hash=%s progress=%.3f "
+                 "direction=%d\n",
+                 hash, progress, static_cast<int>(direction));
+  }
+  char head[96];
+  std::snprintf(head, sizeof(head), "\",\"direction\":%d,\"progress\":%.6f,",
+                static_cast<int>(direction), progress);
+  json += head;
+  AppendHeroRect(&json, "begin", begin);
+  json += ',';
+  AppendHeroRect(&json, "end", end);
+  json += ',';
+  AppendHeroRect(&json, "current", current);
+  json += '}';
+  appservice::EmitJsonEvent(json);
+#else
+  (void)event_hash;
+  (void)begin;
+  (void)end;
+  (void)progress;
+  (void)direction;
+#endif
+  return result;
 }

@@ -4353,6 +4353,64 @@ test('appservice ops: custom route attach configures CreatePageRoute', {
   }
 });
 
+test('appservice ops: share-element builds a SkylineHero with its WXML props', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // card_transition's list cards forward their resolved props through
+  // `setAttributes`: the builtin component sets `tag`/`onFrame` and the
+  // bootstrap backfill resends `transitionOnGesture`/`rectTweenType`/
+  // `shuttleOn*`.  The runtime must build a SkylineHero (Flutter's Hero
+  // machinery drives the shared-element flight) and register the
+  // `onFrame-<viewTag>` worklet hash for the flight frames.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-share-element-'));
+  const ops = path.join(dir, 'share-element.ops.json');
+  fs.writeFileSync(ops, JSON.stringify({
+    ops: [
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'setStyle', id: 2,
+        value: 'width:320px;height:240px;background:#FFFFFF;' },
+      { op: 'createElement', id: 3, tag: 'share-element', name: 'share-element' },
+      { op: 'setStyle', id: 3, value: 'width:160px;height:120px;' },
+      { op: 'createElement', id: 4, tag: 'view', name: 'view' },
+      { op: 'setStyle', id: 4, value: 'width:100%;height:100%;background:#FF0000;' },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'setAttributes', id: 3, attrs: {
+        tag: 'se-key0',
+        onFrame: 'handleFrame',
+        transitionOnGesture: true,
+        rectTweenType: 'cubic-bezier(0.4, 0.0, 0.2, 1.0)',
+        shuttleOnPush: 'from',
+        shuttleOnPop: 'to',
+      } },
+      { op: 'attach', root: 2 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(ops, {
+      timeoutMs: 3000,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.doesNotMatch(logs, /Unhandled exception/);
+    assert.match(logs,
+      /hero #3 tag=se-key0 gesture=1 onFrame=onFrame-3 tween=cubic-bezier\(0\.4, 0\.0, 0\.2, 1\.0\) push=from pop=to/,
+      `expected a SkylineHero for the share-element:\n${logs}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('appservice ops: rebuilding the top page keeps covered route images', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
