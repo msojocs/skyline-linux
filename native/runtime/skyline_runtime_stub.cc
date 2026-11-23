@@ -2686,6 +2686,11 @@ struct AppNode {
   Dart_PersistentHandle transform_p = nullptr;
   // Decoded image backing a `<image>` node's direct-render paint callback.
   sk_sp<flutter::DlImage> image_dl;
+  // Direct-render widget currently materialized for this node.  Kept so a
+  // late image response can mark the *existing* widget dirty; a page rebuild
+  // only refreshes the current route, so covered pages would keep their white
+  // placeholders (visible while a non-opaque route transitions).
+  Dart_PersistentHandle image_widget_p = nullptr;
   // Decoded CSS background-image (painted by the decorated box).
   sk_sp<flutter::DlImage> background_image_dl;
   std::string image_source;
@@ -8142,8 +8147,7 @@ void DeletePersistent(Dart_PersistentHandle* handle) {
 // Drops all persistent widget handles for a subtree.  Called before a coarse
 // rebuild; `include_layout` also releases the 9-float buffers so new ones can
 // be allocated for the rebuilt widgets.
-void ResetNodeHandles(AppNode* node, bool include_layout) {
-  if (node == nullptr) return;
+void ResetNodeHandlesSelf(AppNode* node, bool include_layout) {
   DeletePersistent(&node->decorated_box_p);
   DeletePersistent(&node->opacity_widget_p);
   DeletePersistent(&node->clip_widget_p);
@@ -8187,21 +8191,40 @@ void ResetNodeHandles(AppNode* node, bool include_layout) {
     node->builder_pending.clear();
     DeletePersistent(&node->builder_p);
   }
-  if (node->image_dl) {
-    // Keep the decoded image across rebuilds.  DlImageGPU was created with a
-    // null unref queue (software rendering), and its destructor asserts when
-    // no queue is available, so images live for the process lifetime.
-    g_image_nodes.erase(node->address);
-  }
+  g_image_nodes.erase(node->address);
+  DeletePersistent(&node->image_widget_p);
   g_background_image_nodes.erase(node->address);
   if (include_layout) DeletePersistent(&node->layout_buffer_p);
   node->decorated_box = nullptr;
   node->opacity_widget = nullptr;
   node->text_widget = nullptr;
   node->connector = nullptr;
+}
+
+void ResetNodeHandles(AppNode* node, bool include_layout) {
+  if (node == nullptr) return;
+  ResetNodeHandlesSelf(node, include_layout);
   for (AppNode* child : node->children) {
     ResetNodeHandles(child, include_layout);
   }
+}
+
+// Like `ResetNodeHandles`, but never descends into a covered route's subtree.
+void ResetNodeHandlesSkipping(AppNode* node, bool include_layout,
+                              const std::unordered_set<AppNode*>& covered) {
+  if (node == nullptr || covered.count(node) != 0) return;
+  ResetNodeHandlesSelf(node, include_layout);
+  for (AppNode* child : node->children) {
+    ResetNodeHandlesSkipping(child, include_layout, covered);
+  }
+}
+
+// Mark every node reachable from `node` (used to protect covered routes from
+// the current page's handle reset).
+void CollectSubtreeNodes(AppNode* node, std::unordered_set<AppNode*>* out) {
+  if (node == nullptr || out->count(node) != 0) return;
+  out->insert(node);
+  for (AppNode* child : node->children) CollectSubtreeNodes(child, out);
 }
 
 void PrepareLayoutBuffers(AppNode* node) {
@@ -8613,6 +8636,7 @@ using SvgToRgbaFn = void (*)(intptr_t ptr, double pixel_ratio, int32_t id,
 constexpr uint32_t kSvgToRgbaHash = 543998557u;
 constexpr uint32_t kCancelRequestHttpResourceHash = 653300188u;
 constexpr uint32_t kBackgroundImageMarkNeedPaintHash = 741124659u;
+constexpr uint32_t kImageMarkNeedPaintHash = 753875657u;
 
 sk_sp<flutter::DlImage> WrapSkImage(sk_sp<SkImage> sk_image) {
   if (!sk_image) return nullptr;
@@ -8689,6 +8713,27 @@ void RepaintAfterImage(RuntimeHolder* holder, bool background,
       }
     }
     RebuildAppServicePage(holder);
+  });
+}
+
+// Marks the existing direct-render image widget dirty.  Unlike
+// `RebuildAppServicePage`, this reaches nodes on covered routes too (the
+// replay keeps the previous page's widgets alive for non-opaque transitions).
+// The lookup happens on the UI thread so the node's current persistent handle
+// is used (a queued rebuild may have replaced it in the meantime).
+void MarkNodeImageDirty(intptr_t address, RuntimeHolder* holder) {
+  if (holder == nullptr || address == 0) return;
+  auto runner = UiTaskRunner();
+  if (!runner) return;
+  runner->PostTask([holder, address]() {
+    DemoPageApiScope scope;
+    auto found = g_image_nodes.find(address);
+    if (found == g_image_nodes.end() || found->second == nullptr) return;
+    Dart_PersistentHandle widget = found->second->image_widget_p;
+    if (widget == nullptr) return;
+    auto* mark = reinterpret_cast<void (*)(Dart_Handle)>(
+        FindCallback(holder->ffi_table, kImageMarkNeedPaintHash));
+    if (mark != nullptr) mark(Dart_HandleFromPersistent(widget));
   });
 }
 
@@ -8782,6 +8827,7 @@ void OnSvgToRgbaResponse(intptr_t /*runtime_ptr*/, intptr_t /*ptr*/, int32_t id,
   }
   CacheImage(node->image_source, image);
   AssignNodeImage(node, image, pending.background);
+  if (!pending.background) MarkNodeImageDirty(node->address, pending.holder);
   RepaintAfterImage(pending.holder, pending.background,
                     pending.background ? node->decorated_box_p : nullptr);
 }
@@ -8959,6 +9005,10 @@ void DeliverImagePayload(uint32_t request_id, std::vector<uint8_t> bytes) {
     if (node->image_target_background) {
       any_background = true;
       decorated = node->decorated_box_p;
+    } else {
+      // Also refresh the widget on routes covered by the current page (the
+      // list under a non-opaque custom route); a page rebuild would not.
+      MarkNodeImageDirty(node->address, pending.holder);
     }
   }
   std::fprintf(stderr,
@@ -9810,6 +9860,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       ReportDartError("appservice direct render widget", widget);
     } else {
       inner = widget;
+      DeletePersistent(&node->image_widget_p);
+      node->image_widget_p = Dart_NewPersistentHandle(widget);
       g_image_nodes[node->address] = node;
     }
   } else if (IsBuilderName(node->name) &&
@@ -11939,9 +11991,13 @@ void ApplyAttachCustomRoute(const rapidjson::Value& op) {
   config.reverse_transition_ms = as_int(4, 300);
   const std::string barrier_color = as_string(5);
   config.has_barrier_color = !barrier_color.empty();
+  // The route builder returns a CSS color string (`rgba(0, 0, 0, 0.3)` in
+  // card_transition), not a hex literal.
+  uint32_t parsed_barrier = 0u;
   config.barrier_color =
-      config.has_barrier_color ? ParseColorString(barrier_color.c_str(), 0u)
-                               : 0u;
+      config.has_barrier_color && ParseCssColor(barrier_color, &parsed_barrier)
+          ? parsed_barrier
+          : 0u;
   config.barrier_dismissible = as_bool(6, false);
   config.barrier_label = as_string(7);
   config.can_transition_to = as_bool(8, true);
@@ -11951,9 +12007,10 @@ void ApplyAttachCustomRoute(const rapidjson::Value& op) {
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
     std::fprintf(stderr,
                  "[skyline-runtime] attachCustomRoute custom=%d opaque=%d "
-                 "transition=%d/%d anim=%s secondary=%s\n",
+                 "transition=%d/%d barrier=%08x anim=%s secondary=%s\n",
                  config.is_custom ? 1 : 0, config.opaque ? 1 : 0,
                  config.transition_ms, config.reverse_transition_ms,
+                 config.has_barrier_color ? config.barrier_color : 0u,
                  config.animation_hash.c_str(),
                  config.secondary_animation_hash.c_str());
   }
@@ -13082,8 +13139,19 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
       g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
   const float viewport_h =
       g_viewport_height > 0.0 ? static_cast<float>(g_viewport_height) : 240.0f;
+  // Only the page being rebuilt loses its materialized handles.  The node
+  // table is shared with the routes kept alive under this one; resetting them
+  // would drop the covered page's image registrations and its retained image
+  // widgets would paint empty slots while a non-opaque transition reveals it.
+  // Released nodes of this page are already detached from the root, so they
+  // are excluded by walking the covered pages instead of the current root.
+  std::unordered_set<AppNode*> covered;
+  for (const auto& entry : g_page->page_stack) {
+    CollectSubtreeNodes(FindNode(entry.root_id), &covered);
+  }
   for (auto& entry : g_page->nodes) {
-    ResetNodeHandles(entry.second, true);
+    if (covered.count(entry.second) != 0) continue;
+    ResetNodeHandlesSkipping(entry.second, true, covered);
   }
   PrepareLayoutBuffers(root);
   MeasureNode(root, viewport_w, true, viewport_h, true);
@@ -13571,6 +13639,22 @@ PageBuilders LoadPageBuilders(RuntimeHolder* holder) {
   return builders;
 }
 
+// The page element is the `wx-x name=page` node under the attach host.  Its
+// resolved CSS background is the route's content background (WeChat applies
+// the window default there).  `page { background-color: transparent }` has to
+// reach `SkylineScaffold`, otherwise a non-opaque custom route paints an
+// opaque white sheet behind its page and the covered route stays hidden while
+// the page translates during a back gesture.
+AppNode* FindPageElement(AppNode* node) {
+  if (node == nullptr) return nullptr;
+  if (node->name == "page" || node->tag == "page") return node;
+  for (AppNode* child : node->children) {
+    if (child == nullptr) continue;
+    if (AppNode* found = FindPageElement(child)) return found;
+  }
+  return nullptr;
+}
+
 // Builds and pushes one page route for an `attach` operation.  Called while
 // replaying the captured operation stream, so the node table already contains
 // the page's final tree.
@@ -13660,7 +13744,13 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
 
   static char page_url[] = "pages/appservice";
   static SkylinePageConfig config;
-  config.backgroundColorContent = 0xFFFFFFFFu;
+  uint32_t page_background = 0xFFFFFFFFu;
+  if (AppNode* page_element = FindPageElement(layout_root)) {
+    if (page_element->style.has_background) {
+      page_background = page_element->style.background;
+    }
+  }
+  config.backgroundColorContent = page_background;
   config.pageUrl = page_url;
   const uint32_t previous_root_id = g_page->attach_previous_root_id;
   const int32_t previous_page_id = g_page->current_page_id;
@@ -13689,10 +13779,10 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   g_page->page_count++;
   std::fprintf(stderr,
                "[skyline-runtime] appservice page %d -> CreatePageRoute "
-               "(openType=%u, %gx%g, custom=%d)\n",
+               "(openType=%u, %gx%g, custom=%d, bg=%08x)\n",
                g_page->page_count, static_cast<unsigned>(open_type),
                static_cast<double>(viewport_w), static_cast<double>(viewport_h),
-               is_custom ? 1 : 0);
+               is_custom ? 1 : 0, page_background);
   builders.create_route(
       callback_id, open_type,
       is_custom ? 1 : 0,
