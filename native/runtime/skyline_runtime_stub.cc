@@ -1610,6 +1610,67 @@ uint32_t ParseColorString(const char* value, uint32_t fallback) {
   return static_cast<uint32_t>(parsed);
 }
 
+// True when the (whitespace-normalized) run consists only of emoji
+// codepoints, ZWJ/skin-tone/keycap modifiers and spaces.  The FFI has no
+// primary `fontFamily` argument, so emoji-only runs get a marker-prefixed
+// color-emoji family that app_compat/apply.py turns into TextStyle.fontFamily
+// (the SkParagraph FontCollection patch lets that family win over DejaVu's
+// monochrome U+2764).  Mixed text keeps the previous default-font behaviour.
+bool IsEmojiOnlyText(const char* value) {
+  if (value == nullptr || *value == '\0') return false;
+  const unsigned char* p = reinterpret_cast<const unsigned char*>(value);
+  bool saw_emoji = false;
+  while (*p != 0) {
+    uint32_t codepoint = *p;
+    if (codepoint < 0x80) {
+      ++p;
+      if (codepoint == ' ' || codepoint == '\t' || codepoint == '\n' ||
+          codepoint == '\r') {
+        continue;
+      }
+      return false;
+    }
+    size_t length = 0;
+    if ((codepoint & 0xE0) == 0xC0) {
+      length = 2;
+      codepoint &= 0x1Fu;
+    } else if ((codepoint & 0xF0) == 0xE0) {
+      length = 3;
+      codepoint &= 0x0Fu;
+    } else if ((codepoint & 0xF8) == 0xF0) {
+      length = 4;
+      codepoint &= 0x07u;
+    } else {
+      return false;
+    }
+    for (size_t i = 1; i < length; ++i) {
+      if ((p[i] & 0xC0) != 0x80) return false;
+      codepoint = (codepoint << 6) | (p[i] & 0x3Fu);
+    }
+    p += length;
+    const bool emoji =
+        (codepoint >= 0x00A9 && codepoint <= 0x00AE) ||
+        codepoint == 0x203C || codepoint == 0x2049 ||
+        codepoint == 0x2122 || codepoint == 0x2139 ||
+        (codepoint >= 0x2190 && codepoint <= 0x21FF) ||
+        (codepoint >= 0x2300 && codepoint <= 0x23FF) ||
+        (codepoint >= 0x25A0 && codepoint <= 0x25FF) ||
+        (codepoint >= 0x2600 && codepoint <= 0x27BF) ||
+        (codepoint >= 0x2900 && codepoint <= 0x297F) ||
+        (codepoint >= 0x2B00 && codepoint <= 0x2BFF) ||
+        codepoint == 0x3030 || codepoint == 0x303D ||
+        codepoint == 0x3297 || codepoint == 0x3299 ||
+        codepoint == 0x200D || codepoint == 0x20E3 ||
+        codepoint == 0xFE0E || codepoint == 0xFE0F ||
+        (codepoint >= 0x1F000 && codepoint <= 0x1FAFF) ||
+        (codepoint >= 0x1F1E6 && codepoint <= 0x1F1FF) ||
+        (codepoint >= 0x1F3FB && codepoint <= 0x1F3FF);
+    if (!emoji) return false;
+    saw_emoji = true;
+  }
+  return saw_emoji;
+}
+
 Dart_Handle CreateTextWidget(NewTextFn newText,
                              NewTextSpanFn newTextSpan,
                              intptr_t address,
@@ -1643,6 +1704,12 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
                                               "Noto Sans",
                                               "DejaVu Sans"};
     std::vector<std::string> families;
+    // A leading U+0001 marks a primary family (the FFI has no fontFamily
+    // argument); app_compat/apply.py strips the marker into TextStyle's
+    // fontFamily and keeps the rest as the fallback chain.
+    if (IsEmojiOnlyText(value)) {
+      families.push_back(std::string(1, '\x01') + "Noto Color Emoji");
+    }
     for (const std::string& family : fontFamilies) {
       if (family.empty()) continue;
       if (std::find(families.begin(), families.end(), family) ==

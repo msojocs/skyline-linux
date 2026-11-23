@@ -19,6 +19,10 @@ Edited files (relative to `$ENGINE_CHECKOUT/engine/src`):
   flutter/txt/src/skia/paragraph_builder_skia.cc  map flags into SkParagraph
   flutter/third_party/skia/modules/skparagraph
                                              backgroundUseLineMetrics
+  flutter/third_party/skia/modules/skparagraph/src/FontCollection.cpp
+                                             primary color emoji family
+  flutter/third_party/skia/src/ports/SkFontMgr_fontconfig.cpp
+                                             fontconfig weak-binding lookup
   flutter/third_party/dart/sdk/lib/io/platform.dart  Platform.isOhos
 """
 
@@ -1308,6 +1312,92 @@ def patch_text_line(text):
     return text, changed
 
 
+def patch_skia_font_collection(text):
+    return replace_once(
+        text,
+        "sk_sp<SkTypeface> FontCollection::matchTypeface(const SkString& familyName, SkFontStyle fontStyle) {\n"
+        "    for (const auto& manager : this->getFontManagerOrder()) {\n"
+        "        sk_sp<SkFontStyleSet> set(manager->matchFamily(familyName.c_str()));\n"
+        "        if (!set || set->count() == 0) {\n"
+        "            continue;\n"
+        "        }\n"
+        "\n"
+        "        sk_sp<SkTypeface> match(set->matchStyle(fontStyle));\n"
+        "        if (match) {\n"
+        "            return match;\n"
+        "        }\n"
+        "    }\n"
+        "\n"
+        "    return nullptr;\n"
+        "}",
+        "sk_sp<SkTypeface> FontCollection::matchTypeface(const SkString& familyName, SkFontStyle fontStyle) {\n"
+        "    for (const auto& manager : this->getFontManagerOrder()) {\n"
+        "        // Skyline/Linux compatibility: ask the manager for an exact\n"
+        "        // family+style match first.  FcFontMatch honours the strong family\n"
+        "        // binding; the matchFamily StyleSet path sorts only by style and, in\n"
+        "        // a zh_CN locale, picks one of the strong CJK fallbacks instead of the\n"
+        "        // requested color emoji family.  That kept color emoji fonts from\n"
+        "        // being usable as the primary TextStyle.fontFamily.\n"
+        "        sk_sp<SkTypeface> direct =\n"
+        "            manager->matchFamilyStyle(familyName.c_str(), fontStyle);\n"
+        "        if (direct) {\n"
+        "            return direct;\n"
+        "        }\n"
+        "        sk_sp<SkFontStyleSet> set(manager->matchFamily(familyName.c_str()));\n"
+        "        if (set && set->count() > 0) {\n"
+        "            sk_sp<SkTypeface> match(set->matchStyle(fontStyle));\n"
+        "            if (match) {\n"
+        "                return match;\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "\n"
+        "    return nullptr;\n"
+        "}",
+        "FontCollection primary color emoji family",
+    )
+
+
+def patch_sk_fontmgr_fontconfig(text):
+    if "FcPatternGetWithBinding(pattern, object, id" in text:
+        return text, False
+    marker = "static SkWeakReturn is_weak(FcPattern* pattern, const char object[], int id) {"
+    start = text.find(marker)
+    if start < 0:
+        raise SystemExit("cannot find is_weak anchor in SkFontMgr_fontconfig.cpp")
+    end = text.find("\n}\n", start)
+    if end < 0:
+        raise SystemExit("cannot find end of is_weak in SkFontMgr_fontconfig.cpp")
+    end += 3
+    header = (
+        "static SkWeakReturn is_weak(FcPattern* pattern, const char object[], int id) {\n"
+        "    FCLocker::AssertHeld();\n"
+    )
+    original = text[start:end]
+    if not original.startswith(header) or not original.endswith("\n}\n"):
+        raise SystemExit("unexpected is_weak layout in SkFontMgr_fontconfig.cpp")
+    body = original[len(header):-3]
+    binding_block = (
+        "\n#if FC_VERSION >= 21301\n"
+        "    // Fontconfig 2.13.1+ exposes the binding directly.  The legacy\n"
+        "    // heuristic below misclassifies the weak fallback chains that modern\n"
+        "    // fontconfig substitutes into a pattern (emoji/Noto aliases plus\n"
+        "    // zh_CN's strong CJK families), so remove_weak keeps hundreds of weak\n"
+        "    // families as \"strong\".\n"
+        "    FcValue direct_value;\n"
+        "    FcValueBinding direct_binding;\n"
+        "    if (FcPatternGetWithBinding(pattern, object, id, &direct_value,\n"
+        "                                &direct_binding) != FcResultMatch) {\n"
+        "        return kNoId_WeakReturn;\n"
+        "    }\n"
+        "    return direct_binding == FcValueBindingWeak ? kIsWeak_WeakReturn\n"
+        "                                                : kIsStrong_WeakReturn;\n"
+        "#else\n"
+    )
+    updated = text[:start] + header + binding_block + body + "\n#endif\n}\n" + text[end:]
+    return updated, True
+
+
 def main():
     edit("flutter/lib/ui/ui.dart", patch_ui)
     edit("flutter/lib/ui/painting.dart", patch_painting)
@@ -1327,6 +1417,10 @@ def main():
     edit("flutter/third_party/skia/modules/skparagraph/include/ParagraphStyle.h", patch_skia_paragraph_style_h)
     edit("flutter/third_party/skia/modules/skparagraph/src/ParagraphCache.cpp", patch_paragraph_cache)
     edit("flutter/third_party/skia/modules/skparagraph/src/TextLine.cpp", patch_text_line)
+    edit("flutter/third_party/skia/modules/skparagraph/src/FontCollection.cpp",
+         patch_skia_font_collection)
+    edit("flutter/third_party/skia/src/ports/SkFontMgr_fontconfig.cpp",
+         patch_sk_fontmgr_fontconfig)
     edit("flutter/third_party/dart/sdk/lib/io/platform.dart", patch_io_platform)
     return 0
 

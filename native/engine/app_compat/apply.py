@@ -394,3 +394,62 @@ elif banner_new in application_text:
     print(f"debug banner already disabled in {application}")
 else:
     raise SystemExit(f"cannot find showDebugBanner anchor in {application}")
+
+# Primary font family for emoji-only text runs.  NewTextSpan has no
+# `fontFamily` parameter, so the runtime prefixes the first fallback entry with
+# U+0001 when it wants that family to be primary.  The engine advertises
+# "Noto Color Emoji" as the primary for pure emoji runs; with the SkParagraph
+# FontCollection patch this reaches the color emoji font instead of DejaVu's
+# monochrome U+2764.
+ffi = app / "packages" / "skyline" / "lib" / "core" / "ffi_registry.dart"
+ffi_text = ffi.read_text(encoding="utf-8")
+primary_preamble_old = (
+    "  final text = textObj as String;\n"
+    "  final fontFamilyFallback = fontFamilyFallbackObj as List<dynamic>?;\n"
+    "  final shadows = shadowsObj as List<dynamic>?;\n"
+    "  final children = childrenObj as List<dynamic>;\n"
+    "  // only apply decoration when it's specified manually,\n"
+)
+primary_preamble_new = (
+    "  final text = textObj as String;\n"
+    "  final fontFamilyFallback = fontFamilyFallbackObj as List<dynamic>?;\n"
+    "  final shadows = shadowsObj as List<dynamic>?;\n"
+    "  final children = childrenObj as List<dynamic>;\n"
+    "  // Linux compat: the FFI has no primary fontFamily argument.  A first\n"
+    "  // fallback entry prefixed with U+0001 selects the primary family\n"
+    "  // (emoji-only runs use a color emoji font this way); the remaining\n"
+    "  // entries stay in the fallback chain.\n"
+    "  String? primaryFontFamily;\n"
+    "  List<String>? fallbackFamilies = fontFamilyFallback?.cast<String>();\n"
+    "  if (fallbackFamilies != null &&\n"
+    "      fallbackFamilies.isNotEmpty &&\n"
+    "      fallbackFamilies.first.startsWith(String.fromCharCode(1))) {\n"
+    "    primaryFontFamily = fallbackFamilies.first.substring(1);\n"
+    "    fallbackFamilies = fallbackFamilies.sublist(1);\n"
+    "  }\n"
+    "  // only apply decoration when it's specified manually,\n"
+)
+primary_style_old = (
+    "    shadows: shadows?.cast<Shadow>(),\n"
+    "    fontFamilyFallback: fontFamilyFallback?.cast<String>(),\n"
+    "  );\n"
+    "  final textSpan = SkylineTextSpan(\n"
+)
+primary_style_new = (
+    "    shadows: shadows?.cast<Shadow>(),\n"
+    "    fontFamily: primaryFontFamily,\n"
+    "    fontFamilyFallback: fallbackFamilies,\n"
+    "  );\n"
+    "  final textSpan = SkylineTextSpan(\n"
+)
+if primary_preamble_old in ffi_text:
+    ffi_text = ffi_text.replace(primary_preamble_old, primary_preamble_new, 1)
+    if primary_style_old not in ffi_text:
+        raise SystemExit(f"cannot find SkylineTextStyle anchor in {ffi}")
+    ffi_text = ffi_text.replace(primary_style_old, primary_style_new, 1)
+    ffi.write_text(ffi_text, encoding="utf-8")
+    print(f"patched primary font family in {ffi}")
+elif "primaryFontFamily" in ffi_text:
+    print(f"primary font family already patched in {ffi}")
+else:
+    raise SystemExit(f"cannot find newTextSpan anchor in {ffi}")

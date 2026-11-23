@@ -1161,6 +1161,20 @@ test('appservice ops: span/text inline flow keeps the footer row on one line', {
       r < 160 && g < 160 && b < 160);
     assert.ok(placeholderPixels > 20,
       `expected placeholder glyphs to paint (dark pixels=${placeholderPixels})`);
+    // Emoji-only runs use a color emoji primary family (the Skia
+    // FontCollection/SkFontMgr patches).  U+2764 is present in DejaVu as a
+    // black glyph, so this asserts the primary family actually reached the
+    // color font rather than the default text font.
+    const colorEmojiFont = [
+      '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf',
+      '/usr/share/fonts/noto/NotoColorEmoji.ttf',
+    ].some((candidate) => fs.existsSync(candidate));
+    if (colorEmojiFont) {
+      const red = countColor(pixels, (r, g, b) =>
+        r > 150 && g < 110 && b < 110);
+      assert.ok(red > 50,
+        `expected a color emoji heart (red pixels=${red})`);
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -56,6 +56,12 @@ if [ "$check_only" -eq 1 ]; then
   grep -q "getBackgroundUseLineMetrics()" \
     "$engine_src/flutter/third_party/skia/modules/skparagraph/src/TextLine.cpp" \
     || die "SkParagraph TextLine.cpp lacks backgroundUseLineMetrics"
+  grep -q "matchFamilyStyle(familyName.c_str(), fontStyle)" \
+    "$engine_src/flutter/third_party/skia/modules/skparagraph/src/FontCollection.cpp" \
+    || die "SkParagraph FontCollection.cpp lacks primary color emoji fallback"
+  grep -q "FcPatternGetWithBinding(pattern, object, id" \
+    "$engine_src/flutter/third_party/skia/src/ports/SkFontMgr_fontconfig.cpp" \
+    || die "SkFontMgr_fontconfig.cpp lacks the weak-binding lookup"
   log "dart:ui compat layer is installed"
   exit 0
 fi

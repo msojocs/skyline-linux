@@ -81,6 +81,9 @@ if [ "$check_only" -eq 1 ]; then
   grep -q 'bool showDebugBanner = false;' \
     "$app/packages/skyline/lib/core/application.dart" \
     || die "debug banner patch missing (deterministic frames); run without --check"
+  grep -q 'primaryFontFamily' \
+    "$app/packages/skyline/lib/core/ffi_registry.dart" \
+    || die "primary font family patch missing (color emoji); run without --check"
   log "kernel ok: $out"
   exit 0
 fi
