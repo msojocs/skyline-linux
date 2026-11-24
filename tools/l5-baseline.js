@@ -66,6 +66,11 @@ const FIXTURES = [
   'appservice-text-overflow.ops.json',
   'appservice-white-space.ops.json',
   'appservice-map.ops.json',
+  // D3 probes: scroll-view direction, swiper `height:auto` base-sheet
+  // override, and bold inline text metrics (associated-scroll-view page).
+  'appservice-scroll-horizontal.ops.json',
+  'appservice-swiper-auto-height.ops.json',
+  'appservice-inline-bold-price.ops.json',
 ];
 
 function prerequisites() {

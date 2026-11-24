@@ -544,6 +544,112 @@ Dart_Handle WrapHero(AppNode* node, Dart_Handle inner) {
   return hero;
 }
 
+// Wraps a widget with the element's CSS box painting: background (colour,
+// image, gradient), borders, corner radii, shadow, opacity and clip.  Generic
+// views run this after building their connector; builtin containers that
+// construct their own widget (swiper) call it too, so a CSS background on the
+// element is not dropped (`.swiper { background-color: white }`).
+Dart_Handle WrapVisualStyle(AppNode* node, Dart_Handle inner,
+                            NewDecoratedBoxFn newDecoratedBox,
+                            NewOpacityFn newOpacity) {
+  const AppStyle& style = node->style;
+  const bool wants_background_image = !style.background_image.empty();
+  const bool wants_paint_transition =
+      (style.transition_mask &
+       (kTransitionBackground | kTransitionBorderColor)) != 0;
+  const bool has_visual = style.has_background || HasBorder(style) ||
+                          HasAnyRadius(style) || style.has_shadow ||
+                          wants_background_image || style.has_gradient ||
+                          wants_paint_transition;
+  if (has_visual) {
+    if (wants_background_image) LoadBackgroundImageForNode(node);
+    double widths[4] = {0, 0, 0, 0};
+    uint32_t colors[4] = {0u, 0u, 0u, 0u};
+    uint8_t styles[4] = {0, 0, 0, 0};
+    for (int side = 0; side < 4; side++) {
+      widths[side] = EffectiveBorderWidth(style, side);
+      if (widths[side] > 0.0) {
+        colors[side] = EffectiveBorderColor(style, side);
+        styles[side] = 1;
+      }
+    }
+    Dart_Handle shadows = BuildBoxShadowList(style);
+    Dart_Handle gradient = BuildGradientHandle(style);
+    const double radius_tl = EffectiveCornerRadius(style, 0);
+    const double radius_tr = EffectiveCornerRadius(style, 1);
+    const double radius_br = EffectiveCornerRadius(style, 2);
+    const double radius_bl = EffectiveCornerRadius(style, 3);
+    const uint8_t radius_tl_pct = CornerRadiusPercent(style, 0) ? 1 : 0;
+    const uint8_t radius_tr_pct = CornerRadiusPercent(style, 1) ? 1 : 0;
+    const uint8_t radius_br_pct = CornerRadiusPercent(style, 2) ? 1 : 0;
+    const uint8_t radius_bl_pct = CornerRadiusPercent(style, 3) ? 1 : 0;
+    Dart_Handle decorated = newDecoratedBox(
+        node->address, style.background, widths[3], widths[0], widths[1],
+        widths[2], colors[3], colors[0], colors[1], colors[2], styles[3],
+        styles[0], styles[1], styles[2], radius_tl, radius_tl, radius_tr,
+        radius_tr, radius_bl, radius_bl, radius_br, radius_br, radius_tl_pct,
+        radius_tl_pct, radius_tr_pct, radius_tr_pct, radius_bl_pct,
+        radius_bl_pct, radius_br_pct, radius_br_pct, Dart_Null(), 0, 0, 0.0,
+        0.0, 0.0, 0.0,
+        static_cast<uint8_t>(wants_background_image ? style.background_repeat
+                                                    : 0),
+        static_cast<uint8_t>(wants_background_image ? style.background_fit
+                                                    : 0),
+        0.0, 0.0, 0, 0, gradient, 0, shadows, 0,
+        reinterpret_cast<void*>(&BackgroundImagePaint),
+        reinterpret_cast<void*>(&BackgroundImageCreate),
+        reinterpret_cast<void*>(&BackgroundImageDisposed), nullptr, inner);
+    if (Dart_IsError(decorated)) {
+      ReportDartError("appservice NewDecoratedBox", decorated);
+    } else {
+      inner = decorated;
+      node->decorated_box = decorated;
+      node->decorated_box_p = Dart_NewPersistentHandle(decorated);
+      if (wants_background_image) {
+        g_background_image_nodes[node->address] = node;
+      }
+    }
+  }
+  if (style.opacity < 0.999 ||
+      (style.transition_mask & kTransitionOpacity) != 0) {
+    Dart_Handle opacity = newOpacity(style.opacity, inner);
+    if (Dart_IsError(opacity)) {
+      ReportDartError("appservice NewOpacity", opacity);
+    } else {
+      inner = opacity;
+      node->opacity_widget = opacity;
+      node->opacity_widget_p = Dart_NewPersistentHandle(opacity);
+    }
+  }
+  if (style.clip && g_page != nullptr && g_page->holder != nullptr) {
+    auto* new_clip = reinterpret_cast<NewClipRRectFn>(
+        FindCallback(g_page->holder->ffi_table, kNewClipRRectHash));
+    if (new_clip != nullptr) {
+      const double tl = EffectiveCornerRadius(style, 0);
+      const double tr = EffectiveCornerRadius(style, 1);
+      const double br = EffectiveCornerRadius(style, 2);
+      const double bl = EffectiveCornerRadius(style, 3);
+      const uint8_t tl_pct = CornerRadiusPercent(style, 0) ? 1 : 0;
+      const uint8_t tr_pct = CornerRadiusPercent(style, 1) ? 1 : 0;
+      const uint8_t br_pct = CornerRadiusPercent(style, 2) ? 1 : 0;
+      const uint8_t bl_pct = CornerRadiusPercent(style, 3) ? 1 : 0;
+      Dart_Handle clip = new_clip(
+          0, tl, tl, tr, tr, bl, bl, br, br, tl_pct, tl_pct, tr_pct, tr_pct,
+          bl_pct, bl_pct, br_pct, br_pct, EffectiveBorderWidth(style, 3),
+          EffectiveBorderWidth(style, 0), EffectiveBorderWidth(style, 1),
+          EffectiveBorderWidth(style, 2), inner);
+      if (Dart_IsError(clip)) {
+        ReportDartError("appservice NewClipRRect", clip);
+      } else {
+        inner = clip;
+        node->clip_widget = clip;
+        node->clip_widget_p = Dart_NewPersistentHandle(clip);
+      }
+    }
+  }
+  return inner;
+}
+
 // The Skyline widget constructors (`YGConnector`, `Swiper`, ...) mutate their
 // `children` list (custom routes call `connector.children.clear()` and
 // `add(...)` in `buildTransitions`).  `Dart_NewList` creates a fixed-length
@@ -1366,101 +1472,14 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         }
       }
     }
-    const bool wants_background_image = !style.background_image.empty();
-    const bool wants_paint_transition =
-        (style.transition_mask &
-         (kTransitionBackground | kTransitionBorderColor)) != 0;
-    const bool has_visual = style.has_background || HasBorder(style) ||
-                            HasAnyRadius(style) ||
-                            style.has_shadow || wants_background_image ||
-                            style.has_gradient || wants_paint_transition;
-    if (has_visual) {
-      if (wants_background_image) LoadBackgroundImageForNode(node);
-      double widths[4] = {0, 0, 0, 0};
-      uint32_t colors[4] = {0u, 0u, 0u, 0u};
-      uint8_t styles[4] = {0, 0, 0, 0};
-      for (int side = 0; side < 4; side++) {
-        widths[side] = EffectiveBorderWidth(style, side);
-        if (widths[side] > 0.0) {
-          colors[side] = EffectiveBorderColor(style, side);
-          styles[side] = 1;
-        }
-      }
-      Dart_Handle shadows = BuildBoxShadowList(style);
-      Dart_Handle gradient = BuildGradientHandle(style);
-      const double radius_tl = EffectiveCornerRadius(style, 0);
-      const double radius_tr = EffectiveCornerRadius(style, 1);
-      const double radius_br = EffectiveCornerRadius(style, 2);
-      const double radius_bl = EffectiveCornerRadius(style, 3);
-      const uint8_t radius_tl_pct = CornerRadiusPercent(style, 0) ? 1 : 0;
-      const uint8_t radius_tr_pct = CornerRadiusPercent(style, 1) ? 1 : 0;
-      const uint8_t radius_br_pct = CornerRadiusPercent(style, 2) ? 1 : 0;
-      const uint8_t radius_bl_pct = CornerRadiusPercent(style, 3) ? 1 : 0;
-      Dart_Handle decorated = newDecoratedBox(
-          node->address, style.background, widths[3], widths[0], widths[1],
-          widths[2], colors[3], colors[0], colors[1], colors[2], styles[3],
-          styles[0], styles[1], styles[2], radius_tl, radius_tl,
-          radius_tr, radius_tr, radius_bl, radius_bl, radius_br, radius_br,
-          radius_tl_pct, radius_tl_pct, radius_tr_pct, radius_tr_pct,
-          radius_bl_pct, radius_bl_pct, radius_br_pct, radius_br_pct,
-          Dart_Null(), 0, 0, 0.0, 0.0,
-          0.0, 0.0, static_cast<uint8_t>(wants_background_image
-                                             ? style.background_repeat
-                                             : 0),
-          static_cast<uint8_t>(wants_background_image ? style.background_fit
-                                                      : 0),
-          0.0, 0.0, 0, 0, gradient, 0, shadows, 0,
-          reinterpret_cast<void*>(&BackgroundImagePaint),
-          reinterpret_cast<void*>(&BackgroundImageCreate),
-          reinterpret_cast<void*>(&BackgroundImageDisposed), nullptr, inner);
-      if (Dart_IsError(decorated)) {
-        ReportDartError("appservice NewDecoratedBox", decorated);
-      } else {
-        inner = decorated;
-        node->decorated_box = decorated;
-        node->decorated_box_p = Dart_NewPersistentHandle(decorated);
-        if (wants_background_image) {
-          g_background_image_nodes[node->address] = node;
-        }
-      }
-    }
-    if (style.opacity < 0.999 ||
-        (style.transition_mask & kTransitionOpacity) != 0) {
-      Dart_Handle opacity = newOpacity(style.opacity, inner);
-      if (Dart_IsError(opacity)) {
-        ReportDartError("appservice NewOpacity", opacity);
-      } else {
-        inner = opacity;
-        node->opacity_widget = opacity;
-        node->opacity_widget_p = Dart_NewPersistentHandle(opacity);
-      }
-    }
-    if (style.clip && g_page != nullptr && g_page->holder != nullptr) {
-      auto* new_clip = reinterpret_cast<NewClipRRectFn>(FindCallback(
-          g_page->holder->ffi_table, kNewClipRRectHash));
-      if (new_clip != nullptr) {
-        const double tl = EffectiveCornerRadius(style, 0);
-        const double tr = EffectiveCornerRadius(style, 1);
-        const double br = EffectiveCornerRadius(style, 2);
-        const double bl = EffectiveCornerRadius(style, 3);
-        const uint8_t tl_pct = CornerRadiusPercent(style, 0) ? 1 : 0;
-        const uint8_t tr_pct = CornerRadiusPercent(style, 1) ? 1 : 0;
-        const uint8_t br_pct = CornerRadiusPercent(style, 2) ? 1 : 0;
-        const uint8_t bl_pct = CornerRadiusPercent(style, 3) ? 1 : 0;
-        Dart_Handle clip = new_clip(
-            0, tl, tl, tr, tr, bl, bl, br, br, tl_pct, tl_pct, tr_pct, tr_pct,
-            bl_pct, bl_pct, br_pct, br_pct, EffectiveBorderWidth(style, 3),
-            EffectiveBorderWidth(style, 0), EffectiveBorderWidth(style, 1),
-            EffectiveBorderWidth(style, 2), inner);
-        if (Dart_IsError(clip)) {
-          ReportDartError("appservice NewClipRRect", clip);
-        } else {
-          inner = clip;
-          node->clip_widget = clip;
-          node->clip_widget_p = Dart_NewPersistentHandle(clip);
-        }
-      }
-    }
+    inner = WrapVisualStyle(node, inner, newDecoratedBox, newOpacity);
+  }
+
+  // SkylineSwiper has no background/border parameters; without this wrapper a
+  // CSS background on the swiper element (`.product-list-wrapper{background:
+  // white}`) never paints, unlike the official engine.
+  if (IsSwiperNode(node)) {
+    inner = WrapVisualStyle(node, inner, newDecoratedBox, newOpacity);
   }
 
   // `concreteWidgetType` drives YGNodeRenderObject.hitTestChildren: containers

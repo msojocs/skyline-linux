@@ -721,6 +721,113 @@ test('appservice ops: scrollview renders clipped content', {
   assert.deepEqual(pixelAt(pixels, 160, 120), [255, 255, 255, 255]);
 });
 
+test('appservice ops: horizontal scroll-view lays items along the scroll axis', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors associated-scroll-view's `<scroll-view scroll-x type="list">`:
+  // the renderer creates the inner `scrollview` element without the user's
+  // `display:flex;flex-direction:row`, so the runtime derives the flow
+  // direction from `scrollX`.  Intrinsic 70x90 items must sit side by side.
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-scroll-horizontal.ops.json');
+  const { result, logs, pixels } = runHost(fixture);
+
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // 70px items with a 50px swatch: red/green/blue/yellow in the viewport.
+  assert.deepEqual(pixelAt(pixels, 35, 35), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 105, 35), [0, 255, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 175, 35), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 245, 35), [255, 255, 0, 255]);
+  // Only the first row is painted; the old column layout stacked them.
+  assert.deepEqual(pixelAt(pixels, 35, 105), [255, 255, 255, 255]);
+});
+
+test('appservice ops: swiper height:auto overrides the builtin 150px base rule', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors `.product-list-wrapper { flex: 1; height: auto; background:
+  // white }` inside a flex row.  The base stylesheet's `swiper{height:150px}`
+  // must lose to the class's `auto`, the swiper must stretch to the row
+  // height, and its CSS background must paint.
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-swiper-auto-height.ops.json');
+  const { result, logs, pixels } = runHost(fixture);
+
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // The 60px cell paints blue at the top of the stretched swiper; the rest of
+  // the swiper box is its red background (not the green parent row).
+  assert.deepEqual(pixelAt(pixels, 160, 10), [0, 0, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 160, 100), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 160, 239), [255, 0, 0, 255]);
+});
+
+test('appservice ops: bold inline price keeps "0.01 起" on one line', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors `<span class="product-price">¥<text style="font-size:16px;
+  // font-weight:bold">0.01</text> 起</span>`.  The glyph approximation must
+  // account for the bold face's wider advances; otherwise the 16px run wraps
+  // inside its own intrinsic-width box.
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-inline-bold-price.ops.json');
+  const { result, logs, pixels } = runHost(fixture, { dpr: 2 });
+
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // Bounding box of the red price ink.  A wrapped "0.01" doubles the ink
+  // height (the "1" drops to a second line); one line is ~16px tall at dpr=1.
+  let minX = Infinity;
+  let maxX = -1;
+  let minY = Infinity;
+  let maxY = -1;
+  for (let y = 0; y < height * 2; y++) {
+    for (let x = 0; x < width * 2; x++) {
+      const [r, g, b] = pixelAt(pixels, x, y);
+      if (r > 180 && g < 90 && b < 90) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  assert.ok(maxX > 0, 'no red price ink was painted');
+  const inkHeight = maxY - minY + 1;
+  assert.ok(inkHeight < 28 * 2,
+    `price wrapped onto two lines (ink height ${inkHeight}px): ` +
+    `x=${minX}..${maxX} y=${minY}..${maxY}`);
+  // The "1" must stay on the same visual line as "0.0".
+  assert.ok(maxX - minX > 40,
+    `price ink is too narrow; the last digit may be missing: ` +
+    `x=${minX}..${maxX}`);
+});
+
 test('appservice ops: ScrollViewUpdateScrollTop scrolls the content', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

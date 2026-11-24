@@ -143,6 +143,10 @@ struct AppStyle {
   float height = -1.0f;
   float width_percent = -1.0f;  // 0..1
   float height_percent = -1.0f;
+  // `width`/`height` were declared by CSS (including `auto`).  Builtin default
+  // sizes (e.g. `swiper{height:150px}`) must not override an explicit `auto`.
+  bool width_declared = false;
+  bool height_declared = false;
   // CSS aspect-ratio (width / height); -1 = none.  The automatic axis is
   // derived from the definite one during layout.
   float aspect_ratio = -1.0f;

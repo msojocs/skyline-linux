@@ -233,7 +233,12 @@ std::string NodeNormalizedText(const AppNode* node) {
 // does not expose that switch, so the wrapping path below uses Flutter's
 // default word wrapping.
 
-double GlyphWidth(uint32_t codepoint, double font_size) {
+double GlyphWidth(uint32_t codepoint, double font_size, int font_weight) {
+  // Flutter FontWeight indices: 3 = w400 (normal), 6 = w700 (bold).  The bold
+  // face's advances are wider (Noto Sans digits go from 0.555em to 0.59em);
+  // ignoring the weight measured bold intrinsic runs (the ¥ price digits)
+  // narrower than they paint, so the paragraph wrapped inside its own box.
+  const bool bold = font_weight >= 6;
   if (codepoint == ' ') return 0.30 * font_size;
   if (codepoint == '\t') return 1.20 * font_size;
   if (codepoint < 0x20) return 0.0;
@@ -241,13 +246,13 @@ double GlyphWidth(uint32_t codepoint, double font_size) {
     if ((codepoint >= '0' && codepoint <= '9') ||
         (codepoint >= 'A' && codepoint <= 'Z') ||
         (codepoint >= 'a' && codepoint <= 'z')) {
-      return 0.56 * font_size;
+      return (bold ? 0.60 : 0.56) * font_size;
     }
     if (codepoint == '.' || codepoint == ',' || codepoint == ':' ||
         codepoint == '\'' || codepoint == ';') {
-      return 0.28 * font_size;
+      return (bold ? 0.33 : 0.28) * font_size;
     }
-    return 0.50 * font_size;
+    return (bold ? 0.53 : 0.50) * font_size;
   }
   return font_size;  // CJK / full width
 }
@@ -294,7 +299,7 @@ double TextIntrinsicWidth(const std::string& text, const AppStyle& style) {
   while (index < text.size()) {
     const uint32_t codepoint = NextCodepoint(text, &index);
     if (codepoint == '\n') continue;
-    width += GlyphWidth(codepoint, style.font_size);
+    width += GlyphWidth(codepoint, style.font_size, style.font_weight);
     if (!std::isnan(style.letter_spacing)) width += style.letter_spacing;
   }
   return width;
@@ -329,7 +334,8 @@ int CountTextLines(const std::string& text, double max_width,
       line_width = 0.0;
       continue;
     }
-    const double glyph = GlyphWidth(codepoint, style.font_size);
+    const double glyph =
+        GlyphWidth(codepoint, style.font_size, style.font_weight);
     if (line_width > 0.0 && line_width + glyph > max_width + 0.01) {
       lines++;
       line_width = 0.0;

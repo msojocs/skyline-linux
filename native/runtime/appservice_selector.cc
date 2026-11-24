@@ -1,6 +1,7 @@
 // CSS selectors, stylesheet parsing and style resolution.
 
 #include "internal/skyline_runtime_module.hh"
+#include "internal/skyline_runtime_node.hh"
 #include "internal/skyline_runtime_selector.hh"
 
 namespace appservice {
@@ -472,11 +473,26 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
     }
   }
   // Builtin swiper defaults from the base stylesheet (`wx-swiper{height:150px}`)
-  // plus the pager's mandatory clipping.
+  // plus the pager's mandatory clipping.  A CSS `height: auto` deliberately
+  // clears the builtin size (`.swiper{height:auto; flex:1}`), so only fall back
+  // to 150px when the page never declared a height at all.
   if (IsSwiperNode(node)) {
     style.clip = true;
-    if (style.height < 0.0f && style.height_percent < 0.0f) {
+    if (!style.height_declared && style.height < 0.0f &&
+        style.height_percent < 0.0f) {
       style.height = 150.0f;
+    }
+  }
+  // Builtin scroll containers lay their children along the scroll axis.  The
+  // renderer creates the inner `scrollview` element without the user's flex
+  // styles (those live on the outer `scroll-view` component wrapper), so a
+  // horizontal scroll-view would otherwise fall back to Skyline's default
+  // column flow and stack its items vertically.
+  if (IsScrollViewName(node->name)) {
+    if (AttrBool(node, "scrollX", false)) {
+      style.row = true;
+    } else if (AttrBool(node, "scrollY", false)) {
+      style.row = false;
     }
   }
   node->style = style;

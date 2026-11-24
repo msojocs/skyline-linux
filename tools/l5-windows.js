@@ -92,6 +92,13 @@ const KNOWN_DIVERGENCES = {
     headroom: 0.005,
     samplesInformational: true,
   },
+  'appservice-inline-bold-price': {
+    note: 'inline span/text defaults come from the DevTools WASkylineStyle base ' +
+      'sheet, which the synthetic ops replay does not carry: the official ' +
+      'engine stacks the runs while the Linux runtime applies its documented ' +
+      'inline defaults, so only the Linux frame is checked',
+    compare: false,
+  },
 };
 
 function missingPrerequisites() {

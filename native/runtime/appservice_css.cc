@@ -1726,9 +1726,11 @@ void ApplyDeclaration(AppStyle* style,
     if (key == "width") {
       style->width = px;
       style->width_percent = percent;
+      style->width_declared = true;
     } else if (key == "height") {
       style->height = px;
       style->height_percent = percent;
+      style->height_declared = true;
     } else if (key == "min-width") {
       style->min_width = px > 0 ? px : 0.0f;
     } else if (key == "max-width") {
