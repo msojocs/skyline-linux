@@ -405,9 +405,11 @@
       else if (opts.alignment === 'center') alignment = 2;
       else if (opts.alignment === 'nearest') alignment = 4;
       if (typeof native.scrollIntoView === 'function') {
+        // N-API `ReadNumber` does not coerce JS booleans; pass 1/0 so the
+        // animated option survives the bridge (scroll-with-animation).
         native.scrollIntoView(
           this.windowId, this.viewTag, targetId,
-          !!opts.withinExtent, !!opts.animated,
+          opts.withinExtent ? 1 : 0, opts.animated ? 1 : 0,
           Number(opts.offset) || 0, alignment);
         return;
       }
