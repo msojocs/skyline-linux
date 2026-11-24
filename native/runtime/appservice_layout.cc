@@ -718,14 +718,23 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     layout.h = measured.h;
     if (style.row) {
       layout.w = std::max(layout.w, MinBoxWidth(child->style));
-      if (stretch_cross) layout.h = std::max(0.0f, content_h);
+      // Align-items:stretch sizes the item's *margin box* to the line, so the
+      // cross-axis margins come out of the stretched height (a `.tab-list`
+      // with `margin: 0 24px` must be 342px wide inside a 390px column).
+      if (stretch_cross) {
+        layout.h = std::max(0.0f, content_h - child->style.margin[0] -
+                                      child->style.margin[2]);
+      }
       layout.margin_main_start = child->style.margin[3];
       layout.margin_main_end = child->style.margin[1];
       layout.margin_cross_start = child->style.margin[0];
       layout.margin_cross_end = child->style.margin[2];
       layout.cross = layout.h;
     } else {
-      if (stretch_cross) layout.w = std::max(0.0f, content_w);
+      if (stretch_cross) {
+        layout.w = std::max(0.0f, content_w - child->style.margin[3] -
+                                      child->style.margin[1]);
+      }
       layout.margin_main_start = child->style.margin[0];
       layout.margin_main_end = child->style.margin[2];
       layout.margin_cross_start = child->style.margin[3];

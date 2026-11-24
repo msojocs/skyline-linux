@@ -232,6 +232,12 @@ Op 流中 `name == "scrollview"` 的节点会调用真实 `NewScrollView`：
 - 传入一个 `kVerticalDrag` 的 `NativeGestureRecognizer` 描述符，并补齐
   `computeContentSize`/scroll 回调的 no-op C 函数（Dart 侧会无条件
   `asFunction()`）。
+- swiper 的 `onScroll` 回调转发为 JS widget 事件
+  `{nodeId, kind:1, value:translatePixels, extra:state, flag:current}`；
+  bootstrap 以 `{detail:{dx, dy, current, state}}` 派发给
+  `onTransition-<viewTag>` 等 worklet。编译后的 `onTransition` 分发器读取
+  `detail.state` 再路由到 start/update/end 处理器，缺少该字段时 worklet
+  不会执行（tab-indicator 的绿条因此不跟随）。
 
 程序化滚动：
 
@@ -476,6 +482,8 @@ WXSS 之前注入，并把 L5 基线关联到同一 wxlib 版本，避免跨版�
 ### 4.3 布局
 
 - 容器默认 `display:flex; flex-direction:column; align-items:stretch`。
+  stretch 按 **margin box** 撑满交叉轴：交叉轴方向的 margin 会从可用尺寸中扣除
+  （`.tab-list { margin: 5px 24px 0 }` 在 390px 页面内宽 342px，而不是 390px）。
 - 两遍布局：先自底向上测量（文本按字号/字符宽度估算，支持换行），再自顶向下
   按 flex/justify/align/margin/padding 分配矩形。
 - `position: absolute/fixed` 子节点不参与 flex 流；在父 content box 上解析

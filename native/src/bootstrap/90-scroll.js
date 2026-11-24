@@ -317,7 +317,9 @@
           try {
             worklet.call(worklet._closure || undefined, {
               type: name === 'onTransition' ? 'transition' : 'scroll',
-              detail: { dx, dy, current: flag },
+              // The compiled `onTransition` dispatcher reads `detail.state`
+              // (then deletes it) to route to the start/update/end handlers.
+              detail: { dx, dy, current: flag, state: extra },
               state: extra,
               timeStamp: Date.now(),
             });

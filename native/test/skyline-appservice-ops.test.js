@@ -2582,6 +2582,68 @@ test('appservice ops: image border-radius clips the bitmap and keeps the border'
   }
 });
 
+test('appservice ops: stretch cross size subtracts cross-axis margins', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors tab-indicator's `.tab-list { margin: 5px 24px 0 }` inside a
+  // column page: align-items:stretch sizes the margin box, so the item is
+  // 320-48=272 wide and starts at x=24 (the tab indicator uses 1/3 of it).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-stretch-margin-'));
+  const fixture = path.join(dir, 'stretch.ops.json');
+  fs.writeFileSync(fixture, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1, css:
+        '.page { width: 320px; height: 240px; } ' +
+        '.col { width: 320px; height: 240px; display: flex; ' +
+        'flex-direction: column; } ' +
+        '.row { margin: 5px 24px 0; height: 50px; display: flex; ' +
+        'flex-direction: row; }' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'addClass', id: 2, prefix: 'page', name: 1 },
+      { op: 'createElement', id: 3, tag: 'empty', name: 'view' },
+      { op: 'addClass', id: 3, prefix: 'col', name: 1 },
+      { op: 'createElement', id: 4, tag: 'empty', name: 'view' },
+      { op: 'addClass', id: 4, prefix: 'row', name: 1 },
+      { op: 'appendChild', id: 3, child: 4 },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs } = runHost(fixture, {
+      timeoutMs: 8000,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    const match = new RegExp(
+      '\\[ops-debug\\] rect #4 left=([-\\d.]+) top=([-\\d.]+) ' +
+      'w=([-\\d.]+) h=([-\\d.]+)').exec(logs);
+    assert.ok(match, `no rect published for node #4:\n${logs}`);
+    assert.equal(Number(match[1]), 24);   // margin-left
+    assert.equal(Number(match[2]), 5);    // margin-top
+    assert.equal(Number(match[3]), 272);  // 320 - 24 - 24
+    assert.equal(Number(match[4]), 50);
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Best effort.
+    }
+  }
+});
+
 test('appservice ops: ForwardHttpGet bridges to RequestHttpResource', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
