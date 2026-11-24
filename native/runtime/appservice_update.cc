@@ -596,7 +596,38 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
   return true;
 }
 
+// Rebuilding the page while a swiper drag/animation is in flight replaces the
+// Swiper widget mid-gesture, which resets its page and can leave the swiper
+// painter blank.  Image responses and setData batches arrive continuously on
+// this page, so defer those rebuilds until the swiper reports scroll end.
+namespace {
+bool g_swiper_gesture_active = false;
+bool g_rebuild_after_gesture = false;
+}  // namespace
+
+void SetSwiperGestureActive(bool active) {
+  g_swiper_gesture_active = active;
+  if (active || !g_rebuild_after_gesture) return;
+  g_rebuild_after_gesture = false;
+  RuntimeHolder* holder = g_page != nullptr ? g_page->holder : nullptr;
+  if (holder == nullptr) return;
+  auto runner = UiTaskRunner();
+  if (!runner) return;
+  // Let SwiperOnChange update the node's `current` attribute before the
+  // rebuilt Swiper reads its initial page.
+  runner->PostDelayedTask(
+      [holder]() {
+        DemoPageApiScope scope;
+        RebuildAppServicePage(holder);
+      },
+      fml::TimeDelta::FromMilliseconds(120));
+}
+
 void RebuildAppServicePage(RuntimeHolder* holder) {
+  if (g_swiper_gesture_active) {
+    g_rebuild_after_gesture = true;
+    return;
+  }
   ClearTransitions();
   if (g_page == nullptr || g_page->root_node == nullptr ||
       g_page->root_connector == nullptr) {

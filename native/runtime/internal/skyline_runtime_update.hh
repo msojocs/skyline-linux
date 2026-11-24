@@ -4,6 +4,8 @@
 #include "skyline_runtime_appservice.hh"
 
 namespace appservice {
+// Suspends page-wide rebuilds while a swiper drag/animation is active.
+void SetSwiperGestureActive(bool active);
 bool IsStructuralOpKind(const char* kind);
 void ClearTransitions();
 void DebugDumpNode(const AppNode* node, int depth);

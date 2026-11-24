@@ -169,6 +169,9 @@ extern "C" void SwiperOnChange(intptr_t ptr, uint32_t page, uint8_t reason) {
 
 extern "C" void SwiperOnScroll(intptr_t ptr, double translate_pixels,
                                uint8_t state, uint32_t current) {
+  // 0/1 = drag start/update, 2 = settle.  Rebuilds are held until settle so an
+  // image response cannot replace the Swiper while the user is swiping it.
+  SetSwiperGestureActive(state != 2);
   const uint32_t id = WidgetNodeId(g_swiper_ids, ptr);
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
     std::fprintf(stderr,

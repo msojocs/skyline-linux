@@ -3939,6 +3939,28 @@ test('appservice ops: isolated inline text wraps at the container width', {
     'short title card keeps one line');
 });
 
+test('appservice ops: swiper current attribute animates to the next page', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-swiper.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 2200,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // The update mirrors the appservice's `current` attribute after a change;
+  // the swiper must animate to the blue page instead of going blank.
+  assert.deepEqual(pixelAt(pixels, 160, 60), [0, 0, 255, 255],
+    'second swiper page is visible');
+  assert.deepEqual(pixelAt(pixels, 20, 20), [0, 0, 255, 255],
+    'first swiper page moved offscreen');
+});
+
 test('appservice ops: box-sizing content-box adds padding and border', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
