@@ -341,6 +341,12 @@ using DispatchTouchEventFn = void (*)(uint8_t type, double x, double y);
 // The kernel declares ScrollViewUpdateScrollTop as (Handle, Float): the
 // argument is a 32-bit float, so passing a double corrupts the value.
 using ScrollViewUpdateScrollTopFn = void (*)(Dart_Handle scroll_view, float top);
+// `ScrollViewUpdateScrollIntoView` scrolls the owning scroll view to a target
+// YGNode, honoring the scroll axis and alignment policy
+// (0 explicit, 1 end, 2 center, 3 start, 4 nearest).
+using ScrollViewUpdateScrollIntoViewFn = void (*)(
+    Dart_Handle scroll_view, Dart_Handle yoga_node, uint8_t within_extent,
+    uint8_t animated, float offset, uint8_t alignment);
 // `ScrollViewUpdateOnScroll*` install the native callbacks that the Dart
 // scroll view invokes when the user scrolls ("Void Function(Handle, Pointer)").
 using ScrollViewUpdateOnScrollFn = void (*)(Dart_Handle scroll_view,
@@ -650,6 +656,7 @@ inline constexpr uint32_t kRequestHttpResourceHash = 670378368u;
 inline constexpr uint32_t kOnForwardHttpGetResponseHash = 663443835u;
 inline constexpr uint32_t kGetNodeFromPointHash = 771509372u;
 inline constexpr uint32_t kScrollViewUpdateScrollTopHash = 390858736u;
+inline constexpr uint32_t kScrollViewUpdateScrollIntoViewHash = 449098045u;
 inline constexpr uint32_t kScrollViewUpdateOnScrollHash = 694938287u;
 inline constexpr uint32_t kScrollViewUpdateOnScrollEndHash = 721422539u;
 inline constexpr uint32_t kScrollViewUpdateOnScrollStartHash = 759191700u;

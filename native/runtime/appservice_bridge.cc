@@ -456,6 +456,25 @@ SKYLINE_EXPORT extern "C" void SkylineScrollNodeTo(uint32_t node_id,
   });
 }
 
+SKYLINE_EXPORT extern "C" void SkylineScrollIntoView(
+    uint32_t scroll_node_id, uint32_t target_node_id, uint8_t within_extent,
+    uint8_t animated, double offset, uint8_t alignment) {
+  fml::RefPtr<fml::TaskRunner> runner;
+  {
+    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
+    if (!g_live_ready) return;
+    runner = g_live_ui_runner;
+  }
+  if (!runner) return;
+  runner->PostTask([scroll_node_id, target_node_id, within_extent, animated,
+                    offset, alignment]() {
+    DemoPageApiScope scope;
+    appservice::ScrollIntoView(scroll_node_id, target_node_id,
+                               within_extent != 0, animated != 0, offset,
+                               alignment);
+  });
+}
+
 SKYLINE_EXPORT extern "C" void SkylineApplyLiveOps(const char* json,
                                                    double /*window_id*/) {
   std::string payload(json != nullptr ? json : "");

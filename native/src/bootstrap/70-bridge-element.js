@@ -392,9 +392,28 @@
     // node, so glass-easel calls these before any child is created; unknown
     // scroll behaviours are inert until the native scroll pipeline needs them.
     setRefresherHeader() {}
-    scrollIntoView(...args) {
+    scrollIntoView(target, options) {
+      const targetId = target && typeof target === 'object'
+        ? target.viewTag : target;
+      const opts = options || {};
+      // SkylineScrollPositionAlignmentPolicy: explicit=0, end=1, center=2,
+      // start=3, nearest=4.  ScrollIntoViewOptions defaults to start.
+      let alignment = 3;
+      if (typeof opts.alignment === 'number') alignment = opts.alignment;
+      else if (opts.alignment === 'explicit') alignment = 0;
+      else if (opts.alignment === 'end') alignment = 1;
+      else if (opts.alignment === 'center') alignment = 2;
+      else if (opts.alignment === 'nearest') alignment = 4;
+      if (typeof native.scrollIntoView === 'function') {
+        native.scrollIntoView(
+          this.windowId, this.viewTag, targetId,
+          !!opts.withinExtent, !!opts.animated,
+          Number(opts.offset) || 0, alignment);
+        return;
+      }
       if (typeof native.log === 'function') {
-        native.log(`scrollIntoView id=${this.viewTag} args=${debugArgs(args)}`);
+        native.log(`scrollIntoView id=${this.viewTag} target=${targetId} ` +
+          `alignment=${alignment}`);
       }
     }
     scrollIntoViewWithinExtent(...args) {

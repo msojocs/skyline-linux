@@ -5,7 +5,10 @@
   // native scroll.  The component tree lives in the app_sub_render realm, so
   // install a small monitor there that watches the owning component's
   // `intoView` data and drives the materialized widget through the addon.
-  let scrollMonitorInstalled = false;
+  // Native `BridgeElement.scrollIntoView` now drives the owning scroll view
+  // (correct axis and alignment).  Keep the old render-realm monitor disabled:
+  // it picked the page's outer scroll view and scrolled vertically.
+  let scrollMonitorInstalled = true;
 
   const SCROLL_MONITOR_SCRIPT = `(function(){
     const parentWindow = window.parent;

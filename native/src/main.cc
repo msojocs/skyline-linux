@@ -23,6 +23,11 @@ extern "C" void SkylineApplyLiveOps(const char* json, double window_id);
 extern "C" int32_t SkylineGetNodeRect(uint32_t node_id, float* out);
 // Scroll a materialized scroll-view node to a vertical offset.
 extern "C" void SkylineScrollNodeTo(uint32_t node_id, double top);
+// Scroll a materialized scroll view until the target node is visible.
+extern "C" void SkylineScrollIntoView(uint32_t scroll_node_id,
+                                      uint32_t target_node_id,
+                                      uint8_t within_extent, uint8_t animated,
+                                      double offset, uint8_t alignment);
 // Install the UI-thread sink that reports scroll start/scroll/end events.
 extern "C" void SkylineSetScrollEventSink(
     void (*sink)(uint32_t node_id, int32_t phase, double scroll_top,
@@ -521,6 +526,38 @@ napi_value ScrollNodeTo(napi_env env, napi_callback_info info) {
 #else
   (void)node_id;
   (void)top;
+#endif
+  return Undefined(env);
+}
+
+// The base library's scroll-view `scroll-into-view` property resolves the
+// target element and calls `node.scrollIntoView(target, options)`.  Forward it
+// to the owning native scroll view so horizontal/vertical scrolling and the
+// center/start/end alignment policy are handled by the Dart widget.
+napi_value ScrollIntoView(napi_env env, napi_callback_info info) {
+  size_t argc = 7;
+  napi_value argv[7] = {nullptr, nullptr, nullptr, nullptr,
+                        nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 7) return Undefined(env);
+  const double scroll_node_id = ReadNumber(env, argv[1]);
+  const double target_node_id = ReadNumber(env, argv[2]);
+  const bool within_extent = ReadNumber(env, argv[3]) != 0.0;
+  const bool animated = ReadNumber(env, argv[4]) != 0.0;
+  const double offset = ReadNumber(env, argv[5]);
+  const double alignment = ReadNumber(env, argv[6]);
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineScrollIntoView(static_cast<uint32_t>(scroll_node_id),
+                        static_cast<uint32_t>(target_node_id),
+                        within_extent ? 1 : 0, animated ? 1 : 0, offset,
+                        static_cast<uint8_t>(alignment));
+#else
+  (void)scroll_node_id;
+  (void)target_node_id;
+  (void)within_extent;
+  (void)animated;
+  (void)offset;
+  (void)alignment;
 #endif
   return Undefined(env);
 }
@@ -1490,6 +1527,7 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "applyPageOps", ApplyPageOps);
   Define(env, bridge, "getNodeRect", GetNodeRect);
   Define(env, bridge, "scrollNodeTo", ScrollNodeTo);
+  Define(env, bridge, "scrollIntoView", ScrollIntoView);
   Define(env, bridge, "dispatchTouch", DispatchTouch);
   Define(env, bridge, "dispatchWheel", DispatchWheel);
   Define(env, bridge, "onWindowRasterized", OnWindowRasterized);

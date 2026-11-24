@@ -232,6 +232,7 @@ names.append("SkylineApplyLiveOps")
 names.append("SkylineGetNodeRect")
 # Scroll-into-view bridge (`scroll-into-view` WXML property).
 names.append("SkylineScrollNodeTo")
+names.append("SkylineScrollIntoView")
 # Scroll event sink (native ScrollViewUpdateOnScroll* -> addon JS thread).
 names.append("SkylineSetScrollEventSink")
 # Swiper/picker/input event + programmatic bridge.

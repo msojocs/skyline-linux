@@ -714,6 +714,42 @@ void ScrollNodeTo(uint32_t node_id, double top) {
   PublishNodeRects();
 }
 
+// Scrolls a materialized scroll view until the target YGNode is visible.  The
+// base library's scroll-view `scroll-into-view` property resolves the target
+// element and calls this on the adapter scroll view; the Dart widget handles
+// both axes and the center/start/end alignment policy.
+void ScrollIntoView(uint32_t scroll_node_id, uint32_t target_node_id,
+                    bool within_extent, bool animated, double offset,
+                    uint8_t alignment) {
+  if (g_page == nullptr || g_page->holder == nullptr) return;
+  AppNode* scroll = FindNode(scroll_node_id);
+  AppNode* target = FindNode(target_node_id);
+  if (scroll == nullptr || target == nullptr ||
+      scroll->scroll_view_p == nullptr || target->yoga_node_p == nullptr) {
+    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] scrollIntoView scroll=#%u target=#%u "
+                   "missing widget\n",
+                   scroll_node_id, target_node_id);
+    }
+    return;
+  }
+  auto* update = reinterpret_cast<ScrollViewUpdateScrollIntoViewFn>(FindCallback(
+      g_page->holder->ffi_table, kScrollViewUpdateScrollIntoViewHash));
+  if (update == nullptr) return;
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] scrollIntoView scroll=#%u target=#%u "
+                 "within=%d animated=%d offset=%g align=%u\n",
+                 scroll_node_id, target_node_id, within_extent ? 1 : 0,
+                 animated ? 1 : 0, offset, static_cast<unsigned>(alignment));
+  }
+  update(Dart_HandleFromPersistent(scroll->scroll_view_p),
+         Dart_HandleFromPersistent(target->yoga_node_p),
+         within_extent ? 1 : 0, animated ? 1 : 0,
+         static_cast<float>(offset), alignment);
+}
+
 void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
                     const std::string& text) {  if (g_page == nullptr || kind == 1 /* key up */) return;
   AppNode* input = FindNode(g_page->focused_input_id);
