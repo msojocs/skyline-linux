@@ -385,8 +385,21 @@ std::vector<AppNode*> OrderedFlowChildren(AppNode* node) {
 // across the full container width.
 bool IsInlineFlowContainer(AppNode* node) {
   if (node == nullptr || node->style.row || node->style.wrap) return false;
+  const std::vector<AppNode*> flow = OrderedFlowChildren(node);
+  // A block whose only flow content is one inline text element behaves like a
+  // text block (`.good-title > text`): keep the stretched-text path so the
+  // text wraps at the container width.  Measuring it as an inline box would
+  // shrink-wrap it to its intrinsic width, which then overflows or clips the
+  // card (and wraps around an underestimate of the real glyph widths).
+  if (flow.size() == 1) {
+    const AppNode* only = flow.front();
+    const bool is_text_element =
+        only->name == "text" || only->name == "span" ||
+        (!only->name.empty() && (only->tag == "text" || only->tag == "span"));
+    if (is_text_element) return false;
+  }
   bool has_inline_element = false;
-  for (AppNode* child : OrderedFlowChildren(node)) {
+  for (AppNode* child : flow) {
     // Raw text nodes (tag "text", no element name) are inline runs, but a
     // text-only container keeps the stretched-text path so text-align applies
     // across the full container width.  `<text>` element wrappers carry a

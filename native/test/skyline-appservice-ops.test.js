@@ -3904,6 +3904,41 @@ test('appservice ops: flex-basis and flex-shrink size items', {
   assert.deepEqual(pixelAt(pixels, 319, 200), [255, 136, 0, 255], 'grow end');
 });
 
+test('appservice ops: isolated inline text wraps at the container width', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-inline-text-wrap.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  assert.equal(result.status, 0,
+    `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // The long card's title is a single `<text>` element inside a 100%-wide
+  // block.  It must wrap at the card width (3 lines) instead of shrink-
+  // wrapping to its intrinsic width and being clipped.
+  assert.deepEqual(pixelAt(pixels, 12, 45), [255, 255, 255, 255],
+    'long title card grows past the first line');
+  assert.deepEqual(pixelAt(pixels, 12, 75), [0, 255, 0, 255],
+    'long title card ends after the wrapped lines');
+  let secondLineInk = 0;
+  for (let y = 31; y < 52; y++) {
+    for (let x = 10; x < 130; x++) {
+      const [r, g, b] = pixelAt(pixels, x, y);
+      if (r < 80 && g < 80 && b < 80) secondLineInk++;
+    }
+  }
+  assert.ok(secondLineInk > 20, `no glyphs on the wrapped line (${secondLineInk})`);
+
+  // The short title stays a one-line box, so the same y is page background.
+  assert.deepEqual(pixelAt(pixels, 152, 45), [0, 255, 0, 255],
+    'short title card keeps one line');
+});
+
 test('appservice ops: box-sizing content-box adds padding and border', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
