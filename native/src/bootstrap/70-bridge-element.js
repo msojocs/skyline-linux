@@ -422,14 +422,14 @@
         native.log(`holdPosition id=${this.viewTag} args=${debugArgs(args)}`);
       }
     }
-    requestRefresherRefresh() {
+    requestRefresherRefresh(open = true) {
       if (typeof native.refresherTriggered === 'function') {
-        native.refresherTriggered(this.windowId, this.viewTag, true, false);
+        native.refresherTriggered(this.windowId, this.viewTag, !!open, false);
       }
     }
-    requestRefresherTwoLevel() {
+    requestRefresherTwoLevel(open = true) {
       if (typeof native.refresherTriggered === 'function') {
-        native.refresherTriggered(this.windowId, this.viewTag, true, true);
+        native.refresherTriggered(this.windowId, this.viewTag, !!open, true);
       }
     }
     getScrollPosition() { return 0; }
