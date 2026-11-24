@@ -2516,6 +2516,72 @@ test('appservice ops: image nodes paint through NewDirectRenderWidget', {
   }
 });
 
+test('appservice ops: image border-radius clips the bitmap and keeps the border', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors associated-scroll-view's category avatar:
+  //   <image class="avatar" mode="aspectFill" src="..."/>
+  //   .avatar { width:50px; height:50px; border-radius:100%;
+  //             border:2px solid white; }
+  // At dpr=1 the 100x100 box is circular; the bitmap must be clipped and the
+  // 2px border must still paint (the clip sits inside the decoration).
+  const resourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-avatar-'));
+  writeQuadBmp(path.join(resourceRoot, 'quad.bmp'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skyline-avatar-ops-'));
+  const fixture = path.join(dir, 'avatar.ops.json');
+  fs.writeFileSync(fixture, JSON.stringify({
+    ops: [
+      { op: 'appendStyleSheet', index: 1, css:
+        '.page { width: 320px; height: 240px; background: #00FF00; } ' +
+        '.avatar { position: absolute; left: 20px; top: 20px; ' +
+        'width: 100px; height: 100px; border-radius: 50%; ' +
+        'border: 2px solid #FFFFFF; }' },
+      { op: 'createElement', id: 2, tag: 'empty', name: 'page' },
+      { op: 'addClass', id: 2, prefix: 'page', name: 1 },
+      { op: 'createElement', id: 3, tag: 'image', name: 'image' },
+      { op: 'addClass', id: 3, prefix: 'avatar', name: 1 },
+      { op: 'setAttributes', id: 3,
+        attrs: { src: 'quad.bmp', mode: 'aspectFill' } },
+      { op: 'appendChild', id: 2, child: 3 },
+      { op: 'createElement', id: 1, tag: 'empty', name: 'body' },
+      { op: 'appendChild', id: 1, child: 2 },
+      { op: 'attach', root: 1 },
+      { op: 'startRender' },
+    ],
+  }));
+  try {
+    const { result, logs, pixels } = runHost(fixture, {
+      env: { SKYLINE_RESOURCE_ROOT: resourceRoot },
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    assert.ok(pixels, 'no frame was captured');
+
+    // Centre of the circle: top-left quadrant of the quad bitmap.
+    assert.deepEqual(pixelAt(pixels, 60, 60), [255, 0, 0, 255]);
+    // Box corner lies outside the 50px radius: the page shows through.
+    assert.deepEqual(pixelAt(pixels, 24, 24), [0, 255, 0, 255]);
+    // The 2px white border ring is painted inside the border box.
+    assert.deepEqual(pixelAt(pixels, 70, 21), [255, 255, 255, 255]);
+    // Just inside the border the clipped bitmap starts.
+    assert.deepEqual(pixelAt(pixels, 60, 24), [255, 0, 0, 255]);
+  } finally {
+    try {
+      fs.rmSync(resourceRoot, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Best effort.
+    }
+  }
+});
+
 test('appservice ops: ForwardHttpGet bridges to RequestHttpResource', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

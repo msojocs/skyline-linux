@@ -433,6 +433,8 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
   （首层 offset/blur/spread/color/inset）。position 支持 1/2/4 值关键字、
   百分比与 px（含 `right 10px`/`bottom 20%`）。显式背景尺寸同样作用于线性
   渐变层；单值 `auto` 保持位图宽高比。
+  `<image>` 是替换元素：`border-radius` 会裁剪位图（分类页的圆形头像），
+  裁剪层位于 `DecoratedBox` 之内，因此 `border` 仍完整绘制。
 - 渐变：`linear-gradient`（方向/角度）、`radial-gradient`（`circle`/`ellipse`、
   `closest-side`/`farthest-side`/`closest-corner`/`farthest-corner`、显式长度、
   `at <position>`；引擎径向着色器使用单半径，`ellipse` 与圆共用同一半径规则）

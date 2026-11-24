@@ -499,6 +499,13 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
       style.row = false;
     }
   }
+  // `<image>` is a replaced element: a CSS border-radius clips the bitmap even
+  // without `overflow: hidden` (circular category avatars).  The image widget
+  // has no radius parameter, so route it through the clip wrapper that
+  // WrapVisualStyle installs for `style.clip`.
+  if (IsImageName(node->name) && HasAnyRadius(style)) {
+    style.clip = true;
+  }
   node->style = style;
   // A running CSS transition writes an interpolated style over the cascade
   // result.  Children inherit from the animated style so text colour/opacity

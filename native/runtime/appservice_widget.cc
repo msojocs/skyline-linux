@@ -561,6 +561,32 @@ Dart_Handle WrapVisualStyle(AppNode* node, Dart_Handle inner,
                           HasAnyRadius(style) || style.has_shadow ||
                           wants_background_image || style.has_gradient ||
                           wants_paint_transition;
+  if (style.clip && g_page != nullptr && g_page->holder != nullptr) {
+    auto* new_clip = reinterpret_cast<NewClipRRectFn>(
+        FindCallback(g_page->holder->ffi_table, kNewClipRRectHash));
+    if (new_clip != nullptr) {
+      const double tl = EffectiveCornerRadius(style, 0);
+      const double tr = EffectiveCornerRadius(style, 1);
+      const double br = EffectiveCornerRadius(style, 2);
+      const double bl = EffectiveCornerRadius(style, 3);
+      const uint8_t tl_pct = CornerRadiusPercent(style, 0) ? 1 : 0;
+      const uint8_t tr_pct = CornerRadiusPercent(style, 1) ? 1 : 0;
+      const uint8_t br_pct = CornerRadiusPercent(style, 2) ? 1 : 0;
+      const uint8_t bl_pct = CornerRadiusPercent(style, 3) ? 1 : 0;
+      Dart_Handle clip = new_clip(
+          0, tl, tl, tr, tr, bl, bl, br, br, tl_pct, tl_pct, tr_pct, tr_pct,
+          bl_pct, bl_pct, br_pct, br_pct, EffectiveBorderWidth(style, 3),
+          EffectiveBorderWidth(style, 0), EffectiveBorderWidth(style, 1),
+          EffectiveBorderWidth(style, 2), inner);
+      if (Dart_IsError(clip)) {
+        ReportDartError("appservice NewClipRRect", clip);
+      } else {
+        inner = clip;
+        node->clip_widget = clip;
+        node->clip_widget_p = Dart_NewPersistentHandle(clip);
+      }
+    }
+  }
   if (has_visual) {
     if (wants_background_image) LoadBackgroundImageForNode(node);
     double widths[4] = {0, 0, 0, 0};
@@ -619,32 +645,6 @@ Dart_Handle WrapVisualStyle(AppNode* node, Dart_Handle inner,
       inner = opacity;
       node->opacity_widget = opacity;
       node->opacity_widget_p = Dart_NewPersistentHandle(opacity);
-    }
-  }
-  if (style.clip && g_page != nullptr && g_page->holder != nullptr) {
-    auto* new_clip = reinterpret_cast<NewClipRRectFn>(
-        FindCallback(g_page->holder->ffi_table, kNewClipRRectHash));
-    if (new_clip != nullptr) {
-      const double tl = EffectiveCornerRadius(style, 0);
-      const double tr = EffectiveCornerRadius(style, 1);
-      const double br = EffectiveCornerRadius(style, 2);
-      const double bl = EffectiveCornerRadius(style, 3);
-      const uint8_t tl_pct = CornerRadiusPercent(style, 0) ? 1 : 0;
-      const uint8_t tr_pct = CornerRadiusPercent(style, 1) ? 1 : 0;
-      const uint8_t br_pct = CornerRadiusPercent(style, 2) ? 1 : 0;
-      const uint8_t bl_pct = CornerRadiusPercent(style, 3) ? 1 : 0;
-      Dart_Handle clip = new_clip(
-          0, tl, tl, tr, tr, bl, bl, br, br, tl_pct, tl_pct, tr_pct, tr_pct,
-          bl_pct, bl_pct, br_pct, br_pct, EffectiveBorderWidth(style, 3),
-          EffectiveBorderWidth(style, 0), EffectiveBorderWidth(style, 1),
-          EffectiveBorderWidth(style, 2), inner);
-      if (Dart_IsError(clip)) {
-        ReportDartError("appservice NewClipRRect", clip);
-      } else {
-        inner = clip;
-        node->clip_widget = clip;
-        node->clip_widget_p = Dart_NewPersistentHandle(clip);
-      }
     }
   }
   return inner;
@@ -785,6 +785,10 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       DeletePersistent(&node->image_widget_p);
       node->image_widget_p = Dart_NewPersistentHandle(widget);
       g_image_nodes[node->address] = node;
+      // `<image>` has no border/paint parameters of its own: the CSS box
+      // (background, border and the border-radius clip) is painted by the
+      // shared visual wrappers.  Without it avatars keep square corners.
+      inner = WrapVisualStyle(node, inner, newDecoratedBox, newOpacity);
     }
   } else if (IsBuilderName(node->name) &&
              ((IsGridBuilderName(node->name) && newGridBuilder != nullptr) ||
