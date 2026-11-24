@@ -279,7 +279,9 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       FindCallback(holder->ffi_table, kTextUpdateTextAlignHash));
   text.max_lines = reinterpret_cast<TextUpdateMaxLinesFn>(
       FindCallback(holder->ffi_table, kTextUpdateMaxLinesHash));
-  if (mark_needs_layout == nullptr) return false;
+  if (mark_needs_layout == nullptr) {
+    return false;
+  }
 
   ResolveStyles(root, nullptr);
   ComputeInlineWhitespace(root);
@@ -347,6 +349,12 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       if (any) {
         if (node->text_span_p == nullptr || node->text_widget_p == nullptr ||
             text.text == nullptr || text.apply == nullptr) {
+          // Update the style baseline even though this node has no text widget
+          // (raw text runs are painted by their owning <text>).  Without this
+          // every transition tick requests another rebuild and the
+          // interpolated transform frames are never presented.
+          node->previous_style = after;
+          node->previous_text = NodeNormalizedText(node);
           rebuild = true;
           continue;
         }
@@ -484,6 +492,21 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
             Dart_HandleFromPersistent(node->opacity_widget_p);
         update_opacity(opacity, after.opacity);
       }
+      if (before.pointer_events_none != after.pointer_events_none) {
+        rects_dirty = true;
+        if (node->yoga_node_p != nullptr && g_page != nullptr &&
+            g_page->holder != nullptr) {
+          auto* update = reinterpret_cast<YGNodeUpdatePointerEventsFn>(
+              FindCallback(g_page->holder->ffi_table,
+                           kYGNodeUpdatePointerEventsHash));
+          if (update != nullptr) {
+            update(Dart_HandleFromPersistent(node->yoga_node_p),
+                   after.pointer_events_none ? 1 : 0);
+          }
+        }
+      }
+      if (before.z_index != after.z_index) rects_dirty = true;
+    }
       // CSS transform updates reuse the existing YGNode.  This also lets a
       // `transform` transition animate without rebuilding the page.
       const bool transform_changed =
@@ -535,26 +558,22 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
                                      &origin_x, &origin_y);
               origin(yoga, origin_x, origin_y, -1.0, -1.0);
             }
+            if (node->tag == "text" && node->text_widget_p != nullptr) {
+              auto* paragraph_mark =
+                  reinterpret_cast<RenderParagraphNativeMarkNeedsLayoutFn>(
+                      FindCallback(
+                          g_page->holder->ffi_table,
+                          kRenderParagraphNativeMarkNeedsLayoutHash));
+              if (paragraph_mark != nullptr) {
+                paragraph_mark(
+                    Dart_HandleFromPersistent(node->text_widget_p));
+              }
+            }
             DeletePersistent(&node->transform_p);
             node->transform_p = Dart_NewPersistentHandle(matrix);
           }
         }
       }
-      if (before.pointer_events_none != after.pointer_events_none) {
-        rects_dirty = true;
-        if (node->yoga_node_p != nullptr && g_page != nullptr &&
-            g_page->holder != nullptr) {
-          auto* update = reinterpret_cast<YGNodeUpdatePointerEventsFn>(
-              FindCallback(g_page->holder->ffi_table,
-                           kYGNodeUpdatePointerEventsHash));
-          if (update != nullptr) {
-            update(Dart_HandleFromPersistent(node->yoga_node_p),
-                   after.pointer_events_none ? 1 : 0);
-          }
-        }
-      }
-      if (before.z_index != after.z_index) rects_dirty = true;
-    }
     if (node->yoga_node_p != nullptr) {
       yoga_nodes.push_back(Dart_HandleFromPersistent(node->yoga_node_p));
     }
@@ -563,13 +582,32 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
       node->previous_text = NodeNormalizedText(node);
     }
   }
-  if (rebuild) return false;
+  if (rebuild) {
+    // A pending rebuild must not postpone a running transform transition:
+    // the interpolated matrices are already applied above, so publish them
+    // and repaint now.  The deferred full rebuild still settles text metrics.
+    if (rects_dirty) PublishNodeRects();
+    if (g_page != nullptr && g_page->root_node != nullptr) {
+      for (Dart_Handle widget : yoga_nodes) mark_needs_layout(widget);
+      mark_needs_layout(Dart_HandleFromPersistent(g_page->root_node));
+    }
+    return false;
+  }
   // Paint-only batch (colour / highlight / opacity): the layout snapshot is
   // still valid, so skip the page-wide measure + layout pass.  An animated
   // transform/pointer-events/z-index change still alters the published rects
   // the appservice hit test reads, so refresh the snapshot in that case.
   if (!layout_needed) {
-    if (rects_dirty) PublishNodeRects();
+    if (rects_dirty) {
+      PublishNodeRects();
+      // Transform changes are paint-only for layout, but the render objects
+      // still need to be invalidated or a CSS transform transition only
+      // shows its final value after the next full rebuild.
+      for (Dart_Handle widget : yoga_nodes) mark_needs_layout(widget);
+      if (g_page != nullptr && g_page->root_node != nullptr) {
+        mark_needs_layout(Dart_HandleFromPersistent(g_page->root_node));
+      }
+    }
     return true;
   }
 

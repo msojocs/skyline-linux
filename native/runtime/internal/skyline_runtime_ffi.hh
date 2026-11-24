@@ -347,6 +347,9 @@ using ScrollViewUpdateScrollTopFn = void (*)(Dart_Handle scroll_view, float top)
 using ScrollViewUpdateScrollIntoViewFn = void (*)(
     Dart_Handle scroll_view, Dart_Handle yoga_node, uint8_t within_extent,
     uint8_t animated, float offset, uint8_t alignment);
+// Invalidates a text widget's paragraph so a paint-only transform update is
+// re-rasterized during a CSS transition.
+using RenderParagraphNativeMarkNeedsLayoutFn = void (*)(Dart_Handle handle);
 // `ScrollViewUpdateOnScroll*` install the native callbacks that the Dart
 // scroll view invokes when the user scrolls ("Void Function(Handle, Pointer)").
 using ScrollViewUpdateOnScrollFn = void (*)(Dart_Handle scroll_view,
@@ -657,6 +660,7 @@ inline constexpr uint32_t kOnForwardHttpGetResponseHash = 663443835u;
 inline constexpr uint32_t kGetNodeFromPointHash = 771509372u;
 inline constexpr uint32_t kScrollViewUpdateScrollTopHash = 390858736u;
 inline constexpr uint32_t kScrollViewUpdateScrollIntoViewHash = 449098045u;
+inline constexpr uint32_t kRenderParagraphNativeMarkNeedsLayoutHash = 748915595u;
 inline constexpr uint32_t kScrollViewUpdateOnScrollHash = 694938287u;
 inline constexpr uint32_t kScrollViewUpdateOnScrollEndHash = 721422539u;
 inline constexpr uint32_t kScrollViewUpdateOnScrollStartHash = 759191700u;
