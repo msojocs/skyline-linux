@@ -10,4 +10,5 @@
 90-scroll.js
 100-json-dispatch.js
 110-global.js
+115-console-filter.js
 120-tail.js

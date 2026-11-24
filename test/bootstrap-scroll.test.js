@@ -24,7 +24,7 @@ const { loadBootstrapSource } = require('./lib/bootstrap-source');
 const repoRoot = path.resolve(__dirname, '..');
 const bootstrapSource = loadBootstrapSource();
 
-function loadBootstrap() {
+function loadBootstrap(options = {}) {
   const sink = { value: null };
   const widgetSink = { value: null };
   const jsonSink = { value: null };
@@ -99,6 +99,7 @@ function loadBootstrap() {
     setInterval() { return { unref() {} }; },
     clearInterval() {},
   };
+  if (options.window) sandbox.window = options.window;
   vm.createContext(sandbox);
   vm.runInContext(bootstrapSource, sandbox, { filename: 'bootstrap.js' });
   return { sandbox, sink, widgetSink, jsonSink, httpSink, httpCompletions, calls, appliedOps };
@@ -912,4 +913,34 @@ test('bootstrap: timing-style worklet animations run onStart/onFrame', () => {
   assert.deepEqual(frames[0], [100, 'number'],
     'onFrame receives the descriptor and a timestamp');
   assert.equal(value.value, 103, 'the shared value follows animation.current');
+});
+
+test('bootstrap: the devtools native-view notice is not reported as a project error', () => {
+  // Skyline's <map>/<canvas> `created` hooks call console.error when the base
+  // library detects the devtools platform.  The node is still a placeholder in
+  // the simulator, so the bootstrap filters only that upstream notice from the
+  // render context console and leaves every other error untouched.
+  const frameErrors = [];
+  const frameConsole = {
+    error(...args) { frameErrors.push(args); },
+  };
+  const frameWindow = { console: frameConsole };
+  const pageWindow = {
+    __global: {
+      contextFrameMaps: new Map([
+        ['app_sub_render', {
+          name: 'app_sub_render',
+          iframe: { contentWindow: frameWindow },
+        }],
+      ]),
+    },
+  };
+  loadBootstrap({ window: pageWindow });
+
+  frameConsole.error('[Component] <map>: 开发者工具暂未支持 Skyline 下的 ' +
+    'canvas 组件调试，请先到真机上预览调试。');
+  frameConsole.error('project-error', { code: 1 });
+
+  assert.deepEqual(frameErrors, [['project-error', { code: 1 }]],
+    'only the upstream native-view notice is filtered');
 });
