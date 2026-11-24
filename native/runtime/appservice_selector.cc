@@ -472,10 +472,14 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
       style.inset_percent[side] = std::nanf("");
     }
   }
-  // Builtin swiper defaults from the base stylesheet (`wx-swiper{height:150px}`)
-  // plus the pager's mandatory clipping.  A CSS `height: auto` deliberately
-  // clears the builtin size (`.swiper{height:auto; flex:1}`), so only fall back
-  // to 150px when the page never declared a height at all.
+  // Builtin swiper defaults from the wxlib base stylesheet
+  // (`swiper{height:150px}` in WASkylineStyle 2.25.3, the vendor package
+  // bundled with DevTools 2.02.2609250; see `npm run wxlib:style`) plus the
+  // pager's mandatory clipping.  The value can change between wxlib versions,
+  // so keep it pinned to the extracted sheet when upgrading the DevTools.  A
+  // CSS `height: auto` deliberately clears the builtin size
+  // (`.swiper{height:auto; flex:1}`), so only fall back to 150px when the page
+  // never declared a height at all.
   if (IsSwiperNode(node)) {
     style.clip = true;
     if (!style.height_declared && style.height < 0.0f &&

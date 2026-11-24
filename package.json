@@ -57,6 +57,7 @@
     "engine:check": "bash native/engine/fetch-engine.sh --check; bash native/engine/build-engine.sh --check",
     "test:all": "npm run native:build && npm test && npm run test:native",
     "ops:record": "node tools/record-skyline-ops.js",
+    "wxlib:style": "node tools/extract-wxlib-style.js",
     "gaps": "node tools/conformance-gaps.js"
   }
 }

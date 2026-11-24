@@ -446,6 +446,31 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
 按 specificity + 源顺序级联，内联 `style` 最后覆盖。字号/颜色/行高/字重等文本
 属性按 CSS 继承规则从父节点继承。后代选择器目前取最后一个复合选择器。
 
+#### 4.2.1 wxlib 基础样式与版本固定
+
+DevTools 的 wxlib 基础样式（`WASkylineStyle` / `WASkylineStyleV2`）不是散落文件，
+而是打包在 `resources/app.asar` → `js/vendor/<version>.wxvpkg` 中。vendor 包
+**独立于 DevTools 版本**：当前 DevTools 2.02.2609250 携带 wxlib 2.25.3
+（`updateTime` 2022.8.17）。不同 wxlib 版本的内置组件样式
+（`swiper{height:150px}`、`scroll-view{width:100%}`、`wx-button` 等）可能不同，
+因此任何使用该表的实现或像素基线都必须固定并记录版本：
+
+```bash
+npm run wxlib:style                 # 提取最新 vendor 包
+npm run wxlib:style -- --list       # 列出 asar 内全部版本（含 updateTime）
+npm run wxlib:style -- --vendor 2.25.3
+```
+
+输出在 `tmp/wxlib-style/<version>/`（已被 `.gitignore` 忽略）：
+`manifest.json` 记录 wxlib 版本、`updateTime`、DevTools 版本、来源 wxvpkg、
+每个文件的 sha256；同目录下是解码后的 `WASkylineStyle.css`、
+`WASkylineStyleV2.css` 以及原始 `.css.js` / `.fpcssb`。
+
+该表只包含 wxlib 内置组件样式，不包含 `span`/`text { display:inline }` 这类
+WXML 元素默认值——内联语义由回放层按 Skyline 默认补充。接入该表时应在页面
+WXSS 之前注入，并把 L5 基线关联到同一 wxlib 版本，避免跨版本像素差异被误判为
+回归。
+
 ### 4.3 布局
 
 - 容器默认 `display:flex; flex-direction:column; align-items:stretch`。
