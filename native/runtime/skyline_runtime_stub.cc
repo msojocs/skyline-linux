@@ -602,12 +602,107 @@ SKYLINE_EXPORT extern "C" int32_t ShouldAcceptGesture(void* /*runtime*/,
     std::fprintf(stderr, "[skyline-runtime] ShouldAcceptGesture: %d -> 1\n",
                  handler_id);
   }
-  // No JS gesture arbitration in the replay; accept the Flutter recognizer.
+  // `worklet:should-accept-gesture` is not replayed: accept the recognizer.
   return 1;
 }
 
+#ifdef SKYLINE_EMBEDDED
+namespace {
+
+// NativeOriginalPointerEvent layout
+// (package:skyline/gestures/pointer_event.dart): int64 identifier, char* type,
+// then double deltaX, deltaY, localX, localY, clientX, clientY, radiusX,
+// radiusY, rotationAngle, force, tilt and an int64 timeStamp.
+constexpr size_t kPointerDeltaXOffset = 16;
+constexpr size_t kPointerDeltaYOffset = 24;
+
+double ReadNativePointerDouble(const void* event, size_t offset) {
+  double value = 0.0;
+  std::memcpy(&value, static_cast<const char*>(event) + offset, sizeof(value));
+  return value;
+}
+
+// The official renderer answers `worklet:should-response-on-move` from JS.
+// The replay cannot call into the renderer bundle synchronously, so the common
+// nested pattern is decided natively: a scroll view inside a swiper yields
+// when it is already at the edge in the drag direction and the swiper still
+// has a page there (the associated-scroll-view tab linkage).
+bool ScrollViewYieldsToSwiper(int32_t handler_id, double dx, double dy) {
+  if (appservice::g_page == nullptr) return false;
+  appservice::AppNode* scroll =
+      appservice::FindNode(static_cast<uint32_t>(handler_id));
+  if (scroll == nullptr || scroll->released ||
+      !appservice::IsScrollViewName(scroll->name)) {
+    return false;
+  }
+  appservice::AppNode* swiper = nullptr;
+  for (appservice::AppNode* parent = scroll->parent; parent != nullptr;
+       parent = parent->parent) {
+    if (appservice::IsSwiperNode(parent)) {
+      swiper = parent;
+      break;
+    }
+  }
+  if (swiper == nullptr || swiper->children.empty()) return false;
+  const bool swiper_vertical = appservice::AttrBool(swiper, "vertical", false);
+  const bool scroll_vertical = appservice::AttrBool(scroll, "scrollY", false);
+  if (swiper_vertical != scroll_vertical) return false;
+
+  const double offset =
+      swiper_vertical ? appservice::AttrNumber(scroll, "scrollTop", 0.0)
+                      : appservice::AttrNumber(scroll, "scrollLeft", 0.0);
+  const double total =
+      swiper_vertical ? appservice::AttrNumber(scroll, "scrollHeight", 0.0)
+                      : appservice::AttrNumber(scroll, "scrollWidth", 0.0);
+  const double viewport =
+      swiper_vertical ? scroll->measured_h : scroll->measured_w;
+  const double delta = swiper_vertical ? dy : dx;
+  if (delta == 0.0 || viewport <= 0.0) return false;
+  // Before the first scroll event the content extent is unknown; the builtin
+  // starts from `viewport + 1` and the user worklet treats it as not at the
+  // bottom.  Respond so the list scrolls and publishes its real extent.
+  if (total <= 0.0) return false;
+
+  const bool scrollable = total > viewport + 0.5;
+  const int current =
+      static_cast<int>(appservice::AttrNumber(swiper, "current", 0.0));
+  const int pages = static_cast<int>(swiper->children.size());
+  const bool circular = appservice::AttrBool(swiper, "circular", false);
+  const bool at_start = !scrollable || offset <= 0.5;
+  const bool at_end = !scrollable || offset + viewport >= total - 0.5;
+  const bool can_previous = circular || current > 0;
+  const bool can_next = circular || current < pages - 1;
+  const bool yield =
+      (delta > 0.0 && at_start && can_previous) ||
+      (delta < 0.0 && at_end && can_next);
+  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] ShouldGestureResponse: scroll #%u -> "
+                 "swiper #%u offset=%g total=%g viewport=%g delta=%g "
+                 "page=%d/%d yield=%d\n",
+                 scroll->id, swiper->id, offset, total, viewport, delta,
+                 current, pages, yield ? 1 : 0);
+  }
+  return yield;
+}
+
+}  // namespace
+#endif  // SKYLINE_EMBEDDED
+
 SKYLINE_EXPORT extern "C" int32_t ShouldGestureResponse(
-    void* /*runtime*/, int32_t handler_id, void* /*native_event*/) {
+    void* /*runtime*/, int32_t handler_id, void* native_event) {
+#ifdef SKYLINE_EMBEDDED
+  if (native_event != nullptr) {
+    const double dx =
+        ReadNativePointerDouble(native_event, kPointerDeltaXOffset);
+    const double dy =
+        ReadNativePointerDouble(native_event, kPointerDeltaYOffset);
+    if (ScrollViewYieldsToSwiper(handler_id, dx, dy)) return 0;
+  }
+#else
+  (void)handler_id;
+  (void)native_event;
+#endif
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
     std::fprintf(stderr, "[skyline-runtime] ShouldGestureResponse: %d -> 1\n",
                  handler_id);

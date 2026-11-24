@@ -31,9 +31,13 @@ struct NativeGestureRecognizerNative {
   uint32_t simult_handler_tag_num;
 };
 
-extern const NativeGestureRecognizerNative g_scroll_recognizers[];
-extern const NativeGestureRecognizerNative g_swiper_horizontal_recognizer[];
-extern const NativeGestureRecognizerNative g_swiper_vertical_recognizer[];
+// The handler id is the owning node's id.  `ShouldGestureResponse` receives it
+// back from package:skyline and uses it to match the JS gesture-handler entry
+// (whose host node carries the same viewTag) and the node tree.
+NativeGestureRecognizerNative MakeScrollGestureRecognizer(uint32_t handler_id,
+                                                          bool horizontal);
+NativeGestureRecognizerNative MakeSwiperGestureRecognizer(uint32_t handler_id,
+                                                          bool vertical);
 
 // Flutter invokes these `extern "C"` trampolines through the recognizer
 // pointers passed by appservice_widget.cc.

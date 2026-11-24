@@ -779,6 +779,55 @@ test('appservice ops: swiper height:auto overrides the builtin 150px base rule',
   assert.deepEqual(pixelAt(pixels, 160, 239), [255, 0, 0, 255]);
 });
 
+test('appservice ops: scroll-view at its edge yields the drag to the parent swiper', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors associated-scroll-view: a vertical swiper whose current page is a
+  // scroll-view.  Once the list is at the bottom, an upward drag must not be
+  // consumed by the scroll-view; ShouldGestureResponse reports the yield and
+  // package:skyline lets the swiper's own drag recognizer page.
+  const fixture = path.join(
+    repoRoot, 'test', 'fixtures', 'appservice-swiper-scroll-yield.ops.json');
+  const script = path.join(
+    os.tmpdir(), `skyline-swiper-yield-${process.pid}.txt`);
+  fs.writeFileSync(script, [
+    '1400 down 160 200 1',
+    '1430 move 160 160 1',
+    '1460 move 160 120 1',
+    '1490 move 160 80 1',
+    '1520 move 160 40 1',
+    '1550 up 160 40 1',
+    '',
+  ].join('\n'));
+  try {
+    const { result, logs } = runHost(fixture, {
+      timeoutMs: 3000,
+      frames: 0,
+      env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+      args: ['--pointer-script', script],
+    });
+    if (logs.includes('engine artifacts missing')) {
+      if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+        assert.fail(`engine is required but not built:\n${logs}`);
+      }
+      return;
+    }
+    assert.equal(result.status, 0,
+      `skyline_host failed (status ${result.status}):\n${logs}`);
+    // The fixture scrolls the list to its bottom before the drag.
+    assert.match(logs, /ShouldGestureResponse: scroll #5 -> swiper #3 /);
+    assert.match(logs, /ShouldGestureResponse: scroll #5 -> swiper #3 .*yield=1/);
+    assert.match(logs, /swiper change: id=3 page=1/);
+  } finally {
+    try {
+      fs.rmSync(script, { force: true });
+    } catch {
+      // Best effort.
+    }
+  }
+});
+
 test('appservice ops: bold inline price keeps "0.01 起" on one line', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,
@@ -882,9 +931,10 @@ test('appservice ops: host drag gesture scrolls the scroll view', {
     }
     assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
     // The Skyline vertical-drag recognizer wins the arena (ShouldAcceptGesture /
-    // ShouldGestureResponse) and feeds the scroll position.
-    assert.match(logs, /ShouldGestureResponse: 1 -> 1/);
-    assert.match(logs, /ShouldAcceptGesture: 1 -> 1/);
+    // ShouldGestureResponse) and feeds the scroll position.  Recognizer handler
+    // ids are the owning node ids (#3 is the scrollview).
+    assert.match(logs, /ShouldGestureResponse: 3 -> 1/);
+    assert.match(logs, /ShouldAcceptGesture: 3 -> 1/);
     assert.match(logs,
       /scroll callbacks installed #3 \(start=1 scroll=1 end=1\)/);
     assert.match(logs, /scroll start\/end: top=0 .*drag=1/);

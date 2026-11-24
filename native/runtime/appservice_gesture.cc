@@ -14,20 +14,27 @@ namespace appservice {
 // estimation or scroll notifications yet, but `newScrollView` calls
 // `asFunction()` on every pointer unconditionally, so they must be valid.
 const char kScrollVerticalTag[] = "skyline-scroll-vertical";
-// GestureType.kVerticalDrag == 6 in package:skyline's enum.
-extern const NativeGestureRecognizerNative g_scroll_recognizers[] = {
-    {1u, 6u, kScrollVerticalTag, nullptr, 0u},
-};
-
+const char kScrollHorizontalTag[] = "skyline-scroll-horizontal";
 const char kSwiperHorizontalTag[] = "skyline-swiper-horizontal";
 const char kSwiperVerticalTag[] = "skyline-swiper-vertical";
-// GestureType.kHorizontalDrag == 7, kVerticalDrag == 6.
-extern const NativeGestureRecognizerNative g_swiper_horizontal_recognizer[] = {
-    {2u, 7u, kSwiperHorizontalTag, nullptr, 0u},
-};
-extern const NativeGestureRecognizerNative g_swiper_vertical_recognizer[] = {
-    {3u, 6u, kSwiperVerticalTag, nullptr, 0u},
-};
+
+// GestureType.kVerticalDrag == 6, kHorizontalDrag == 7 in package:skyline.
+// The handler id is the node id, so `ShouldGestureResponse(handler_id)` can
+// look the node up and the JS gesture-handler proxy (host node viewTag) can
+// find its `shouldResponseOnMove` worklet.
+NativeGestureRecognizerNative MakeScrollGestureRecognizer(uint32_t handler_id,
+                                                          bool horizontal) {
+  return NativeGestureRecognizerNative{
+      handler_id, horizontal ? 7u : 6u,
+      horizontal ? kScrollHorizontalTag : kScrollVerticalTag, nullptr, 0u};
+}
+
+NativeGestureRecognizerNative MakeSwiperGestureRecognizer(uint32_t handler_id,
+                                                          bool vertical) {
+  return NativeGestureRecognizerNative{
+      handler_id, vertical ? 6u : 7u,
+      vertical ? kSwiperVerticalTag : kSwiperHorizontalTag, nullptr, 0u};
+}
 
 extern "C" double ScrollNoopContentSize(intptr_t, int32_t, int32_t, double,
                                        double) {
@@ -65,6 +72,13 @@ void DispatchScrollEvent(intptr_t ptr, int32_t phase, double top, double left,
       node->attrs["scrollTop"] = buffer;
       std::snprintf(buffer, sizeof(buffer), "%g", left);
       node->attrs["scrollLeft"] = buffer;
+      // Content extents: the edge check in ShouldGestureResponse compares
+      // scrollTop + viewport against these (they are the ScrollEvent's
+      // scrollWidth/scrollHeight arguments, not the viewport size).
+      std::snprintf(buffer, sizeof(buffer), "%g", width);
+      node->attrs["scrollWidth"] = buffer;
+      std::snprintf(buffer, sizeof(buffer), "%g", height);
+      node->attrs["scrollHeight"] = buffer;
       // Published rects are viewport coordinates; republish so hit testing and
       // selector queries follow the scroll (grid cards must stay tappable).
       PublishNodeRects();

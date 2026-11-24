@@ -904,8 +904,10 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     }
     const std::string easing = AttrText(node, "easingFunction", "default");
     Dart_Handle easing_handle = Dart_NewStringFromCString(easing.c_str());
-    const auto* recognizers = vertical ? g_swiper_vertical_recognizer
-                                       : g_swiper_horizontal_recognizer;
+    // The handler id is the node id; package:skyline reports it back through
+    // ShouldGestureResponse so the nested scroll view can yield at its edges.
+    NativeGestureRecognizerNative recognizer =
+        MakeSwiperGestureRecognizer(node->id, vertical);
     Dart_Handle swiper = newSwiper(
         node->address, 0 /* layoutType */, 0 /* transformerType */,
         0 /* indicatorType */, AttrBool(node, "indicatorDots", false) ? 1 : 0,
@@ -925,7 +927,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         AttrBool(node, "snapToEdge", false) ? 1 : 0,
         static_cast<float>(previous_margin),
         static_cast<float>(next_margin),
-        const_cast<NativeGestureRecognizerNative*>(recognizers), 1,
+        const_cast<NativeGestureRecognizerNative*>(&recognizer), 1,
         reinterpret_cast<void*>(&SwiperOnChange),
         reinterpret_cast<void*>(&SwiperOnScroll), children);
     if (Dart_IsError(swiper)) {
@@ -1134,12 +1136,14 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       if (newScrollView != nullptr && !Dart_IsError(inner)) {
         Dart_Handle children = Dart_NewList(1);
         Dart_ListSetAt(children, 0, inner);
+        NativeGestureRecognizerNative recognizer =
+            MakeScrollGestureRecognizer(node->id, false);
         Dart_Handle scroll = newScrollView(
             node->address, node->id, 3 /* ScrollViewType.custom */, 0, 1, 0.0,
             0.0, 0, 50.0, 50.0, 0, 0.0, 0u, 0, 0, 0, 0, 0, 0, 0, 150.0, 80.0,
             1,
             1, 0, 0, 0, 0.0,
-            const_cast<NativeGestureRecognizerNative*>(g_scroll_recognizers), 1,
+            const_cast<NativeGestureRecognizerNative*>(&recognizer), 1,
             Dart_Null(), 0, 0.0, style.padding[0], style.padding[1],
             style.padding[2], style.padding[3], 0, 0, 1, 0,
             reinterpret_cast<void*>(&ScrollNoopContentSize),
@@ -1405,6 +1409,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         } else if (refresher_style == "none") {
           refresher_style_index = 2;
         }
+        NativeGestureRecognizerNative recognizer =
+            MakeScrollGestureRecognizer(node->id, scroll_x_attr);
         Dart_Handle scroll = newScrollView(
             node->address, node->id, scroll_type, scroll_x_attr ? 1 : 0,
             scroll_y_attr ? 1 : 0, AttrNumber(node, "scrollTop", 0.0),
@@ -1423,7 +1429,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             AttrNumber(node, "twoLevelCloseThreshold", 80.0),
             AttrBool(node, "scrollEnabled", true) ? 1 : 0,
             AttrBool(node, "bounces", true) ? 1 : 0, 0, 0, 0, 0.0,
-            const_cast<NativeGestureRecognizerNative*>(g_scroll_recognizers), 1,
+            const_cast<NativeGestureRecognizerNative*>(&recognizer), 1,
             Dart_Null(), 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
             0 /* paint order */, 1 /* scrollAnchoring */,
             0 /* innerCorrectionMode */,

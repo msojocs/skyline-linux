@@ -607,6 +607,13 @@ npm run test:ops
   （z，px）会折叠进变换矩阵 `T(0,0,z)·M·T(0,0,-z)` 形成 3D 枢轴。
 - `position: fixed` 在页面构建时提升到根连接器，因此滚动祖先不会移动它；
   insets 按 viewport 解析。
+- 手势仲裁：原生 recognizer 的 handler id 使用所属节点 id（与渲染层
+  gesture-handler 的 host viewTag 一致）。官方引擎通过
+  `worklet:should-response-on-move` / `should-accept-gesture` 让 JS 决定
+  scroll-view 与 swiper 的竞争；回放层无法从 Dart UI 线程同步调用 JS，因此
+  对“滚动视图位于同轴 swiper 内、已在滚动方向上到达边界且 swiper 还有目标页”
+  的常见联动做了原生判定并让出拖拽（`ShouldGestureResponse` 返回 0），其余
+  情况返回 1；`should-accept-gesture` 仍一律返回 1。
 - builder 已按需 mount，并支持 attach 后的二次变更：
   `UpdateChildCount/ChildHeight/CrossAxisCount/...`、item 内容
   `ItemUpdateChildren`、index `ItemUpdateIndex`、`UpdateChildren`、
