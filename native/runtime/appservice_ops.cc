@@ -62,6 +62,10 @@ void ApplyNodeAttribute(AppNode* node, const char* name,
   } else if (node->scroll_view_p != nullptr &&
              std::strcmp(name, "refresherTriggered") == 0) {
     SetRefresherTriggered(node->id, flag, false);
+  } else if (node->scroll_view_p != nullptr &&
+             (std::strcmp(name, "refresherTwoLevelTriggered") == 0 ||
+              std::strcmp(name, "twoLevelTriggered") == 0)) {
+    SetRefresherTriggered(node->id, flag, true);
   } else if (node->snapshot_p != nullptr && g_page != nullptr &&
              g_page->holder != nullptr &&
              std::strcmp(name, "allowSnapshotting") == 0) {

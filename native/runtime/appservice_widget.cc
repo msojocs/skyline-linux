@@ -1458,6 +1458,22 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         }
         NativeGestureRecognizerNative recognizer =
             MakeScrollGestureRecognizer(node->id, scroll_x_attr);
+        // The base library prefixes the two-level refresher attributes with
+        // `refresher` (`refresherTwoLevelEnabled` / `...Triggered`); accept the
+        // short names too so both the appservice ops and the public widget
+        // API drive the native scroll view.
+        const bool two_level_enabled =
+            AttrBool(node, "refresherTwoLevelEnabled",
+                     AttrBool(node, "twoLevelEnabled", false));
+        const bool two_level_triggered =
+            AttrBool(node, "refresherTwoLevelTriggered",
+                     AttrBool(node, "twoLevelTriggered", false));
+        const double two_level_threshold =
+            AttrNumber(node, "refresherTwoLevelThreshold",
+                       AttrNumber(node, "twoLevelThreshold", 150.0));
+        const double two_level_close_threshold =
+            AttrNumber(node, "refresherTwoLevelCloseThreshold",
+                       AttrNumber(node, "twoLevelCloseThreshold", 80.0));
         Dart_Handle scroll = newScrollView(
             node->address, node->id, scroll_type, scroll_x_attr ? 1 : 0,
             scroll_y_attr ? 1 : 0, AttrNumber(node, "scrollTop", 0.0),
@@ -1470,10 +1486,10 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                              0u),
             refresher_style_index,
             AttrBool(node, "refresherTriggered", false) ? 1 : 0, 0, 0, 0,
-            AttrBool(node, "twoLevelEnabled", false) ? 1 : 0,
-            AttrBool(node, "twoLevelTriggered", false) ? 1 : 0,
-            AttrNumber(node, "twoLevelThreshold", 150.0),
-            AttrNumber(node, "twoLevelCloseThreshold", 80.0),
+            two_level_enabled ? 1 : 0,
+            two_level_triggered ? 1 : 0,
+            two_level_threshold,
+            two_level_close_threshold,
             AttrBool(node, "scrollEnabled", true) ? 1 : 0,
             AttrBool(node, "bounces", true) ? 1 : 0, 0, 0, 0, 0.0,
             const_cast<NativeGestureRecognizerNative*>(&recognizer), 1,
