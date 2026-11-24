@@ -369,12 +369,16 @@ int EffectiveAlign(const AppStyle& parent, const AppStyle& child) {
 // Flow children in CSS `order` order (stable for equal order values).
 std::vector<AppNode*> OrderedFlowChildren(AppNode* node) {
   std::vector<AppNode*> flow;
+  const bool scroll_view_wrapper = IsScrollViewComponentWrapper(node);
   for (AppNode* child : node->children) {
     if (child == nullptr || child->released || child->style.display_none ||
         (child->style.position != 0 && child->style.position != 3 &&
          child->style.position != 4)) {
       continue;
     }
+    // The custom refresher header is hosted by the scroll view itself; it must
+    // not participate in the wrapper's flex layout.
+    if (scroll_view_wrapper && IsRefresherHeaderNode(child)) continue;
     flow.push_back(child);
   }
   std::stable_sort(flow.begin(), flow.end(),
@@ -821,6 +825,18 @@ const AppNode* AdapterScrollViewChild(const AppNode* node) {
 
 bool IsScrollViewComponentWrapper(const AppNode* node) {
   return AdapterScrollViewChild(node) != nullptr;
+}
+
+// The base library projects the WXML `<view slot="refresher">` content as a
+// direct child of the `scroll-view` component host and marks it with
+// `id="refresher"`.  It is the custom refresher header consumed by
+// NewScrollView, not ordinary page content.
+bool IsRefresherHeaderNode(const AppNode* node) {
+  if (node == nullptr) return false;
+  auto slot = node->attrs.find("slot");
+  if (slot != node->attrs.end() && slot->second == "refresher") return true;
+  auto id = node->attrs.find("id");
+  return id != node->attrs.end() && id->second == "refresher";
 }
 
 // Sliver containers (sticky sections) sit between a scroll view and the

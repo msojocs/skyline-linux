@@ -1189,6 +1189,11 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       }
       for (AppNode* child : node->children) {
         if (child->released || child->style.display_none) continue;
+        // The custom refresher header is passed to the inner `scrollview` as
+        // NewScrollView's refresherHeader, not rendered as a wrapper sibling.
+        if (IsScrollViewComponentWrapper(node) && IsRefresherHeaderNode(child)) {
+          continue;
+        }
         // position:fixed is promoted to the page root connector so scrolling
         // ancestors do not move it.
         if (DeferFixedChild(child)) continue;
@@ -1413,6 +1418,44 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         } else if (refresher_style == "none") {
           refresher_style_index = 2;
         }
+        // A custom refresher header (`<view slot="refresher">`) is a sibling of
+        // the adapter `scrollview` on the component wrapper.  The base library
+        // passes it to NewScrollView as the refresherHeader widget; rendering it
+        // as ordinary content pushes the whole page below the header.
+        Dart_Handle refresher_header = Dart_Null();
+        if (node->parent != nullptr) {
+          for (AppNode* sibling : node->parent->children) {
+            if (sibling == nullptr || sibling == node || sibling->released ||
+                sibling->style.display_none ||
+                !IsRefresherHeaderNode(sibling)) {
+              continue;
+            }
+            if (node->measured_w > 0.0f) {
+              MeasureNode(sibling, node->measured_w, true, kInf, false);
+            }
+            std::vector<NodeMetric> header_metrics;
+            LayoutNode(sibling, 0.0f, 0.0f, sibling->measured_w,
+                       sibling->measured_h, &header_metrics, sibling->abs_x,
+                       sibling->abs_y);
+            sibling->sliver_layout = true;
+            WriteLayoutMetrics(header_metrics);
+            Dart_Handle header_widget = BuildWidget(
+                sibling, newYGNode, newYGConnector, newText, newTextSpan,
+                newDecoratedBox, newOpacity, newScrollView, newListView,
+                newGridView, newDirectRenderWidget, newListBuilder,
+                newGridBuilder, true);
+            if (header_widget != nullptr && !Dart_IsError(header_widget) &&
+                !Dart_IsNull(header_widget)) {
+              refresher_header = header_widget;
+              if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+                std::fprintf(stderr,
+                             "[ops-debug] scrollview #%u refresher header #%u\n",
+                             node->id, sibling->id);
+              }
+            }
+            break;
+          }
+        }
         NativeGestureRecognizerNative recognizer =
             MakeScrollGestureRecognizer(node->id, scroll_x_attr);
         Dart_Handle scroll = newScrollView(
@@ -1434,7 +1477,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             AttrBool(node, "scrollEnabled", true) ? 1 : 0,
             AttrBool(node, "bounces", true) ? 1 : 0, 0, 0, 0, 0.0,
             const_cast<NativeGestureRecognizerNative*>(&recognizer), 1,
-            Dart_Null(), 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
+            refresher_header, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
             0 /* paint order */, 1 /* scrollAnchoring */,
             0 /* innerCorrectionMode */,
             reinterpret_cast<void*>(&ScrollNoopContentSize),

@@ -25,6 +25,7 @@ bool IsListViewName(const std::string& name);
 bool IsPickerViewColumnNode(const AppNode* node);
 bool IsScrollViewComponentWrapper(const AppNode* node);
 bool IsScrollViewName(const std::string& name);
+bool IsRefresherHeaderNode(const AppNode* node);
 bool IsSelectionNode(const AppNode* node);
 bool IsShareElementNode(const AppNode* node);
 bool IsSwiperNode(const AppNode* node);
