@@ -1,0 +1,21 @@
+{
+ "ops": [
+  { "op": "appendStyleSheet", "index": 1,
+    "css": ".page{width:320px;height:240px;background:#FFFFFF;} .bar{width:320px;height:50px;display:flex;background:#FFFFFF;} .a{width:100px;height:50px;background:#FF0000;} .b{width:100px;height:50px;background:#0000FF;}" },
+  { "op": "createElement", "id": 1, "tag": "empty", "name": "body" },
+  { "op": "createElement", "id": 2, "tag": "wx-x", "name": "page" },
+  { "op": "addClass", "id": 2, "prefix": "page", "name": 1 },
+  { "op": "createElement", "id": 3, "tag": "view", "name": "view" },
+  { "op": "addClass", "id": 3, "prefix": "bar", "name": 1 },
+  { "op": "createElement", "id": 4, "tag": "view", "name": "view" },
+  { "op": "addClass", "id": 4, "prefix": "a", "name": 1 },
+  { "op": "createElement", "id": 5, "tag": "view", "name": "view" },
+  { "op": "addClass", "id": 5, "prefix": "b", "name": 1 },
+  { "op": "appendChild", "id": 3, "child": 4 },
+  { "op": "appendChild", "id": 3, "child": 5 },
+  { "op": "appendChild", "id": 2, "child": 3 },
+  { "op": "appendChild", "id": 1, "child": 2 },
+  { "op": "attach", "root": 1 },
+  { "op": "startRender" }
+ ]
+}

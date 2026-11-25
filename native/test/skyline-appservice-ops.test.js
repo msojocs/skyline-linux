@@ -506,6 +506,37 @@ test('appservice ops: defaultContentBox renderer flag stacks height and padding'
   assert.deepEqual(pixelAt2(600, 184), [0, 0, 255, 255]);
 });
 
+test('appservice ops: flex items clamp their cross size to the line', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors app-bar's navigation bar: `.nav{display:flex}` (column),
+  // `.inner{width:100vw; padding-right}` and a flex:1 centre.  The official
+  // Windows engine clamps the oversized flex item's border box to the line
+  // width, so the centre spans 96..240 (not 96..320) and the title sits where
+  // the real DevTools puts it.  Verified pixel-identically by
+  // `appservice-content-box-nav` in test:l5:windows.
+  const fixture = path.join(repoRoot, 'test', 'fixtures',
+    'appservice-content-box-nav.ops.json');
+  const { result, logs } = runHost(fixture, {
+    env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+  });
+
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  // Content-box height: 42 + 47 padding.
+  assert.match(logs, /rect #4 left=0 top=0 w=320 h=89/);
+  // Left slot width 80 + padding-left 16.
+  assert.match(logs, /rect #5 left=0 top=47 w=96 h=42/);
+  // Centre clamped to the line: 320 - 80 padding - 96 left slot = 144.
+  assert.match(logs, /rect #6 left=96 top=47 w=144 h=42/);
+});
+
 test('appservice ops: descendant selectors respect their ancestor compound', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

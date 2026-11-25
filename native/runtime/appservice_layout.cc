@@ -435,12 +435,15 @@ float ResolveFlexBasis(const AppStyle& style,
   return std::max(0.0f, basis);
 }
 
-// Explicit `flex-shrink` opts into CSS shrinking.  Unset items keep the
-// replay's historical non-shrinking behaviour; scroll content must never be
-// shrunk because the scroll viewport is smaller than its content.
-float EffectiveFlexShrink(const AppStyle& style, bool in_scroll_view) {
+// CSS flex items shrink by default (`flex-shrink: 1`) inside a `display:flex`
+// container; block children never shrink (the collapsed app bar's block
+// content overflows and is clipped by its own overflow:hidden).  Scroll
+// content is exempt: its viewport is smaller than the content by design.
+float EffectiveFlexShrink(const AppStyle& style, bool in_scroll_view,
+                          bool flex_parent) {
   if (in_scroll_view) return 0.0f;
-  return style.has_flex_shrink ? style.flex_shrink : 0.0f;
+  if (style.has_flex_shrink) return style.flex_shrink;
+  return flex_parent ? 1.0f : 0.0f;
 }
 
 // Defined with the widget builders below; the page-wide layout pass needs the
@@ -765,6 +768,15 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
         layout.w = std::max(0.0f, content_w - child->style.margin[3] -
                                       child->style.margin[1]);
       }
+      // The official engine clamps a flex item's cross size to the line even
+      // when the item declares a larger width (app-bar's navigation bar:
+      // `width:100vw; padding-right` inside `display:flex`).  Block containers
+      // let their children overflow, so this only applies to display:flex.
+      if (style.flex_container && !in_scroll_view &&
+          EffectiveAlign(style, child->style) == 0 &&
+          layout.w > content_w) {
+        layout.w = content_w;
+      }
       layout.margin_main_start = child->style.margin[0];
       layout.margin_main_end = child->style.margin[2];
       layout.margin_cross_start = child->style.margin[3];
@@ -780,7 +792,8 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     } else {
       layout.h = layout.base_main;
     }
-    layout.shrink = EffectiveFlexShrink(child->style, in_scroll_view);
+    layout.shrink = EffectiveFlexShrink(child->style, in_scroll_view,
+                                        style.flex_container);
     if (debug_node_id != 0 && child->id == debug_node_id) {
       std::fprintf(stderr,
                    "[ops-debug] child-layout #%u measured=%gx%g layout=%gx%g "

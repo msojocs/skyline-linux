@@ -1551,6 +1551,8 @@ void ApplyDeclaration(AppStyle* style,
     style->inline_block = display == "inline-block" ||
                           display == "inline-flex" || display == "inline-grid";
     style->inline_level = display == "inline";
+    style->flex_container =
+        display == "flex" || display == "inline-flex";
     style->has_display = true;
   } else if (key == "pointer-events") {
     style->pointer_events_none = LowerAscii(value) == "none";

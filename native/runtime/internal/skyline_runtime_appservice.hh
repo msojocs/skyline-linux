@@ -49,6 +49,8 @@ struct CssPositionAxis {
 
 struct AppStyle {
   bool row = false;
+  // `display:flex` was declared (as opposed to the default block layout).
+  bool flex_container = false;
   int justify = 0;  // 0 start, 1 center, 2 end, 3 space-between
   int align = 0;    // 0 stretch, 1 start, 2 center, 3 end
   int align_self = -1;  // -1 auto, otherwise same values as `align`
