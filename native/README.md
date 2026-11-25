@@ -73,7 +73,8 @@ npm run test:engine       # 校验一帧共享内存
 npm run test:engine:resize  # --resize-script 更新 view metrics 后的帧尺寸
 npm run test:host-engine  # skyline.node createWindow -> 共享内存帧 -> onWindowRasterized
 npm run test:host-engine:aot  # release skyline.node 在 AOT-only bundle 上 createWindow
-npm run test:shm-frame    # 与 skyline-shared-memory setMemory/getMemory 的帧桥接
+npm run test:shm-frame    # 与内置 sharedMemory setMemory/getMemory 的帧桥接
+npm run test:shared-memory  # 内置 native/shared-memory 的 API 回归
 ```
 
 符号清单：`node tools/extract-kernel-symbols.js --write`，产物为

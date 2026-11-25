@@ -17,6 +17,7 @@
     "test:engine:resize": "node --test native/test/engine-resize-smoke.test.js",
     "test:skyline:aot": "node --test native/test/skyline-aot-smoke.test.js",
     "test:shm-frame": "node --test native/test/shared-memory-frame.test.js",
+    "test:shared-memory": "node --test native/test/shared-memory-addon.test.js",
     "test:host-engine": "node --test native/test/host-engine-smoke.test.js",
     "test:host-engine:aot": "node --test native/test/host-engine-aot.test.js",
     "test:ui-compat": "node --test native/test/dart-ui-compat-smoke.test.js",

@@ -48,7 +48,7 @@ report.checks.engine = engine.stage && engine.toolchain && engine.kernel;
 
 console.log(JSON.stringify(report, null, 2));
 if (!shared) {
-  console.error('未找到 Linux sharedMemory 模块；设置 SKYLINE_LINUX_SHARED_MEMORY。');
+  console.error('未找到 Linux sharedMemory 模块；先运行 npm run native:build，或设置 SKYLINE_LINUX_SHARED_MEMORY。');
   process.exitCode = 1;
 } else if (!windowsResources() || !windowsElectron()) {
   console.error('未找到官方 Windows 资源/Electron；仅 L1/L2 与 L3/L4 可运行，跨平台测试会跳过。');

@@ -15,6 +15,10 @@ function firstExisting(candidates) {
 function linuxSharedMemoryDefault() {
   return firstExisting([
     process.env.SKYLINE_LINUX_SHARED_MEMORY,
+    // Built in-repo by `npm run native:build` / `native:build:release`.
+    path.resolve(repoRoot, 'native', 'build', 'sharedMemory.node'),
+    path.resolve(repoRoot, 'native', 'build-release', 'sharedMemory.node'),
+    // Legacy sibling checkout, kept for existing developer setups.
     path.resolve(repoRoot, '../skyline-shared-memory/build/Release/sharedMemory.node'),
     path.resolve(repoRoot, '../skyline-shared-memory/build/sharedMemory.node'),
   ]);

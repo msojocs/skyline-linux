@@ -72,10 +72,10 @@
   （[255,51,102] / [51,204,102] / [51,102,255]）。
 
 - **共享内存帧桥接（2026-11-20）**：`createWindow` 的 6 号参数直接接受 Linux
-  `skyline-shared-memory` 的 external ArrayBuffer（数据区）。新增
+  `native/shared-memory` 的 external ArrayBuffer（数据区）。新增
   `npm run test:shm-frame`：`setMemory(key, bytes)` → `createWindow(...)` →
   `onWindowRasterized` → `getMemory(key)` 观察同一份 `frameId/frameSize/RGBA`
-  （empty-page 红帧）。16 字节外层头仍由 `skyline-shared-memory` 管理；
+  （empty-page 红帧）。16 字节外层头仍由 `native/shared-memory` 管理；
   Windows 风格的 9 号 `ptr+size` descriptor 也继续支持。
 
 - **viewport resize（2026-11-20）**：独立 host 新增 `--resize-script`
@@ -315,7 +315,7 @@
 
 ## 阶段 4：接入共享内存与 L5
 
-- 把阶段 2 的帧缓冲写入 `skyline-shared-memory`（Linux `/dev/shm` 文件格式）。
+- 把阶段 2 的帧缓冲写入 `native/shared-memory`（Linux `/dev/shm` 文件格式）。
 - 打开 L5：确定性页面（固定尺寸、字体、图片）在 Windows 与 Linux 各渲染一帧，
   比较 SHA-256；允许按像素容差（抗锯齿/字体栅格化差异）放宽。
 - 目标顺序：全等 → 容差 → 稳定容差。

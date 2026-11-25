@@ -19,8 +19,9 @@
 #   * the addon recognizes the DevTools layout from its own path and passes the
 #     `package:sample/devtools.dart` entrypoint arguments automatically;
 #   * `node_modules/sharedMemory/sharedMemory.node` is replaced with the local
-#     build, which returns a 16-byte handle even after the appservice page
-#     deletes `process` (the stock build then hits Electron's
+#     build from `native/shared-memory` (built by `npm run native:build`), which
+#     returns a 16-byte handle even after the appservice page deletes
+#     `process` (the stock build then hits Electron's
 #     "External buffers are not allowed").
 #
 # `release` is the default because the debug engine compiles Skia with
@@ -44,7 +45,7 @@
 #   npm run kernel:skyline      # native/engine/work/skyline-app/build/flutter_assets
 #
 # Both modes also need:
-#   (cd ../skyline-shared-memory/build && ninja)   # patched sharedMemory.node
+#   sharedMemory.node           # built by native:build / native:build:release
 #   patchelf                    # apt install patchelf / pip install patchelf
 set -euo pipefail
 
@@ -53,7 +54,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/env.sh"
 
 devtools_dir=${SKYLINE_DEVTOOLS_DIR:-"$ENGINE_REPO_ROOT/../wechat-web-devtools-linux"}
-shared_memory_node=${SKYLINE_SHARED_MEMORY_NODE:-"$ENGINE_REPO_ROOT/../skyline-shared-memory/build/Release/sharedMemory.node"}
+shared_memory_node=${SKYLINE_SHARED_MEMORY_NODE:-}
 engine_mode=${SKYLINE_DEVTOOLS_ENGINE:-release}
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -85,13 +86,16 @@ case "$engine_mode" in
   debug)
     engine_stage="$ENGINE_DIR/out/linux-x64-debug"
     node_addon="$ENGINE_REPO_ROOT/native/build/skyline.node"
+    default_shared_memory="$ENGINE_REPO_ROOT/native/build/sharedMemory.node"
     ;;
   release)
     engine_stage="$ENGINE_DIR/out/linux-x64-release"
     node_addon="$ENGINE_REPO_ROOT/native/build-release/skyline.node"
+    default_shared_memory="$ENGINE_REPO_ROOT/native/build-release/sharedMemory.node"
     ;;
   *) die "unsupported engine mode: $engine_mode (expected debug or release)" ;;
 esac
+: "${shared_memory_node:=$default_shared_memory}"
 
 addon_dir="$devtools_dir/resources/app.asar.unpacked/node_modules/skyline-addon"
 shared_memory_dir="$devtools_dir/resources/app.asar.unpacked/node_modules/sharedMemory"
@@ -115,7 +119,7 @@ fi
 [ -d "$assets" ] || die "missing $assets; run: npm run kernel:skyline"
 [ -d "$addon_dir" ] || die "addon directory not found: $addon_dir"
 [ -f "$shared_memory_node" ] || die \
-  "missing patched sharedMemory addon: $shared_memory_node (build ../skyline-shared-memory)"
+  "missing sharedMemory addon: $shared_memory_node (run: npm run native:build or native:build:release)"
 if ! nm -D --defined-only "$engine_lib" 2>/dev/null | grep -q ' SkylineApplyLiveOps$'; then
   die "$engine_lib has no embedded Skyline runtime; run:
   bash native/engine/patch-skyline-runtime.sh --runtime-mode $engine_mode"
@@ -165,7 +169,7 @@ fi
 # The stock Linux sharedMemory addon detects Electron via `process.versions`,
 # but the appservice page deletes `process`; setMemory then tries to return an
 # external ArrayBuffer, which Electron rejects ("External buffers are not
-# allowed").  The sibling skyline-shared-memory build recognizes Electron from
+# allowed").  The in-repo native/shared-memory build recognizes Electron from
 # the user agent as well and returns the 16-byte handle.
 [ -d "$shared_memory_dir" ] || die \
   "sharedMemory directory not found: $shared_memory_dir"

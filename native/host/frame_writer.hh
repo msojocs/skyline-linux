@@ -12,7 +12,7 @@ namespace skyline {
 //   outer header (16 bytes): u64 data_size | i32 version(1) | 4 bytes padding
 //   data region:             u32 frame_id | u32 frame_size | RGBA8 pixels
 //
-// The file lives at /dev/shm/skyline_<key>.dat, matching skyline-shared-memory.
+// The file lives at /dev/shm/skyline_<key>.dat, matching native/shared-memory.
 class SharedFrameWriter {
  public:
   explicit SharedFrameWriter(std::string key);

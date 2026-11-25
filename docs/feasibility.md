@@ -146,7 +146,8 @@ estimateSharedMemoryBytes(w, h, dpr) = 8 + ceil(w*dpr) * ceil(h*dpr) * 4
 - 官方还导出 `copyMemoryToBuffer` / `deleteCopyCache` / `getMemoryByAddress` /
   `setMemoryByAddress` / `deleteSetCache` / `deleteGetCache`，不导出 `version`。
 
-Linux 实现（`skyline-shared-memory`）使用 `/dev/shm/skyline_<key>.dat`，文件格式为
+Linux 实现（本仓库内置 `native/shared-memory/`，源自 `skyline-shared-memory`）使用
+`/dev/shm/skyline_<key>.dat`，文件格式为
 16 字节外层头（`u64 size + i32 version + 4 字节填充`）+ 数据区，并通过
 `copyMemoryToBuffer(key, target)` 把数据区复制到 JS 分配的 Buffer，规避 Electron 的
 V8 内存限制。
@@ -265,7 +266,7 @@ D6 后 `aspect-ratio`、`display:inline-block` 行盒、`white-space` 模式和
 
 - Linux `skyline.node` 只实现 JS 侧契约（`SkylineShell`/`SkylineDebugInfo`），
   调用转发到 Wine 进程内的官方引擎；帧仍经 `/dev/shm` 交换。
-- 优点：渲染结果与 Windows 完全一致；复用现有 Wine 环境与 `skyline-shared-memory`。
+- 优点：渲染结果与 Windows 完全一致；复用现有 Wine 环境与内置 `native/shared-memory`。
 - 缺点：依赖 Wine 与 Windows 版 Electron；启动/内存开销较高。
 - 前置条件：解决/绕过 3 节的 `ForIsolate` 断言，或复用官方 DevTools 的完整 guest 环境。
 
@@ -280,7 +281,7 @@ D6 后 `aspect-ratio`、`display:inline-block` 行盒、`white-space` 模式和
   1. Native N-API API 层（与 `reference/` 契约一致，可独立测试）；
   2. Linux Flutter Engine 构建与 `dart:ffi` / 平台通道打通；
   3. 反编译 Skyline 运行时（layout/paint/runtime/V8 边界）；
-  4. 帧输出接入 `skyline-shared-memory`，启用 L5 像素对比。
+  4. 帧输出接入内置 `native/shared-memory`，启用 L5 像素对比。
 - 风险：工程量以人年计；在阶段 1/2 完成前，Wine 官方引擎仍是唯一完整的渲染基准。
 
 ### 方案 C：只做契约/协议测试（本次交付的基础）

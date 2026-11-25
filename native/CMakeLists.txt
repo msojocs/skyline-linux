@@ -103,6 +103,56 @@ if(NOT APPLE)
 endif()
 
 # ---------------------------------------------------------------------------
+# sharedMemory addon (native/shared-memory).
+#
+# Vendored from https://github.com/msojocs/skyline-shared-memory so the
+# repository no longer needs a sibling checkout, vcpkg, or spdlog.  The addon
+# owns /dev/shm/skyline_<key>.dat and exchanges frames with skyline.node; it
+# lands next to skyline.node in the build directory.
+# ---------------------------------------------------------------------------
+if(WIN32)
+  message(STATUS
+    "shared_memory: the in-repo addon is built on Linux only; Wine oracle runs "
+    "load the official sharedMemory.module from the Windows resources")
+else()
+  set(SKYLINE_SHARED_MEMORY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shared-memory")
+  add_library(shared_memory MODULE
+    "${SKYLINE_SHARED_MEMORY_DIR}/src/main.cc"
+    "${SKYLINE_SHARED_MEMORY_DIR}/src/logger.cc"
+    "${SKYLINE_SHARED_MEMORY_DIR}/src/memory/set.cc"
+    "${SKYLINE_SHARED_MEMORY_DIR}/src/memory/get.cc"
+    "${SKYLINE_SHARED_MEMORY_DIR}/src/memory/remove.cc"
+    "${SKYLINE_SHARED_MEMORY_DIR}/src/memory/manager.cc"
+    "${SKYLINE_SHARED_MEMORY_DIR}/src/memory/compat.cc"
+  )
+  target_include_directories(shared_memory PRIVATE
+    "${NODE_INCLUDE_DIR}"
+    "${SKYLINE_SHARED_MEMORY_DIR}/third_party/node-addon-api"
+    "${SKYLINE_SHARED_MEMORY_DIR}/src"
+  )
+  target_link_libraries(shared_memory PRIVATE Threads::Threads)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(shared_memory PRIVATE rt)
+  endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # Keep the object layout stable across clean builds, as upstream did.
+    target_compile_options(shared_memory PRIVATE
+      "-frandom-seed=skyline_shared_memory")
+  endif()
+  if(NOT APPLE)
+    target_link_options(shared_memory PRIVATE "-Wl,--allow-shlib-undefined")
+  endif()
+  set_target_properties(shared_memory PROPERTIES
+    PREFIX ""
+    SUFFIX ".node"
+    OUTPUT_NAME "sharedMemory"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  )
+  message(STATUS
+    "shared_memory: addon target enabled -> ${CMAKE_BINARY_DIR}/sharedMemory.node")
+endif()
+
+# ---------------------------------------------------------------------------
 # Phase-3 stub of the private skyline.node runtime (Linux shared library).
 #
 # package:skyline resolves 73 symbols from this library and registers its Dart

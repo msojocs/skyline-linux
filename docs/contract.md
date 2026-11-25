@@ -174,7 +174,7 @@ external `ArrayBuffer`。两种模式由实现文档明确，测试按平台期�
 
 `js/extensions/skyline/index.js` 的 `getSharedMemoryLegacy` 先调用 `getMemory(key)`，
 再判断返回值是否为假。官方 Windows 返回 `null`。2026-11-19 已修改
-`skyline-shared-memory`：
+内置 `native/shared-memory`（源自 `skyline-shared-memory`）：
 
 - `getMemory(missing)` 返回 `null`，不再抛 `Error`；
 - `removeMemory(existing|missing)` 返回 `undefined`，不再返回布尔值。

@@ -66,8 +66,8 @@ Skyline 运行时与嵌入层。该路线周期长，因此先交付可执行的
 | --- | --- | --- | --- |
 | L1 静态契约 | 模块导出、全局对象、方法表、属性描述符、arity | 任意目标模块 | Wine + 官方 Electron |
 | L2 参数校验 | 每个方法的参数数量/类型/越界错误、窗口生命周期 | 任意目标模块 | Wine + 官方 Electron |
-| L3 共享内存 | 外层头、key 校验、零初始化、跨进程可见性、代际替换 | `skyline-shared-memory` | Wine + 官方 `sharedMemory.node` |
-| L4 帧协议 | 帧头（frameId/frameSize）、拷贝语义、跨平台读写互通 | `skyline-shared-memory` | Wine 写入 / Linux 读取 |
+| L3 共享内存 | 外层头、key 校验、零初始化、跨进程可见性、代际替换 | `native/shared-memory`（内置） | Wine + 官方 `sharedMemory.node` |
+| L4 帧协议 | 帧头（frameId/frameSize）、拷贝语义、跨平台读写互通 | `native/shared-memory`（内置） | Wine 写入 / Linux 读取 |
 | L5 引擎渲染 | 确定性页面帧的像素/哈希对比 | `skyline_host` + `spec/l5-baseline.json` | Wine + 官方 Windows Electron 渲染进程 |
 
 L1–L4 可在本仓库直接运行；L5 已有 Linux 基线与**官方 Windows 引擎真实帧**基线
@@ -109,13 +109,14 @@ npm run test:engine
 npm run test:host-engine               # skyline.node -> 引擎 -> 共享内存帧 -> 回调
 npm run test:host-engine:aot           # release skyline.node 自动 AOT
 npm run test:shm-frame                 # setMemory/getMemory 数据区帧桥接
+npm run test:shared-memory             # 内置 sharedMemory.node 的 API 回归
 npm run test:engine:resize             # --resize-script 视口尺寸更新
 # 1d-2. 可选：release/AOT
 npm run engine:build -- --runtime-mode release
 npm run app:aot                        # apps/empty-page/build/libapp.so
 cmake -S native -B native/build-release \
   -DSKYLINE_ENGINE_ROOT="$PWD/native/engine/out/linux-x64-release"
-cmake --build native/build-release --target skyline_host skyline_node
+cmake --build native/build-release
 npm run test:engine:aot
 npm run test:host-engine:aot
 # Skyline appservice AOT（需先 npm run kernel:skyline）
@@ -176,8 +177,12 @@ npm run test:contract
 ```
 ../wechat-web-devtools-linux/cache/devtools/resources/app.asar.unpacked
 ../skyline-client-server/cache/electron-win32-x64/electron.exe
-../skyline-shared-memory/build/Release/sharedMemory.node
+native/build/sharedMemory.node
 ```
+
+共享内存模块已内置在 `native/shared-memory/`（源自 `skyline-shared-memory`），
+`npm run native:build` 会同时产出 `native/build/sharedMemory.node`；仍可用
+`SKYLINE_LINUX_SHARED_MEMORY` 指向其他构建。
 
 测试不依赖网络；仓库不提交任何官方二进制。`npm run spec:record` 产生的
 `spec/skyline-node.win32.json` 与 `npm run l5:windows` 产生的
@@ -360,7 +365,7 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
    [docs/native-roadmap.md](docs/native-roadmap.md)（viewport resize、
    Skyline appservice 的 AOT 帧级验证、Windows L5 guest）。
 4. 共享内存缺失 key / 返回值语义已于 2026-11-19 对齐 Windows
-   （`skyline-shared-memory`）。
+   （内置 `native/shared-memory`，源自 `skyline-shared-memory`）。
 
 ## 目录
 
@@ -385,7 +390,8 @@ test/oracle/     Wine 侧契约录制脚本
 
 ## 与现有项目的关系
 
-- [`msojocs/skyline-shared-memory`](https://github.com/msojocs/skyline-shared-memory)：本仓库的
-  Linux `sharedMemory.node` 实现，L3/L4 直接以它为被测目标。
+- [`msojocs/skyline-shared-memory`](https://github.com/msojocs/skyline-shared-memory)：本仓库
+  Linux `sharedMemory.node` 实现的上游来源；现已内置到 `native/shared-memory/`
+  （移除 vcpkg/spdlog 与外部 node_modules 依赖），L3/L4 直接以内置构建为被测目标。
 - [`msojocs/skyline-client-server`](https://github.com/msojocs/skyline-client-server)：现有
   Wine 服务端方案；本仓库的差分测试可作为其回归基线。

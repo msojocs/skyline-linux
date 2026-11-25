@@ -1,7 +1,7 @@
 'use strict';
 
-// Phase-2/4 bridge: `skyline.node` writes frames into the Linux
-// `skyline-shared-memory` data area.
+// Phase-2/4 bridge: `skyline.node` writes frames into the in-repo
+// `native/shared-memory` data area.
 //
 // `sharedMemory.setMemory(key, bytes)` returns a live external ArrayBuffer over
 // the data region (frame header + pixels).  `createWindow` accepts it as the
@@ -29,6 +29,10 @@ function sharedMemoryPath() {
   const candidates = [
     process.env.SKYLINE_LINUX_SHARED_MEMORY,
     process.env.SKYLINE_SHARED_MEMORY_MODULE,
+    // Built in-repo by `npm run native:build`.
+    path.resolve(repoRoot, 'native', 'build', 'sharedMemory.node'),
+    path.resolve(repoRoot, 'native', 'build-release', 'sharedMemory.node'),
+    // Legacy sibling checkout.
     path.resolve(repoRoot, '..', 'skyline-shared-memory', 'build',
       'Release', 'sharedMemory.node'),
     path.resolve(repoRoot, '..', 'skyline-shared-memory', 'build',
@@ -46,7 +50,7 @@ function prerequisiteSkip() {
   if (!fs.existsSync(engineLib)) missing.push('libflutter_engine.so');
   if (!fs.existsSync(kernel)) missing.push('apps/empty-page kernel (npm run app:build)');
   const shared = sharedMemoryPath();
-  if (!shared) missing.push('skyline-shared-memory/sharedMemory.node');
+  if (!shared) missing.push('native/build/sharedMemory.node');
   return missing.length ? missing.join('; ') : null;
 }
 
