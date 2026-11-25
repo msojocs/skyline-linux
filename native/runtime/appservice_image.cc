@@ -824,6 +824,16 @@ bool LoadImageSource(AppNode* node, const std::string& source, bool background,
   const std::string resolved = ResolveResourcePath(source);
   std::vector<uint8_t> bytes;
   if (!ReadResourceBytes(resolved, &bytes) || bytes.empty()) {
+    // Package-local assets are not on the addon's filesystem in the DevTools;
+    // route them through the shell resource loader (the JS side reads the
+    // project file and completes the same request id).
+    if (ShellHttpAvailable()) {
+      std::fprintf(stderr,
+                   "[skyline-runtime] image #%u: %s not on disk; requesting "
+                   "through the DevTools resource loader\n",
+                   node->id, source.c_str());
+      return StartNetworkImage(node, source, background, holder);
+    }
     std::fprintf(stderr, "[skyline-runtime] image #%u: cannot read %s\n",
                  node->id, resolved.c_str());
     node->image_failed = true;

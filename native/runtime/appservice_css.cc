@@ -1718,6 +1718,7 @@ void ApplyDeclaration(AppStyle* style,
     }
   } else if (key == "box-sizing") {
     style->box_sizing = LowerAscii(value) == "content-box" ? 1 : 0;
+    style->box_sizing_declared = true;
   } else if (key == "width" || key == "min-width" || key == "max-width" ||
              key == "height" || key == "min-height" || key == "max-height") {
     float px = -1.0f;

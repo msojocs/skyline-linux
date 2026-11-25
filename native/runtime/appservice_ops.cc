@@ -1076,9 +1076,21 @@ void ApplyOperation(const rapidjson::Value& op) {
     }
   } else if (std::strcmp(kind, "createContext") == 0) {
     // Every appservice flush starts with this op so the native replay knows
-    // which renderer context the batch belongs to.
+    // which renderer context the batch belongs to.  The SDK also passes the
+    // rendererOptions-derived feature flags (defaultContentBox, ...).
     if (g_page != nullptr) {
       g_page->active_context_id = MemberUint64(op, "id", 0);
+      const auto flags = op.FindMember("flags");
+      if (flags != op.MemberEnd() && flags->value.IsObject()) {
+        const auto flag = [&](const char* key) {
+          const auto member = flags->value.FindMember(key);
+          return member != flags->value.MemberEnd() &&
+                 member->value.IsBool() && member->value.GetBool();
+        };
+        if (flags->value.HasMember("defaultContentBox")) {
+          g_page->default_content_box = flag("defaultContentBox");
+        }
+      }
     }
   } else if (std::strcmp(kind, "attachAppBar") == 0) {
     // Skyline app-bar contexts install their tree as a window overlay instead

@@ -100,6 +100,55 @@
     }
   }
 
+  // Binary counterpart of toText for project resources (images, fonts).  The
+  // DevTools loader may return an ArrayBuffer or a typed array from another
+  // realm, so detect by shape rather than `instanceof`.
+  function toBytes(data) {
+    if (data === null || data === undefined) return null;
+    if (typeof data === 'string') {
+      const bytes = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i += 1) {
+        bytes[i] = data.charCodeAt(i) & 0xff;
+      }
+      return bytes;
+    }
+    try {
+      if (typeof data.byteLength === 'number' &&
+          typeof data.slice === 'function') {
+        // ArrayBuffer: copy into this realm's typed array.
+        return new Uint8Array(data.slice(0));
+      }
+      if (typeof data.byteLength === 'number' && typeof data.subarray === 'function') {
+        return new Uint8Array(data.buffer || data, data.byteOffset || 0,
+                              data.byteLength);
+      }
+      if (typeof data.length === 'number') {
+        const bytes = new Uint8Array(data.length);
+        for (let i = 0; i < data.length; i += 1) bytes[i] = data[i] & 0xff;
+        return bytes;
+      }
+    } catch (_error) {
+      return null;
+    }
+    return null;
+  }
+
+  // Project-package paths have no http(s)/data scheme: `assets/play.png`,
+  // `wxfile://assets/...`, `weapp:///...`.  Returns the loader-relative path,
+  // or null for remote/inline sources.
+  function localResourcePath(url) {
+    const text = String(url === null || url === undefined ? '' : url);
+    if (!text) return null;
+    if (/^data:/i.test(text)) return null;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+      if (!/^(wxfile|weapp|file):\/\//i.test(text)) return null;
+      // `wxfile://assets/x.png` has no host component: strip the scheme only.
+      return text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+                 .replace(/^\/+/, '') || null;
+    }
+    return text.replace(/^\/+/, '');
+  }
+
   function looksLikeCss(text) {
     if (typeof text !== 'string' || text.length === 0) return false;
     // Reject binary blobs: require mostly printable text and CSS punctuation.

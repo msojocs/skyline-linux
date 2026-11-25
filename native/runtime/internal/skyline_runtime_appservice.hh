@@ -152,6 +152,9 @@ struct AppStyle {
   float aspect_ratio = -1.0f;
   // 0 = border-box (Skyline's effective default), 1 = content-box.
   int box_sizing = 0;
+  // Author declared `box-sizing`; otherwise the page's defaultContentBox
+  // renderer option decides (app-bar's navigation bar relies on it).
+  bool box_sizing_declared = false;
   float min_width = 0.0f;
   float max_width = kInf;
   float min_height = 0.0f;
@@ -403,6 +406,9 @@ struct OpPage {
   // Every appservice flush starts with a `createContext` op carrying its id.
   // App-bar ids exceed uint32 (2^32 + pageId), so keep the full value.
   uint64_t active_context_id = 0;
+  // `rendererOptions.skyline.defaultContentBox` delivered with the SDK's
+  // createContext feature flags.
+  bool default_content_box = false;
   // App-bar contexts (`app.json#appBar`) attach a full-window overlay instead
   // of a page route.  `appbar_context_id` is captured from the `attachAppBar`
   // batch so later updates rebuild the overlay rather than the page.

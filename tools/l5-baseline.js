@@ -54,6 +54,7 @@ const FIXTURES = [
   'appservice-text-padding.ops.json',
   'appservice-style-scope.ops.json',
   'appservice-appbar.ops.json',
+  'appservice-content-box.ops.json',
   'appservice-shadow.ops.json',
   'appservice-gridview.ops.json',
   'appservice-listview.ops.json',

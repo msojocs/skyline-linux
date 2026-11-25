@@ -485,6 +485,14 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
   if (!node->inline_style.empty()) {
     ApplyDeclarations(&style, ParseDeclarations(node->inline_style));
   }
+  // `rendererOptions.skyline.defaultContentBox` (passed with the SDK's
+  // createContext feature flags) makes every box content-box unless the
+  // stylesheet declares `box-sizing` itself.  app-bar's navigation bar stacks
+  // `height:navBarHeight` on top of `padding-top:statusBarHeight` and needs it.
+  if (!style.box_sizing_declared && g_page != nullptr &&
+      g_page->default_content_box) {
+    style.box_sizing = 1;
+  }
   // Skyline's text containers are inline-level by default: `span` is the
   // inline mixing element for text/image/navigator, and `<text>` mirrors the
   // WebView renderer's inline `wx-text`.  The DevTools host does not serve the

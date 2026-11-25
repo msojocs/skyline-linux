@@ -247,10 +247,19 @@ try {
     if (runStarted) return;
     runStarted = true;
     try {
-      const page = new global.SkylineGlobal.PageContext(0, WINDOW_ID);
+      // The SDK hands the rendererOptions-derived feature flags to the native
+      // context constructor (`new SkylineGlobal.PageContext(id, windowId,
+      // flags)`), e.g. defaultContentBox.  The fixture records them on its
+      // createContext op.
+      const ops = fixture.ops || [];
+      const contextOp = ops.find((op) => op.op === 'createContext' &&
+        op.flags && typeof op.flags === 'object');
+      const page = contextOp
+        ? new global.SkylineGlobal.PageContext(0, WINDOW_ID, contextOp.flags)
+        : new global.SkylineGlobal.PageContext(0, WINDOW_ID);
+      if (contextOp) log('context flags', JSON.stringify(contextOp.flags));
       log('context', page.getWindowId(), page.clientWidth, page.clientHeight);
       const nodes = new Map();
-      const ops = fixture.ops || [];
       log('apply ops', ops.length);
       applyOps(page, nodes, ops);
       const updates = process.env.L5_SKIP_UPDATES === '1' ? [] : (fixture.updates || []);

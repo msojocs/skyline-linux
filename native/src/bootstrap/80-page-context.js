@@ -1,7 +1,11 @@
   class BridgePageContext {
-    constructor(id, windowId) {
+    constructor(id, windowId, featureFlags) {
       this.id = id;
       this.windowId = windowId;
+      // Renderer options (defaultContentBox/defaultBlockLayout/...) arrive as
+      // the SDK's third constructor argument; forward them with every batch.
+      this.featureFlags =
+        featureFlags && typeof featureFlags === 'object' ? featureFlags : null;
       // Each renderer context (page, app bar, tab bar) owns its operations.
       // Sharing one per-window buffer mixed the page and app-bar trees in the
       // same batch, so the native replay could not tell which root a batch
@@ -20,7 +24,8 @@
       const size = windowSize(windowId);
       this.clientWidth = size ? size.width : 0;
       this.clientHeight = size ? size.height : 0;
-      this.ops.push({ op: 'createContext', id, windowId });
+      this.ops.push({ op: 'createContext', id, windowId,
+                      flags: this.featureFlags });
       if (typeof native.log === 'function') {
         native.log(`PageContext(${id}) window=${windowId}`);
       }
@@ -179,7 +184,8 @@
       // app-bar context is an overlay, not a page route).
       if (!this.ops[0] || this.ops[0].op !== 'createContext') {
         this.ops.unshift({ op: 'createContext', id: this.id,
-                           windowId: this.windowId });
+                           windowId: this.windowId,
+                           flags: this.featureFlags });
       }
       this.flushing = true;
       if (this.flushTimer !== null) {
@@ -218,8 +224,8 @@
   // not as another page route.  The SDK's base `attach()` still runs, so tag
   // the attach so the native replay can tell them apart.
   class BridgeAppBarContext extends BridgePageContext {
-    constructor(id, windowId) {
-      super(id, windowId);
+    constructor(id, windowId, featureFlags) {
+      super(id, windowId, featureFlags);
       this.isAppBar = true;
     }
     attach(root, host) {

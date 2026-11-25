@@ -400,6 +400,36 @@ test('bootstrap: HTTP requests proxy through the SkylineShell callback', async (
     [{ requestId: 43, length: 0 }]);
 });
 
+test('bootstrap: package-local resources load through the DevTools loader', async () => {
+  const { sandbox, httpSink, httpCompletions } = loadBootstrap();
+  const shell = new sandbox.SkylineShell();
+  const loaded = [];
+  shell.setLoadResourceCallback((request) => {
+    loaded.push(request.path);
+    return new Uint8Array([137, 80, 78, 71]);  // PNG magic
+  });
+  let fetched = 0;
+  shell.setHttpRequestCallback(() => {
+    fetched += 1;
+    return Promise.resolve(new Uint8Array([1, 2, 3]));
+  });
+
+  // A package asset (`assets/play.png`) has no scheme: it must go through
+  // setLoadResourceCallback, and the bytes come back on the image channel.
+  httpSink.value({ requestId: 7, url: 'assets/play.png' });
+  assert.deepEqual(loaded, ['assets/play.png']);
+  assert.deepEqual(httpCompletions, [{ requestId: 7, length: 4 }]);
+
+  // wxfile:// URLs resolve to the same package-relative path.
+  httpSink.value({ requestId: 8, url: 'wxfile://assets/next.png' });
+  assert.deepEqual(loaded, ['assets/play.png', 'assets/next.png']);
+
+  // Remote URLs keep using the pageframe fetch callback.
+  httpSink.value({ requestId: 9, url: 'https://res.wx.qq.com/a.jpg' });
+  await Promise.resolve();
+  assert.equal(fetched, 1);
+});
+
 test('bootstrap: custom-route worklets pop and animate the Flutter route', () => {
   const { sandbox, jsonSink, calls } = loadBootstrap();
   const module = sandbox.workletUIModule;

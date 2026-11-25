@@ -470,6 +470,42 @@ test('appservice ops: component stylesheets do not leak across style scopes', {
   assert.deepEqual(pixelAt(pixels, 300, 100), [0, 170, 0, 255]);
 });
 
+test('appservice ops: defaultContentBox renderer flag stacks height and padding', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // app-bar's navigation bar declares `height: navBarHeight` and
+  // `padding-top: statusBarHeight`; with the project's
+  // rendererOptions.skyline.defaultContentBox the box is height+padding tall
+  // (the SDK passes the flag to `new SkylineGlobal.PageContext(id, windowId,
+  // flags)`).  Without it the 42px height is consumed by the 47px padding and
+  // the title is clipped.
+  const fixture = path.join(repoRoot, 'test', 'fixtures',
+    'appservice-content-box.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    dpr: 2,
+    env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+  });
+
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // Windows oracle: red nav 0..89 CSS (42 + 47), blue block from 89.
+  assert.match(logs, /rect #3 left=0 top=0 w=320 h=89/);
+  const pixelAt2 = (x, y) => {
+    const offset = (y * width * 2 + x) * 4;
+    return [...pixels.subarray(offset, offset + 4)];
+  };
+  assert.deepEqual(pixelAt2(600, 170), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt2(600, 184), [0, 0, 255, 255]);
+});
+
 test('appservice ops: descendant selectors respect their ancestor compound', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

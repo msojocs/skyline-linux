@@ -126,6 +126,29 @@
           native.httpRequestComplete(requestId, bytes);
         }
       };
+      // Package-local resources (`assets/play.png`, `wxfile://...`) are not
+      // reachable over HTTP.  The DevTools resource loader reads them from the
+      // project directory; feed the bytes back through the image channel so
+      // the runtime decodes/caches them like a network image.
+      const localPath = localResourcePath(url);
+      if (localPath !== null &&
+          typeof shellCallbacks.setLoadResourceCallback === 'function') {
+        let bytes = null;
+        try {
+          bytes = toBytes(shellCallbacks.setLoadResourceCallback(
+            { path: localPath }));
+        } catch (error) {
+          if (typeof native.log === 'function') {
+            native.log(`localResource ${requestId} ${localPath} threw: ${error && error.message}`);
+          }
+        }
+        if (typeof native.log === 'function') {
+          native.log(`localResource ${requestId} ${localPath} ` +
+            (bytes && bytes.length ? `${bytes.length} bytes` : 'missing'));
+        }
+        complete(bytes && bytes.length ? bytes : new Uint8Array(0));
+        return;
+      }
       const callback = shellCallbacks.setHttpRequestCallback;
       if (typeof callback !== 'function') {
         complete(new Uint8Array(0));
