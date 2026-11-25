@@ -97,8 +97,15 @@ case "$engine_mode" in
 esac
 : "${shared_memory_node:=$default_shared_memory}"
 
-addon_dir="$devtools_dir/resources/app.asar.unpacked/node_modules/skyline-addon"
-shared_memory_dir="$devtools_dir/resources/app.asar.unpacked/node_modules/sharedMemory"
+if [ -d "$devtools_dir/resources/app.asar.unpacked" ]; then
+  devtools_resources="$devtools_dir/resources/app.asar.unpacked"
+elif [ -d "$devtools_dir/resources/app" ]; then
+  devtools_resources="$devtools_dir/resources/app"
+else
+  die "DevTools app tree not found under $devtools_dir/resources"
+fi
+addon_dir="$devtools_resources/node_modules/skyline-addon"
+shared_memory_dir="$devtools_resources/node_modules/sharedMemory"
 engine_lib="$engine_stage/libflutter_engine.so"
 engine_icu="$engine_stage/icudtl.dat"
 assets="$ENGINE_SKYLINE_APP/build/flutter_assets"
