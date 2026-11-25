@@ -280,6 +280,124 @@ test('appservice ops: committed stripe fixture replays through the runtime', {
   );
 });
 
+test('appservice ops: absolute boxes honour Yoga leading margins', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors expanded-scroll-view's tab indicator:
+  //   .tabs-indicator{position:absolute;left:0;bottom:0;width:20px;
+  //                   height:2px;margin:0 21px;background:orange}
+  // The official Windows engine (Yoga) adds the *leading* margin to every
+  // absolutely positioned box, subtracts both margins only when `left`+`right`
+  // determine the size, and ignores the trailing margin for right/bottom
+  // anchoring.  The expected boxes below are the official Windows engine's
+  // pixels (dpr=2 device coordinates, captured via tools/l5-windows.js).
+  const fixture = path.join(repoRoot, 'test', 'fixtures',
+    'appservice-absolute-margin.ops.json');
+  const { result, logs, pixels } = runHost(fixture, { dpr: 2 });
+
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  const frameWidth = width * 2;
+  const bbox = (r, g, b) => {
+    let x0 = Infinity; let y0 = Infinity; let x1 = -1; let y1 = -1;
+    for (let y = 0; y < height * 2; y++) {
+      for (let x = 0; x < frameWidth; x++) {
+        const offset = (y * frameWidth + x) * 4;
+        if (pixels[offset] === r && pixels[offset + 1] === g &&
+            pixels[offset + 2] === b) {
+          if (x < x0) x0 = x;
+          if (y < y0) y0 = y;
+          if (x > x1) x1 = x;
+          if (y > y1) y1 = y;
+        }
+      }
+    }
+    return [x0, y0, x1, y1];
+  };
+
+  // left:0 + margin-left:21 on a 20px bar -> x 21..41 CSS (42..81 device).
+  assert.deepEqual(bbox(255, 165, 0), [42, 396, 81, 399]);
+  // right:0 + width:30 + margin-left:10 -> x 300..330, clipped at the 320px
+  // viewport; margin-right is not subtracted.
+  assert.deepEqual(bbox(0, 0, 255), [600, 200, 639, 215]);
+  // bottom:0 + height:20 + margin-top:10 -> y 190..210; margin-bottom ignored.
+  assert.deepEqual(bbox(0, 255, 255), [240, 380, 279, 419]);
+  // left:10 + right:10 + margin:0 5px -> x 15..305 with both margins removed.
+  assert.deepEqual(bbox(0, 170, 0), [30, 240, 609, 255]);
+  // No insets: static position + leading margins -> (40,30)..(52,42).
+  assert.deepEqual(bbox(255, 0, 255), [80, 60, 103, 83]);
+});
+
+test('appservice ops: text padding insets the glyph run inside the content box', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors expanded-scroll-view's tabs: `.tabs-list{display:flex}` with
+  // `text{padding:10px 15px}` children.  The paragraph must start at the
+  // content-box origin (padding-left 15), not the border-box origin; the
+  // element's CSS background must cover the whole border box.  Expected values
+  // were cross-checked against the official Windows engine
+  // (`appservice-text-padding`, ink x=32..91/156..215 device).
+  const fixture = path.join(repoRoot, 'test', 'fixtures',
+    'appservice-text-padding.ops.json');
+  const { result, logs, pixels } = runHost(fixture, { dpr: 2 });
+
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  const frameWidth = width * 2;
+  const bbox = (xFrom, xTo, predicate) => {
+    let x0 = Infinity; let y0 = Infinity; let x1 = -1; let y1 = -1;
+    for (let y = 0; y < height * 2; y++) {
+      for (let x = xFrom; x < xTo; x++) {
+        const offset = (y * frameWidth + x) * 4;
+        if (predicate(pixels[offset], pixels[offset + 1], pixels[offset + 2])) {
+          if (x < x0) x0 = x;
+          if (y < y0) y0 = y;
+          if (x > x1) x1 = x;
+          if (y > y1) y1 = y;
+        }
+      }
+    }
+    return [x0, y0, x1, y1];
+  };
+  const isInk = (r, g, b) => r < 60 && g < 60 && b < 60;
+  const isBackground = (r, g, b) => r === 238 && g === 238 && b === 238;
+
+  // Both 62px (`padding 15+15` + two 16px CJK glyphs) text boxes paint their
+  // #EEEEEE background: 0..247 device = 0..123.5 CSS wide, 40px tall.
+  assert.deepEqual(bbox(0, frameWidth, isBackground), [0, 0, 247, 79]);
+
+  // Glyph ink starts at 15px padding + ~1px side bearing, i.e. 32 device
+  // pixels into each tab.  Vertical ink depends on the installed CJK font's
+  // ascent, so only its range is asserted (Windows: y 32..60).
+  const first = bbox(0, 124, isInk);
+  assert.equal(first[0], 32, `first tab ink starts at ${first[0]}, not at the 15px padding`);
+  assert.equal(first[2], 91);
+  assert.ok(first[1] >= 24 && first[1] <= 36, `first tab ink top ${first[1]}`);
+  assert.ok(first[3] >= 52 && first[3] <= 64, `first tab ink bottom ${first[3]}`);
+
+  // The second flex item starts at x=62 CSS (124 device); its glyphs must be
+  // inset by the same padding instead of sitting on its border-box origin.
+  const second = bbox(124, 248, isInk);
+  assert.deepEqual([second[0], second[2]], [156, 215],
+    `second tab ink x=${second[0]}..${second[2]}`);
+});
+
 test('appservice ops: descendant selectors respect their ancestor compound', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

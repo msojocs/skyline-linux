@@ -716,6 +716,67 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     if (span_handle != nullptr) {
       node->text_span_p = Dart_NewPersistentHandle(span_handle);
     }
+    // Skyline lays inline text out inside the element's content box, but the
+    // paragraph widget itself paints at its own origin.  Host it in a non-root
+    // YGNode positioned at the content-box origin so padding/border inset the
+    // text like the official engine (expanded-scroll-view's `课程` tab uses
+    // `padding:10px 15px`; without this the glyphs painted at the border-box
+    // origin and were clipped by the viewport).  Padded text is a leaf, so the
+    // wrapper is only needed when the inset is non-zero.
+    const float inset_x = EffectiveBorderWidth(style, 3) + style.padding[3];
+    const float inset_y = EffectiveBorderWidth(style, 0) + style.padding[0];
+    if ((inset_x > 0.0f || inset_y > 0.0f) && node->measured_w > 0.0f &&
+        node->measured_h > 0.0f) {
+      const float content_w = std::max(
+          0.0f, node->measured_w - inset_x - EffectiveBorderWidth(style, 1) -
+                    style.padding[1]);
+      const float content_h = std::max(
+          0.0f, node->measured_h - inset_y - EffectiveBorderWidth(style, 2) -
+                    style.padding[2]);
+      Dart_Handle metrics = Dart_NewTypedData(Dart_TypedData_kFloat32, 9);
+      bool ready = !Dart_IsError(metrics);
+      if (ready) {
+        Dart_TypedData_Type type = Dart_TypedData_kInvalid;
+        void* data = nullptr;
+        intptr_t length = 0;
+        ready = !Dart_IsError(
+                    Dart_TypedDataAcquireData(metrics, &type, &data, &length)) &&
+                type == Dart_TypedData_kFloat32 && length == 9 &&
+                data != nullptr;
+        if (ready) {
+          float* values = static_cast<float*>(data);
+          values[0] = inset_y;
+          values[1] = inset_x;
+          values[2] = content_w;
+          values[3] = content_h;
+          for (int i = 4; i < 9; i++) values[i] = 0.0f;
+          Dart_TypedDataReleaseData(metrics);
+        }
+      }
+      if (ready) {
+        Dart_Handle content_node = newYGNode(
+            node->address, metrics, 0 /* not root */, 0, 0, 0,
+            1 /* kWidgetTypeYogaNode */, Dart_Null(), 0.0, 0.0, 0.0, 0.0, 1,
+            0, 0, Dart_Null(), Dart_Null(), inner);
+        if (Dart_IsError(content_node) || Dart_IsNull(content_node)) {
+          ReportDartError("appservice text content node", content_node);
+        } else {
+          Dart_Handle list = Dart_NewList(1);
+          Dart_ListSetAt(list, 0, content_node);
+          Dart_Handle connector = newYGConnector(0, list);
+          if (Dart_IsError(connector) || Dart_IsNull(connector)) {
+            ReportDartError("appservice text content connector", connector);
+          } else {
+            inner = connector;
+          }
+        }
+      }
+    }
+    // Text elements paint their CSS background/border/opacity like any other
+    // box (the official engine fills `text{background:#EEE}` across the whole
+    // border box); the generic wrappers are normally installed by the
+    // container branch below, which text nodes never reach.
+    inner = WrapVisualStyle(node, inner, newDecoratedBox, newOpacity);
   } else if (node->name == "native-input" && node->tag == "input" &&
              g_page != nullptr && g_page->holder != nullptr) {
     // Builtin `<input>` renders its native editor here (`native-input` is the

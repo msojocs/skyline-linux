@@ -1042,13 +1042,26 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
     const bool has_top = ResolveInset(child->style, 0, inset_h, &top);
     const bool has_bottom = ResolveInset(child->style, 2, inset_h, &bottom);
 
+    // Yoga (the official engine) applies margins to absolute boxes differently
+    // from CSS 2.1: the leading margin (left/top in LTR) is always added to the
+    // resolved position, the trailing margin only shrinks a stretched box.
+    // Verified against the Windows engine (`appservice-absolute-margin`):
+    // `left:0;margin:0 21px` lands at x=21, `right:0;width:30;margin:0 10px`
+    // lands at x=width-30+10, and a bottom-anchored box ignores margin-bottom.
+    const float margin_left = child->style.margin[3];
+    const float margin_right = child->style.margin[1];
+    const float margin_top = child->style.margin[0];
+    const float margin_bottom = child->style.margin[2];
+
     float box_w = -1.0f;
     float box_h = -1.0f;
     if (has_left && has_right && !HasExplicitWidth(child->style)) {
-      box_w = std::max(0.0f, inset_w - left - right);
+      box_w = std::max(0.0f, inset_w - left - right - margin_left -
+                                 margin_right);
     }
     if (has_top && has_bottom && !HasExplicitHeight(child->style)) {
-      box_h = std::max(0.0f, inset_h - top - bottom);
+      box_h = std::max(0.0f, inset_h - top - bottom - margin_top -
+                                 margin_bottom);
     }
     SizeF measured = MeasureNode(child, box_w >= 0.0f ? box_w : inset_w,
                                  box_w >= 0.0f, box_h >= 0.0f ? box_h : inset_h,
@@ -1068,19 +1081,19 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       float viewport_x = 0.0f;
       float viewport_y = 0.0f;
       if (has_left) {
-        viewport_x = left;
+        viewport_x = left + margin_left;
       } else if (has_right) {
-        viewport_x = inset_w - right - child_w;
+        viewport_x = inset_w - right - child_w + margin_left;
       } else {
         // No horizontal inset: keep the static position (parent content origin).
-        viewport_x = abs_x + content_x;
+        viewport_x = abs_x + content_x + margin_left;
       }
       if (has_top) {
-        viewport_y = top;
+        viewport_y = top + margin_top;
       } else if (has_bottom) {
-        viewport_y = inset_h - bottom - child_h;
+        viewport_y = inset_h - bottom - child_h + margin_top;
       } else {
-        viewport_y = abs_y + content_y;
+        viewport_y = abs_y + content_y + margin_top;
       }
       child_x = viewport_x - abs_x;
       child_y = viewport_y - abs_y;
@@ -1088,14 +1101,18 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       // `cb_abs_*` is the containing block's padding-box origin, so the child's
       // insets are viewport-relative; convert back to parent-relative.
       if (has_left) {
-        child_x = cb_abs_x + left - abs_x;
+        child_x = cb_abs_x + left + margin_left - abs_x;
       } else if (has_right) {
-        child_x = cb_abs_x + cb_w - right - child_w - abs_x;
+        child_x = cb_abs_x + cb_w - right - child_w + margin_left - abs_x;
+      } else {
+        child_x = content_x + margin_left;
       }
       if (has_top) {
-        child_y = cb_abs_y + top - abs_y;
+        child_y = cb_abs_y + top + margin_top - abs_y;
       } else if (has_bottom) {
-        child_y = cb_abs_y + cb_h - bottom - child_h - abs_y;
+        child_y = cb_abs_y + cb_h - bottom - child_h + margin_top - abs_y;
+      } else {
+        child_y = content_y + margin_top;
       }
     }
     LayoutNode(child, child_x, child_y, child_w, child_h, metrics,

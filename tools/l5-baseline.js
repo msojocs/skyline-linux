@@ -50,6 +50,8 @@ const FIXTURES = [
   'appservice-overflow.ops.json',
   'appservice-fixed-scroll.ops.json',
   'appservice-absolute.ops.json',
+  'appservice-absolute-margin.ops.json',
+  'appservice-text-padding.ops.json',
   'appservice-shadow.ops.json',
   'appservice-gridview.ops.json',
   'appservice-listview.ops.json',
