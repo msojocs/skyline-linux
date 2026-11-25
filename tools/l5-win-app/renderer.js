@@ -118,10 +118,47 @@ try {
   }
 
   function applyOps(ctx, nodes, ops) {
+    let active = ctx;
     for (const op of ops) {
       try {
         switch (op.op) {
+          case 'createContext': {
+            // App-bar render contexts use ids beyond uint32 (2^32 + pageId).
+            // Page contexts keep the harness's initial PageContext because the
+            // window binds to the first context created for it.
+            const id = Number(op.id) || 0;
+            if (id >= 4294967296) {
+              const globals = global.SkylineGlobal || {};
+              active = new globals.AppBarContext(id, WINDOW_ID, {});
+              log('appbar context', id);
+            }
+            break;
+          }
+          case 'attachAppBar': {
+            // Matches the official renderer SDK (WARenderContext.js):
+            //   attachAppBar(root) {
+            //     root.setStyle('pointer-events: none;');
+            //     this.getAppBarContext().attach(root);
+            //   }
+            // The native AppBarContext turns the attached tree into a window
+            // OverlayEntry above the page stack.
+            const root = nodes.get(op.root);
+            try { root.setStyle('pointer-events: none;'); } catch (error) {
+              log('appbar setStyle error', String(error));
+            }
+            try {
+              active.attach(root);
+              log('attachAppBar ok', op.root);
+            } catch (error) {
+              log('attachAppBar error', String(error && error.stack || error));
+            }
+            break;
+          }
           case 'createElement':
+            // The replay's elements are created through the harness's first
+            // PageContext; the app-bar context below consumes the attached
+            // root (an AppBarContext-created tree does not install its
+            // OverlayEntry in this official-engine replay).
             nodes.set(op.id, createElement(ctx, op));
             break;
           case 'setText':
@@ -176,12 +213,12 @@ try {
             nodes.get(op.id).release();
             break;
           case 'appendStyleSheet':
-            ctx.appendStyleSheet(String(op.css), op.index);
+            active.appendStyleSheet(String(op.css), op.index);
             break;
           case 'attach': {
             const root = nodes.get(op.root);
-            if (op.host !== undefined && op.host !== null) ctx.attach(root, nodes.get(String(op.host)));
-            else ctx.attach(root);
+            if (op.host !== undefined && op.host !== null) active.attach(root, nodes.get(String(op.host)));
+            else active.attach(root);
             break;
           }
           case 'setScrollTop': {
@@ -194,7 +231,7 @@ try {
             break;
           }
           case 'startRender':
-            ctx.startRender(() => log('render callback'));
+            active.startRender(() => log('render callback'));
             break;
           default:
             // Recording-only / native events are ignored in replay.
