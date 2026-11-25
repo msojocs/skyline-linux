@@ -772,7 +772,7 @@ SKYLINE_EXPORT extern "C" void YogaCalculateLayout(intptr_t /*nodeAddress*/,
 // The shuttle rect is returned unchanged: the JS worklet only mutates shared
 // values, it does not choose the geometry.
 SKYLINE_EXPORT extern "C" SkylineNativeRect HandleHeroOnFrame(
-    intptr_t /*runtime_ptr*/, Dart_Handle event_hash,
+    intptr_t /*runtime_ptr*/, SkylineHandle event_hash,
     const SkylineNativeRect* begin, const SkylineNativeRect* end,
     const SkylineNativeRect* current, double progress, int32_t direction) {
   SkylineNativeRect result =

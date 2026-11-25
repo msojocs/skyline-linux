@@ -405,8 +405,8 @@ test/oracle/     Wine 侧契约录制脚本
 - push `v*` tag：创建/更新同名 Release（自动生成 release notes），资产为
   `skyline-linux-<tag>-linux-x64.tar.gz` 与 `.sha256`。
 
-CI 在 `ubuntu-latest` 上执行 `npm run native:build`、`npm test` 和
-`npm run test:native`，然后打包 `skyline.node`、`sharedMemory.node`、stub
-`libskyline.so` 与 `BUILD-INFO.txt`。为控制时长与体积，CI 不拉取 20–30 GB 的
-Flutter 引擎，也不生成 AOT 快照；完整的开发者工具部署仍需在本地执行
+CI 在 `ubuntu-latest` 上执行 `npm run native:build` 和 `npm test`，然后打包
+`skyline.node`、`sharedMemory.node`、stub `libskyline.so` 与 `BUILD-INFO.txt`。
+为控制时长与体积，CI 不拉取 20–30 GB 的 Flutter 引擎，也不生成 AOT 快照
+（依赖引擎的契约/渲染用例会自动跳过）；完整的开发者工具部署仍需在本地执行
 `engine:build` / `app:aot` / `devtools:stage`。

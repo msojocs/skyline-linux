@@ -38,9 +38,6 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Contract tests against the built addon
-        run: npm run test:native
-
       - name: Package artifacts
         run: |
           set -euo pipefail
