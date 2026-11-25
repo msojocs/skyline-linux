@@ -10,6 +10,11 @@ bool HasAnyRadius(const AppStyle& style);
 bool HasBorder(const AppStyle& style);
 bool ParseCssColor(const std::string& raw, uint32_t* out);
 bool ParseNumber(const std::string& value, double* out);
+// Safe-area insets (top, right, bottom, left) pushed by the DevTools'
+// `SkylineShell.setSafeAreaEdgeInsets`; `env(safe-area-inset-*)` resolves to
+// these values.  Side order: 0 top, 1 right, 2 bottom, 3 left.
+void SetSafeAreaInsets(double top, double right, double bottom, double left);
+float SafeAreaInset(int side);
 bool ParsePositionPair(const std::string& raw, CssPositionAxis* x, CssPositionAxis* y);
 bool ParsePxToken(const std::string& raw, double* out);
 bool RadiiChanged(const AppStyle& a, const AppStyle& b);

@@ -1,5 +1,6 @@
 // Live DevTools bridge exports.
 
+#include "internal/skyline_runtime_css.hh"
 #include "internal/skyline_runtime_module.hh"
 
 // SkylineGlobal.PageContext on the UI task runner.  `ApplyOpsPage` consumes the
@@ -166,6 +167,15 @@ SKYLINE_EXPORT extern "C" void SkylineRequestAccessibility(uint8_t enabled) {
   g_accessibility_enabled.store(enabled != 0 ? 1 : 0);
   appservice::NotifyAccessibilitySink(1, enabled != 0 ? 1 : 0);
   appservice::NotifyAccessibilitySink(0, enabled != 0 ? 1 : 0);
+}
+
+// Safe-area insets for CSS `env(safe-area-inset-*)` (pushed by the DevTools'
+// SkylineShell.setSafeAreaEdgeInsets).
+SKYLINE_EXPORT extern "C" void SkylineSetSafeAreaInsets(double top,
+                                                       double right,
+                                                       double bottom,
+                                                       double left) {
+  appservice::SetSafeAreaInsets(top, right, bottom, left);
 }
 
 SKYLINE_EXPORT extern "C" void SkylineDumpElementTree() {

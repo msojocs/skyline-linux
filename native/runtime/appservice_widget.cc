@@ -1346,6 +1346,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         if (is_scroll_view && !IsListViewName(child->name) &&
             !IsGridViewName(child->name) && !IsBuilderName(child->name)) {
           ResetNodeLayoutToOrigin(child);
+          ApplySliverMargins(child);
         }
         Dart_Handle widget =
             BuildWidget(child, newYGNode, newYGConnector, newText, newTextSpan,

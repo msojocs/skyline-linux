@@ -29,6 +29,15 @@
   const GESTURE_SLOP = 6;
 
   function gestureHitElement(windowId, x, y) {
+    // The app-bar overlay paints above the page stack; its gesture handlers
+    // (e.g. app-bar's vertical drag) must win the hit test over the page.
+    const appBar = appBarRoots.get(windowId);
+    if (appBar) {
+      try {
+        const hit = hitTestElement(windowId, appBar, x, y);
+        if (hit) return hit;
+      } catch (_error) {}
+    }
     const root = attachedRoots.get(windowId);
     try {
       return root ? hitTestElement(windowId, root, x, y) : null;
@@ -44,8 +53,10 @@
       if (entry) return entry;
     }
     // Zero-area wrappers (auto-sized absolute containers) are not hit, so fall
-    // back to the registered handler boxes and prefer the current page.
+    // back to the registered handler boxes and prefer the current page (or the
+    // app-bar overlay when the pointer is inside its bounds).
     const root = attachedRoots.get(windowId);
+    const appBarRoot = appBarRoots.get(windowId);
     let best = null;
     let bestArea = Infinity;
     for (const entry of gestureHandlers.values()) {
@@ -53,9 +64,9 @@
       if (!node || !node.viewTag) continue;
       let current = false;
       for (let cursor = node; cursor; cursor = cursor.parent) {
-        if (cursor === root) { current = true; break; }
+        if (cursor === root || cursor === appBarRoot) { current = true; break; }
       }
-      if (root && !current) continue;
+      if ((root || appBarRoot) && !current) continue;
       const rect = nodeRect(windowId, node.viewTag);
       if (!rect || rect.width <= 0 || rect.height <= 0) continue;
       if (x < rect.left || x > rect.left + rect.width ||

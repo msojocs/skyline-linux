@@ -212,7 +212,7 @@ if build != build_path.read_text(encoding="utf-8"):
     print("patched BUILD.gn")
 PY
 
-python3 - "$embedder_dir" "$ENGINE_REPO_ROOT/spec/kernel-symbols.json" <<'PY'
+patch_output=$(python3 - "$embedder_dir" "$ENGINE_REPO_ROOT/spec/kernel-symbols.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -263,6 +263,8 @@ names.append("SkylineShutdownApplication")
 # DevTools Network panel bridge: images/fonts fetch through the pageframe.
 names.append("SkylineSetHttpRequestSink")
 names.append("SkylineNotifyHttpRequestComplete")
+# Safe-area insets for CSS env(safe-area-inset-*).
+names.append("SkylineSetSafeAreaInsets")
 # Custom-route gesture worklets (navigatorPop/startUserGesture/...) -> Dart.
 names.append("SkylineNavigatorPop")
 names.append("SkylineStartUserGesture")
@@ -280,6 +282,13 @@ if missing:
     export_path.write_text(exports, encoding="utf-8")
     print(f"patched embedder_exports.lst ({len(missing)} symbols)")
 PY
+)
+if [ -n "$patch_output" ]; then
+  log "$patch_output"
+  # The version script is not a ninja input; force a relink so newly exported
+  # Skyline* symbols actually appear in libflutter_engine.so.
+  rm -f "$ENGINE_STAGE/libflutter_engine.so"
+fi
 
 if [ "$do_build" -eq 1 ]; then
   log "building flutter_engine with the embedded Skyline runtime ($runtime_mode)"

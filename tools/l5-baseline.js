@@ -57,6 +57,7 @@ const FIXTURES = [
   'appservice-content-box.ops.json',
   'appservice-content-box-shrink.ops.json',
   'appservice-display-flex.ops.json',
+  'appservice-calc-env.ops.json',
   'appservice-content-box-nav.ops.json',
   'appservice-content-box-stretch.ops.json',
   'appservice-content-box-clamp.ops.json',

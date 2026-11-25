@@ -623,6 +623,62 @@ test('bootstrap: swiper drags do not bubble to an outer pan gesture handler', ()
     'vertical drags on a vertical swiper are consumed by the swiper');
 });
 
+test('bootstrap: app-bar overlay gesture handlers win the hit test', () => {
+  const { sandbox } = loadBootstrap();
+  const fullPage = {
+    left: 0, top: 0, right: 390, bottom: 844, width: 390, height: 844,
+    zIndex: 0, pointerEvents: 0,
+  };
+  const barRect = {
+    left: 0, top: 700, right: 390, bottom: 844, width: 390, height: 144,
+    zIndex: 0, pointerEvents: 0,
+  };
+  const rects = new Map();
+  sandbox.__skylineNative.getNodeRect = (windowId, viewTag) =>
+    rects.get(viewTag) || fullPage;
+
+  const SkylineGlobal = sandbox.SkylineGlobal;
+  const pageCtx = new SkylineGlobal.PageContext(4, 4);
+  const page = pageCtx.createElement('empty', 'view');
+  const pageChild = pageCtx.createElement('empty', 'view');
+  page.appendChild(pageChild);
+  pageCtx.attach(page);
+
+  // App-bar contexts attach a window overlay above the page stack.
+  const appCtx = new SkylineGlobal.AppBarContext(4294967299, 4);
+  const bar = appCtx.createElement('empty', 'view');
+  const barChild = appCtx.createElement('empty', 'view');
+  bar.appendChild(barChild);
+  appCtx.attach(bar);
+  rects.set(page.viewTag, fullPage);
+  rects.set(pageChild.viewTag, fullPage);
+  rects.set(bar.viewTag, barRect);
+  rects.set(barChild.viewTag, barRect);
+
+  const barEvents = [];
+  const pageEvents = [];
+  SkylineGlobal.ReanimatedModule.registerEventHandler(
+    'onGestureHandlerEvent-11', (event) => barEvents.push(event));
+  SkylineGlobal.ReanimatedModule.registerEventHandler(
+    'onGestureHandlerEvent-12', (event) => pageEvents.push(event));
+  SkylineGlobal.GestureHandlerModule.attachGestureHandler(11, 6, {}, bar);
+  SkylineGlobal.GestureHandlerModule.attachGestureHandler(12, 3, {}, page);
+
+  const shell = new sandbox.SkylineShell();
+  shell.dispatchTouchStartEvent(4, 200, 800);
+  shell.dispatchTouchMoveEvent(4, 200, 780);
+  shell.dispatchTouchMoveEvent(4, 200, 740);
+  shell.dispatchTouchEndEvent(4, 200, 700);
+  assert.ok(barEvents.length >= 2,
+    'the vertical drag handler inside the app bar receives the drag');
+  assert.equal(pageEvents.length, 0,
+    'the page handler must not claim a drag that starts on the overlay');
+  const active = barEvents.filter((event) => event.state === 2);
+  assert.ok(active.length >= 1, 'the drag reaches the ACTIVE state');
+  assert.ok(active[active.length - 1].deltaY < 0,
+    'upward drag events carry a negative deltaY');
+});
+
 test('bootstrap: shared values drive timing animations to completion', () => {
   const { sandbox } = loadBootstrap();
   const mutable = sandbox.SkylineGlobal.ReanimatedModule.makeMutable(1);

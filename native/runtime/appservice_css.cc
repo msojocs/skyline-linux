@@ -15,7 +15,25 @@ bool ParseNumber(const std::string& value, double* out) {
 }
 
 // Parses "12", "12px" or "0".  Percentages are reported separately.
-bool ParseLength(const std::string& raw, float* px, float* percent) {
+namespace {
+
+bool ParseEnvValue(const std::string& name, float* out) {
+  const std::string key = LowerAscii(TrimAscii(name));
+  int side = -1;
+  if (key == "safe-area-inset-top") side = 0;
+  else if (key == "safe-area-inset-right") side = 1;
+  else if (key == "safe-area-inset-bottom") side = 2;
+  else if (key == "safe-area-inset-left") side = 3;
+  // Unknown env() names resolve to 0 instead of invalidating the declaration.
+  *out = side >= 0 ? SafeAreaInset(side) : 0.0f;
+  return true;
+}
+
+bool ParseCalc(const std::string& expr, float* px, float* percent);
+
+}  // namespace
+
+bool ParseSimpleLength(const std::string& raw, float* px, float* percent) {
   const std::string value = TrimAscii(raw);
   if (value.empty()) return false;
   if (value == "auto") {
@@ -64,6 +82,82 @@ bool ParseLength(const std::string& raw, float* px, float* percent) {
   *px = static_cast<float>(number);
   *percent = -1.0f;
   return true;
+}
+
+namespace {
+
+// `calc()` with top-level +/- terms and `env(safe-area-inset-*)`; e.g.
+// `calc(84px + env(safe-area-inset-bottom))` used by the app-bar page's
+// `.scroll-area` bottom margin.  A term may also be a plain CSS length.
+bool ParseCalc(const std::string& expr, float* px, float* percent) {
+  struct Term { int sign; std::string text; };
+  std::vector<Term> terms;
+  int depth = 0;
+  int sign = 1;
+  size_t start = 0;
+  for (size_t i = 0; i < expr.size(); i++) {
+    const char c = expr[i];
+    if (c == '(') {
+      depth++;
+    } else if (c == ')') {
+      depth--;
+    } else if (depth == 0 && (c == '+' || c == '-')) {
+      const std::string term = TrimAscii(expr.substr(start, i - start));
+      if (!term.empty()) terms.push_back(Term{sign, term});
+      sign = c == '-' ? -1 : 1;
+      start = i + 1;
+    }
+  }
+  const std::string last = TrimAscii(expr.substr(start));
+  if (!last.empty()) terms.push_back(Term{sign, last});
+  if (terms.empty()) return false;
+  float total_px = 0.0f;
+  float total_pct = -1.0f;
+  for (const Term& term : terms) {
+    const std::string text = TrimAscii(term.text);
+    float term_px = 0.0f;
+    float term_pct = -1.0f;
+    if (StartsWith(text, "env(") && !text.empty() && text.back() == ')') {
+      ParseEnvValue(text.substr(4, text.size() - 5), &term_px);
+    } else if (StartsWith(text, "calc(") && !text.empty() &&
+               text.back() == ')') {
+      if (!ParseCalc(text.substr(5, text.size() - 6), &term_px, &term_pct)) {
+        return false;
+      }
+    } else if (!ParseSimpleLength(text, &term_px, &term_pct)) {
+      return false;
+    }
+    if (term_pct >= 0.0f) {
+      if (total_pct < 0.0f) total_pct = 0.0f;
+      total_pct += static_cast<float>(term.sign) * term_pct;
+    } else {
+      total_px += static_cast<float>(term.sign) * term_px;
+    }
+  }
+  if (total_pct >= 0.0f) {
+    *px = total_px;
+    *percent = total_pct;
+  } else {
+    *px = total_px;
+    *percent = -1.0f;
+  }
+  return true;
+}
+
+}  // namespace
+
+bool ParseLength(const std::string& raw, float* px, float* percent) {
+  const std::string value = TrimAscii(raw);
+  if (value.empty()) return false;
+  if (StartsWith(value, "env(") && value.back() == ')') {
+    ParseEnvValue(value.substr(4, value.size() - 5), px);
+    *percent = -1.0f;
+    return true;
+  }
+  if (StartsWith(value, "calc(") && value.back() == ')') {
+    return ParseCalc(value.substr(5, value.size() - 6), px, percent);
+  }
+  return ParseSimpleLength(value, px, percent);
 }
 
 uint32_t NamedColor(const std::string& name) {

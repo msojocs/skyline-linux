@@ -58,6 +58,9 @@ extern "C" void SkylineRefresherTriggered(uint32_t node_id, uint8_t open,
                                           uint8_t two_level);
 extern "C" void SkylineSetNavigateBackInterception(int32_t page_id,
                                                    uint8_t enabled);
+// Safe-area insets for CSS `env(safe-area-inset-*)`.
+extern "C" void SkylineSetSafeAreaInsets(double top, double right,
+                                         double bottom, double left);
 // D10: accessibility + DevTools automation.
 extern "C" void SkylineSetAccessibilitySink(void (*sink)(int32_t kind,
                                                          int32_t value));
@@ -1194,6 +1197,20 @@ napi_value AccessibilityState(napi_env env, napi_callback_info info) {
   return result;
 }
 
+napi_value SetSafeArea(napi_env env, napi_callback_info info) {
+  size_t argc = 4;
+  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  double insets[4] = {0.0, 0.0, 0.0, 0.0};
+  for (size_t i = 0; i < argc && i < 4; i++) {
+    if (argv[i] != nullptr) napi_get_value_double(env, argv[i], &insets[i]);
+  }
+#ifdef SKYLINE_HAVE_ENGINE
+  SkylineSetSafeAreaInsets(insets[0], insets[1], insets[2], insets[3]);
+#endif
+  return Undefined(env);
+}
+
 napi_value DumpElementTree(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1] = {nullptr};
@@ -1560,7 +1577,7 @@ NAPI_MODULE_INIT() {
   Define(env, bridge, "updateAnimationController", UpdateAnimationController);
   Define(env, bridge, "relaunchApp", RelaunchApp);
   Define(env, bridge, "shutdownApplication", ShutdownApplication);
-  Define(env, bridge, "setSafeArea", Noop);
+  Define(env, bridge, "setSafeArea", SetSafeArea);
   Define(env, bridge, "dispatch", Noop);
   Define(env, bridge, "notify", Noop);
   Define(env, bridge, "brightness", Noop);

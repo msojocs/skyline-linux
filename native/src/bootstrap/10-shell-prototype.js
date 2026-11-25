@@ -89,7 +89,12 @@
     ['setSendLogCallback', setter('setSendLogCallback')],
     ['setSafeAreaEdgeInsets', function (...args) {
       if (args.length !== 4) throw new Error('SetSafeAreaEdgeInsets expects 4 arguments');
-      return native.setSafeArea(args[0], args[1], args[2], args[3]);
+      if (typeof native.log === 'function') {
+        native.log(`setSafeAreaEdgeInsets ${args.join(',')}`);
+      }
+      // The DevTools passes (left, top, right, bottom); the native addon takes
+      // (top, right, bottom, left).
+      return native.setSafeArea(args[1], args[2], args[3], args[0]);
     }],
     ['notifyResourceLoad', function (...args) { return native.notify('notifyResourceLoad', args); }],
     ['notifyHttpRequestComplete', function (...args) {

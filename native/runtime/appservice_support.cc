@@ -67,3 +67,24 @@ bool ReadResourceBytes(const std::string& path, std::vector<uint8_t>* out) {
               std::istreambuf_iterator<char>());
   return true;
 }
+
+namespace appservice {
+
+namespace {
+float g_safe_area_insets[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+}  // namespace
+
+// Safe-area insets pushed by `SkylineShell.setSafeAreaEdgeInsets`.
+void SetSafeAreaInsets(double top, double right, double bottom, double left) {
+  g_safe_area_insets[0] = static_cast<float>(top);
+  g_safe_area_insets[1] = static_cast<float>(right);
+  g_safe_area_insets[2] = static_cast<float>(bottom);
+  g_safe_area_insets[3] = static_cast<float>(left);
+}
+
+float SafeAreaInset(int side) {
+  if (side < 0 || side > 3) return 0.0f;
+  return g_safe_area_insets[side];
+}
+
+}  // namespace appservice

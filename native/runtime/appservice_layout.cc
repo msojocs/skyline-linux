@@ -1226,6 +1226,40 @@ void ResetNodeLayoutToOrigin(AppNode* node) {
 
 // Restores origin-relative buffers for every sliver-hosted subtree after a
 // page-wide LayoutNode/WriteLayoutMetrics pass (targeted updates, animations).
+// Scroll-view children are Flutter slivers: the sliver positions them by their
+// widget size and ignores the layout offsets.  Restore the vertical margins in
+// the root YGNode's layout buffer so each child reserves `margin-top` above and
+// `margin-bottom` below its content (otherwise the list extent is short and the
+// last rows cannot scroll fully into view).
+void ApplySliverMargins(AppNode* node) {
+  if (node == nullptr || node->layout_buffer_p == nullptr) return;
+  const AppStyle& style = node->style;
+  const float margin_top = style.margin[0];
+  const float margin_bottom = style.margin[2];
+  const float margin_left = style.margin[3];
+  const float margin_right = style.margin[1];
+  if (margin_top == 0.0f && margin_bottom == 0.0f && margin_left == 0.0f &&
+      margin_right == 0.0f) {
+    return;
+  }
+  Dart_Handle buffer = Dart_HandleFromPersistent(node->layout_buffer_p);
+  if (buffer == nullptr || Dart_IsError(buffer) || Dart_IsNull(buffer)) return;
+  Dart_TypedData_Type type = Dart_TypedData_kInvalid;
+  void* data = nullptr;
+  intptr_t length = 0;
+  if (Dart_IsError(Dart_TypedDataAcquireData(buffer, &type, &data, &length))) {
+    return;
+  }
+  if (type == Dart_TypedData_kFloat32 && length >= 9 && data != nullptr) {
+    float* values = static_cast<float*>(data);
+    values[0] = margin_top;                       // paint y offset
+    values[1] = margin_left;                      // paint x offset
+    values[7] = margin_top + margin_bottom;       // root size margin block
+    values[8] = margin_left + margin_right;       // root size margin inline
+  }
+  Dart_TypedDataReleaseData(buffer);
+}
+
 void RestoreSliverLayoutMetrics() {
   if (g_page == nullptr) return;
   for (auto& entry : g_page->nodes) {
@@ -1236,6 +1270,7 @@ void RestoreSliverLayoutMetrics() {
     LayoutNode(node, 0.0f, 0.0f, node->measured_w, node->measured_h, &metrics,
                node->abs_x, node->abs_y);
     WriteLayoutMetrics(metrics);
+    ApplySliverMargins(node);
   }
 }
 
