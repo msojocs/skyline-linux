@@ -91,6 +91,11 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
     node->measured_h = 0.0f;
     return size;
   }
+  static const uint32_t debug_node_id = [] {
+    const char* value = std::getenv("SKYLINE_LAYOUT_DEBUG_ID");
+    return value != nullptr ? static_cast<uint32_t>(std::atoi(value)) : 0u;
+  }();
+  const bool debug_node = debug_node_id != 0 && node->id == debug_node_id;
   if (containing_w < 0.0f) containing_w = avail_w;
   ResolveBoxEdges(&node->style, containing_w);
   const AppStyle& style = node->style;
@@ -391,6 +396,18 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
 
   node->measured_w = width;
   node->measured_h = height;
+  if (debug_node) {
+    std::fprintf(stderr,
+                 "[ops-debug] measure #%u tag=%s children=%zu inline=%d "
+                 "flow=%zu avail=%.1fx%.1f stretch=%d,%d -> %.1fx%.1f "
+                 "content_h=%.1f\n",
+                 node->id, node->tag.c_str(), node->children.size(),
+                 IsInlineFlowContainer(node) ? 1 : 0,
+                 OrderedFlowChildren(node).size(), static_cast<double>(avail_w),
+                 static_cast<double>(avail_h), stretch_w ? 1 : 0,
+                 stretch_h ? 1 : 0, static_cast<double>(width),
+                 static_cast<double>(height), static_cast<double>(content.h));
+  }
   return SizeF{width, height};
 }
 
@@ -490,6 +507,19 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
                 float cb_h) {
   node->abs_x = abs_x;
   node->abs_y = abs_y;
+  static const uint32_t debug_node_id = [] {
+    const char* value = std::getenv("SKYLINE_LAYOUT_DEBUG_ID");
+    return value != nullptr ? static_cast<uint32_t>(std::atoi(value)) : 0u;
+  }();
+  if (debug_node_id != 0 && node->id == debug_node_id) {
+    std::fprintf(stderr,
+                 "[ops-debug] layout #%u tag=%s -> x=%g y=%g w=%g h=%g "
+                 "measured=%gx%g\n",
+                 node->id, node->tag.c_str(), static_cast<double>(x),
+                 static_cast<double>(y), static_cast<double>(w),
+                 static_cast<double>(h), static_cast<double>(node->measured_w),
+                 static_cast<double>(node->measured_h));
+  }
   // Keep the measured size in sync with the final laid-out box.  MeasureNode
   // reports intrinsic sizes, so flex-grown children (e.g. the album component
   // host with `height: 0; flex: 1`) would otherwise publish a zero rect and
@@ -751,6 +781,23 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
       layout.h = layout.base_main;
     }
     layout.shrink = EffectiveFlexShrink(child->style, in_scroll_view);
+    if (debug_node_id != 0 && child->id == debug_node_id) {
+      std::fprintf(stderr,
+                   "[ops-debug] child-layout #%u measured=%gx%g layout=%gx%g "
+                   "base_main=%g main_extent=%g content=%gx%g in_scroll=%d "
+                   "stretch_cross=%d row=%d flex=%d/%g basis=%g pct=%g\n",
+                   child->id, static_cast<double>(measured.w),
+                   static_cast<double>(measured.h), static_cast<double>(layout.w),
+                   static_cast<double>(layout.h),
+                   static_cast<double>(layout.base_main),
+                   static_cast<double>(main_extent),
+                   static_cast<double>(content_w), static_cast<double>(content_h),
+                   in_scroll_view ? 1 : 0, stretch_cross ? 1 : 0,
+                   style.row ? 1 : 0, child->style.has_flex ? 1 : 0,
+                   static_cast<double>(child->style.flex),
+                   static_cast<double>(child->style.flex_basis),
+                   static_cast<double>(child->style.flex_basis_percent));
+    }
     total_outer_base += layout.main + layout.margin_main_start +
                         layout.margin_main_end;
     if (child->style.has_flex && child->style.flex > 0.0f) {

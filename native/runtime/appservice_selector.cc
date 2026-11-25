@@ -187,6 +187,27 @@ bool NodeHasClass(const AppNode* node, const std::string& name) {
   return false;
 }
 
+// glass-easel style isolation: a class added with a style scope only matches
+// rules from that scope's stylesheet.  Entries without a scope (recorded
+// fixtures, `setClass`) or unscoped rules keep the historical name-only match.
+bool NodeHasClassInScope(const AppNode* node, const std::string& name,
+                         int style_scope) {
+  for (size_t i = 0; i < node->classes.size(); i++) {
+    if (node->classes[i] != name) continue;
+    const int class_scope =
+        i < node->class_scopes.size() ? node->class_scopes[i] : 0;
+    if (style_scope == 0 || class_scope == 0 || class_scope == style_scope) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool NodeScopeMatches(const AppNode* node, int style_scope) {
+  if (style_scope == 0 || node->style_scope == 0) return true;
+  return node->style_scope == style_scope;
+}
+
 // WXML custom elements are hyphenated (`sticky-header`, `scroll-view`) while
 // the adapter's shadow nodes drop the hyphen (`stickyheader`).  Compare
 // element selectors with hyphens/underscores removed so CSS rules such as
@@ -202,8 +223,15 @@ std::string NormalizeElementName(const std::string& name) {
 }
 
 bool CompoundSelectorMatches(const CompoundSelector& selector,
-                             const AppNode* node) {
+                             const AppNode* node, int style_scope,
+                             uint64_t context_id) {
   if (node == nullptr) return false;
+  // Page/app-bar contexts get their own stylesheet copies with a re-used
+  // numeric style scope; the renderer context keeps them apart.
+  if (context_id != 0 && node->context_id != 0 &&
+      node->context_id != context_id) {
+    return false;
+  }
   if (!selector.element.empty() && selector.element != node->tag &&
       selector.element != node->name) {
     const std::string wanted = NormalizeElementName(selector.element);
@@ -212,21 +240,30 @@ bool CompoundSelectorMatches(const CompoundSelector& selector,
       return false;
     }
   }
+  // Element and id selectors belong to the element's own component scope.
+  // Class-only compounds are scoped per class entry (a parent component may
+  // inject a class onto a child component host), so they skip this check.
+  if (!selector.element.empty() && !NodeScopeMatches(node, style_scope)) {
+    return false;
+  }
   if (!selector.id.empty()) {
     const auto found = node->attrs.find("id");
     if (found == node->attrs.end() || found->second != selector.id) return false;
+    if (!NodeScopeMatches(node, style_scope)) return false;
   }
   for (const std::string& klass : selector.classes) {
-    if (!NodeHasClass(node, klass)) return false;
+    if (!NodeHasClassInScope(node, klass, style_scope)) return false;
   }
   return true;
 }
 
-bool SelectorMatches(const Selector& selector, const AppNode* node) {
+bool SelectorMatches(const Selector& selector, const AppNode* node,
+                     int style_scope, uint64_t context_id) {
   if (selector.compounds.empty() || node == nullptr) return false;
   size_t index = selector.compounds.size() - 1;
   const AppNode* current = node;
-  if (!CompoundSelectorMatches(selector.compounds[index], current)) {
+  if (!CompoundSelectorMatches(selector.compounds[index], current, style_scope,
+                                 context_id)) {
     return false;
   }
   while (index > 0) {
@@ -237,7 +274,8 @@ bool SelectorMatches(const Selector& selector, const AppNode* node) {
     const CompoundSelector& wanted = selector.compounds[index - 1];
     if (combinator == '>') {
       current = current->parent;
-      if (!CompoundSelectorMatches(wanted, current)) return false;
+      if (!CompoundSelectorMatches(wanted, current, style_scope, context_id))
+        return false;
     } else if (combinator == '+' || combinator == '~') {
       const AppNode* parent = current->parent;
       if (parent == nullptr) return false;
@@ -250,11 +288,13 @@ bool SelectorMatches(const Selector& selector, const AppNode* node) {
       if (combinator == '+') {
         if (position > 0) {
           current = parent->children[position - 1];
-          matched = CompoundSelectorMatches(wanted, current);
+          matched = CompoundSelectorMatches(wanted, current, style_scope,
+                                           context_id);
         }
       } else {
         for (size_t i = position; i-- > 0;) {
-          if (CompoundSelectorMatches(wanted, parent->children[i])) {
+          if (CompoundSelectorMatches(wanted, parent->children[i], style_scope,
+                                       context_id)) {
             current = parent->children[i];
             matched = true;
             break;
@@ -265,7 +305,7 @@ bool SelectorMatches(const Selector& selector, const AppNode* node) {
     } else {
       const AppNode* ancestor = current->parent;
       while (ancestor != nullptr &&
-             !CompoundSelectorMatches(wanted, ancestor)) {
+             !CompoundSelectorMatches(wanted, ancestor, style_scope, context_id)) {
         ancestor = ancestor->parent;
       }
       if (ancestor == nullptr) return false;
@@ -307,7 +347,8 @@ bool MediaQueryMatches(const std::string& condition) {
   return true;
 }
 
-void ParseStyleSheet(const std::string& css) {
+void ParseStyleSheet(const std::string& css, int style_scope,
+                     uint64_t context_id) {
   std::string cleaned;
   cleaned.reserve(css.size());
   for (size_t i = 0; i < css.size();) {
@@ -383,6 +424,8 @@ void ParseStyleSheet(const std::string& css) {
       rule.specificity = SelectorSpecificity(*rule.parsed_selector);
       rule.declarations = declarations;
       rule.order = g_next_rule_order++;
+      rule.style_scope = style_scope;
+      rule.context_id = context_id;
       if (g_page != nullptr) g_page->rules.push_back(rule);
     }
     cursor = close + 1;
@@ -422,7 +465,8 @@ void ResolveStyles(AppNode* node, const AppStyle* parent) {
     for (const CssRule& rule : g_page->rules) {
       const Selector* selector = rule.parsed_selector.get();
       if (selector == nullptr) continue;
-      if (SelectorMatches(*selector, node)) {
+      if (SelectorMatches(*selector, node, rule.style_scope,
+                          rule.context_id)) {
         matches.push_back(
             Match{rule.specificity, rule.order, &rule});
       }

@@ -398,6 +398,78 @@ test('appservice ops: text padding insets the glyph run inside the content box',
     `second tab ink x=${second[0]}..${second[2]}`);
 });
 
+test('appservice ops: app-bar context installs an overlay, not a page route', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // Mirrors `app.json#appBar`: the SDK creates a second render context and
+  // attaches it through `attachAppBar`.  The runtime must hand the tree to
+  // Dart `CreateAppBar` (window overlay) instead of materialising another
+  // route, otherwise the app bar paints on top of the page as a full page.
+  const fixture = path.join(repoRoot, 'test', 'fixtures',
+    'appservice-appbar.ops.json');
+  const { result, logs, pixels } = runHost(fixture, { dpr: 2 });
+
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+  assert.match(logs, /app bar -> CreateAppBar \(root=10, 320x240\)/);
+  assert.equal((logs.match(/appservice page \d+ -> CreatePageRoute/g) || []).length,
+    1, 'the app-bar context must not create a second page route');
+
+  // Page content (red 100x100 block) stays visible; the app-bar overlay draws
+  // its bottom bar (green, 120x60 CSS) above it.
+  const pixelAt2 = (x, y) => {
+    const offset = (y * width * 2 + x) * 4;
+    return [...pixels.subarray(offset, offset + 4)];
+  };
+  assert.deepEqual(pixelAt2(20, 20), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt2(240, 20), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt2(20, 400), [0, 170, 0, 255]);
+  assert.deepEqual(pixelAt2(20, 200), [255, 255, 255, 255]);
+});
+
+test('appservice ops: component stylesheets do not leak across style scopes', {
+  skip: prerequisiteSkip() || false,
+  timeout: 60000,
+}, () => {
+  // glass-easel compiles each component's WXSS into its own style scope and
+  // tags classes with it (`addClass(prefix, scope)`, `setStyleScope`).  The
+  // app-bar example's `.title{flex:1}` used to leak onto the page's
+  // `.title`, collapsing the section headings to zero height so the cards
+  // overlapped them.
+  const fixture = path.join(repoRoot, 'test', 'fixtures',
+    'appservice-style-scope.ops.json');
+  const { result, logs, pixels } = runHost(fixture, {
+    env: { SKYLINE_APP_SERVICE_DEBUG: '1' },
+  });
+
+  if (logs.includes('engine artifacts missing')) {
+    if (process.env.SKYLINE_REQUIRE_ENGINE === '1') {
+      assert.fail(`engine is required but not built:\n${logs}`);
+    }
+    return;
+  }
+  assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
+  assert.ok(pixels, 'no frame was captured');
+
+  // Page-scope `.title`: margin-top 16, text height 24, no app-bar flex rule.
+  assert.match(logs, /rect #3 left=0 top=16 w=320 h=24/);
+  // The following red box starts after the heading instead of overlapping it.
+  assert.match(logs, /rect #5 left=0 top=40 w=320 h=50/);
+  // The component-scope `.title{flex:1}` still applies inside its own scope:
+  // the flex row's side box is pushed to x=270.
+  assert.match(logs, /rect #9 left=270 top=90 w=50 h=40/);
+  assert.deepEqual(pixelAt(pixels, 200, 30), [255, 255, 255, 255]);
+  assert.deepEqual(pixelAt(pixels, 200, 60), [255, 0, 0, 255]);
+  assert.deepEqual(pixelAt(pixels, 300, 100), [0, 170, 0, 255]);
+});
+
 test('appservice ops: descendant selectors respect their ancestor compound', {
   skip: prerequisiteSkip() || false,
   timeout: 60000,

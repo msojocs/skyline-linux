@@ -228,6 +228,15 @@ struct AppNode {
   std::string name;
   std::string text;
   std::vector<std::string> classes;
+  // Component style-isolation scope for each `classes` entry (parallel array;
+  // `addClass(name, scope)` from glass-easel).  0 = unscoped/legacy op stream.
+  std::vector<int> class_scopes;
+  // Primary style scope assigned by `setStyleScope` (the element's component).
+  int style_scope = 0;
+  // Renderer context that created the node (page/app-bar/tab-bar).  Pages
+  // re-use style scope ids, so context ids keep one page's WXSS from styling
+  // the pages kept alive under it.
+  uint64_t context_id = 0;
   std::string inline_style;
   std::unordered_map<std::string, std::string> attrs;
   std::vector<AppNode*> children;
@@ -364,6 +373,11 @@ struct CssRule {
   int specificity = 0;
   std::vector<std::pair<std::string, std::string>> declarations;
   int order = 0;
+  // Component stylesheet scope (`appendStyleSheet.index`).  Rules only match
+  // elements/classes tagged with the same scope (glass-easel style isolation).
+  int style_scope = 0;
+  // Renderer context that appended the sheet (see AppNode::context_id).
+  uint64_t context_id = 0;
 };
 
 struct FontFaceRequest {
@@ -385,6 +399,16 @@ struct OpPage {
   std::vector<PendingAnimatedStyle> animated_styles;
   size_t scheduled_animated_styles = 0;
   uint32_t root_id = 0;
+  // Context that produced the current batch (page / tab bar / app bar).
+  // Every appservice flush starts with a `createContext` op carrying its id.
+  // App-bar ids exceed uint32 (2^32 + pageId), so keep the full value.
+  uint64_t active_context_id = 0;
+  // App-bar contexts (`app.json#appBar`) attach a full-window overlay instead
+  // of a page route.  `appbar_context_id` is captured from the `attachAppBar`
+  // batch so later updates rebuild the overlay rather than the page.
+  uint32_t appbar_root_id = 0;
+  uint64_t appbar_context_id = 0;
+  Dart_PersistentHandle appbar_widget = nullptr;
   int applied_ops = 0;
   bool started = false;
   bool force_rebuild = false;

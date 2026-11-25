@@ -609,6 +609,10 @@ using CreatePageRouteFn = void (*)(
     void* config);
 
 inline constexpr uint32_t kCreatePageRouteHash = 662439267u;
+// App-bar contexts install their tree as a full-window overlay (Dart
+// `PageStackController.createAppBar` -> OverlayEntry), not as a page route.
+using CreateAppBarFn = void (*)(Dart_Handle root);
+inline constexpr uint32_t kCreateAppBarHash = 509243875u;
 // Direct-render image invalidation callbacks (used by the image and update
 // modules).
 inline constexpr uint32_t kBackgroundImageMarkNeedPaintHash = 741124659u;

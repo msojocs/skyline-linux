@@ -52,6 +52,8 @@ const FIXTURES = [
   'appservice-absolute.ops.json',
   'appservice-absolute-margin.ops.json',
   'appservice-text-padding.ops.json',
+  'appservice-style-scope.ops.json',
+  'appservice-appbar.ops.json',
   'appservice-shadow.ops.json',
   'appservice-gridview.ops.json',
   'appservice-listview.ops.json',

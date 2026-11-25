@@ -726,6 +726,11 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
   for (const auto& entry : g_page->page_stack) {
     CollectSubtreeNodes(FindNode(entry.root_id), &covered);
   }
+  // The app-bar overlay lives outside the page route stack; keep its widget
+  // handles (image downloads, text widgets) alive across page rebuilds.
+  if (g_page->appbar_root_id != 0) {
+    CollectSubtreeNodes(FindNode(g_page->appbar_root_id), &covered);
+  }
   for (auto& entry : g_page->nodes) {
     if (covered.count(entry.second) != 0) continue;
     ResetNodeHandlesSkipping(entry.second, true, covered);

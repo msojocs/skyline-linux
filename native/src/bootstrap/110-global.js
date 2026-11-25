@@ -50,6 +50,11 @@
     registerTransitionCallback(callback) {
       if (typeof callback === 'function') runtimeTransitionCallbacks.push(callback);
     },
+    // Called by the app-bar adapter right before it attaches its context.  The
+    // attach itself is recorded by BridgeAppBarContext; the runtime installs
+    // the built tree as a window overlay.
+    attachAppBar() { return 0; },
+    removeAppBarContext() { return 0; },
   });
   const bridgeNavigator = autoStub({
     notifyNavigateTo(...args) { bridgeOps(0).push({ op: 'notifyNavigateTo', args }); },
@@ -63,7 +68,7 @@
     Navigator: bridgeNavigator,
     PageContext: BridgePageContext,
     TabBarContext: BridgePageContext,
-    AppBarContext: BridgePageContext,
+    AppBarContext: BridgeAppBarContext,
     features: autoStub({}),
     GestureHandlerModule: createGestureHandlerModule(),
     gestureHandlerModule: autoStub({}),

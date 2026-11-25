@@ -10,6 +10,7 @@ AppNode* NewNode(uint32_t id, const std::string& tag, const std::string& name) {
   node->id = id;
   node->tag = tag;
   node->name = name;
+  node->context_id = g_page != nullptr ? g_page->active_context_id : 0;
   node->address = g_next_address;
   g_next_address += 0x100;
   g_node_address_ids[node->address] = id;
@@ -56,6 +57,9 @@ void RemoveChild(AppNode* parent, AppNode* child) {
 
 void SetClasses(AppNode* node, const std::vector<std::string>& classes) {
   node->classes = classes;
+  // `setClass` carries no per-class style scope; the unscoped entries keep
+  // matching their historical rules.
+  node->class_scopes.assign(classes.size(), 0);
 }
 
 std::vector<std::string> SplitClasses(const std::string& names) {

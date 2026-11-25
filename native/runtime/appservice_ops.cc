@@ -12,6 +12,19 @@ uint32_t MemberUint(const rapidjson::Value& object, const char* key,
   return member->value.GetUint();
 }
 
+// App-bar/tab-bar render contexts use ids beyond uint32 (e.g. 2^32 + pageId),
+// which rapidjson stores as Uint64 rather than Uint.
+uint64_t MemberUint64(const rapidjson::Value& object, const char* key,
+                      uint64_t fallback) {
+  const auto member = object.FindMember(key);
+  if (member == object.MemberEnd()) return fallback;
+  const rapidjson::Value& value = member->value;
+  if (value.IsUint64()) return value.GetUint64();
+  if (value.IsInt64()) return static_cast<uint64_t>(value.GetInt64());
+  if (value.IsUint()) return value.GetUint();
+  return fallback;
+}
+
 const char* MemberText(const rapidjson::Value& object, const char* key,
                        const char* fallback) {
   const auto member = object.FindMember(key);
@@ -1061,8 +1074,21 @@ void ApplyOperation(const rapidjson::Value& op) {
                    static_cast<void*>(g_page->root_node),
                    static_cast<void*>(g_page->root_connector));
     }
-  } else if (std::strcmp(kind, "createContext") == 0 ||
-             std::strcmp(kind, "setAsTab") == 0 ||
+  } else if (std::strcmp(kind, "createContext") == 0) {
+    // Every appservice flush starts with this op so the native replay knows
+    // which renderer context the batch belongs to.
+    if (g_page != nullptr) {
+      g_page->active_context_id = MemberUint64(op, "id", 0);
+    }
+  } else if (std::strcmp(kind, "attachAppBar") == 0) {
+    // Skyline app-bar contexts install their tree as a window overlay instead
+    // of a page route (Dart `CreateAppBar`).  Keep the root and remember the
+    // context so later app-bar updates rebuild the overlay, not the page.
+    if (g_page != nullptr) {
+      g_page->appbar_root_id = MemberUint(op, "root", 0);
+      g_page->appbar_context_id = g_page->active_context_id;
+    }
+  } else if (std::strcmp(kind, "setAsTab") == 0 ||
              std::strcmp(kind, "registerEventCallback") == 0 ||
              std::strcmp(kind, "registerAnimationCallback") == 0 ||
              std::strcmp(kind, "startMapper") == 0 ||
@@ -1071,7 +1097,11 @@ void ApplyOperation(const rapidjson::Value& op) {
   } else if (std::strcmp(kind, "appendStyleSheet") == 0) {
     const auto member = op.FindMember("css");
     if (member != op.MemberEnd() && member->value.IsString()) {
-      ParseStyleSheet(member->value.GetString());
+      // `index` is the component style scope the sheet was compiled for
+      // (glass-easel `compiledStyleSheet scope=N id=...`).
+      ParseStyleSheet(member->value.GetString(),
+                      static_cast<int>(MemberUint(op, "index", 0)),
+                      g_page != nullptr ? g_page->active_context_id : 0);
     }
   } else if (std::strcmp(kind, "createElementDone") == 0) {
     // Reserved.
@@ -1123,17 +1153,47 @@ void ApplyOperation(const rapidjson::Value& op) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
     if (node != nullptr) {
       const std::string klass = MemberText(op, "prefix");
-      if (!klass.empty() && !NodeHasClass(node, klass)) {
+      const int style_scope = static_cast<int>(MemberUint(op, "name", 0));
+      bool present = false;
+      for (size_t i = 0; i < node->classes.size(); i++) {
+        if (node->classes[i] != klass) continue;
+        const int existing =
+            i < node->class_scopes.size() ? node->class_scopes[i] : 0;
+        if (existing == style_scope) {
+          present = true;
+          break;
+        }
+      }
+      if (!klass.empty() && !present) {
         node->classes.push_back(klass);
+        node->class_scopes.push_back(style_scope);
       }
     }
   } else if (std::strcmp(kind, "removeClass") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
     if (node != nullptr) {
       const std::string klass = MemberText(op, "prefix");
-      node->classes.erase(
-          std::remove(node->classes.begin(), node->classes.end(), klass),
-          node->classes.end());
+      const int style_scope = static_cast<int>(MemberUint(op, "name", 0));
+      for (size_t i = 0; i < node->classes.size();) {
+        const int existing =
+            i < node->class_scopes.size() ? node->class_scopes[i] : 0;
+        if (node->classes[i] == klass &&
+            (style_scope == 0 || existing == style_scope)) {
+          node->classes.erase(node->classes.begin() +
+                              static_cast<std::ptrdiff_t>(i));
+          if (i < node->class_scopes.size()) {
+            node->class_scopes.erase(node->class_scopes.begin() +
+                                     static_cast<std::ptrdiff_t>(i));
+          }
+          continue;
+        }
+        i++;
+      }
+    }
+  } else if (std::strcmp(kind, "setStyleScope") == 0) {
+    AppNode* node = FindNode(MemberUint(op, "id", 0));
+    if (node != nullptr) {
+      node->style_scope = std::atoi(MemberText(op, "scope", "0"));
     }
   } else if (std::strcmp(kind, "setClass") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));

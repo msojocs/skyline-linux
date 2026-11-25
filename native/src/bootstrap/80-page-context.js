@@ -2,12 +2,17 @@
     constructor(id, windowId) {
       this.id = id;
       this.windowId = windowId;
-      this.ops = bridgeOps(windowId);
+      // Each renderer context (page, app bar, tab bar) owns its operations.
+      // Sharing one per-window buffer mixed the page and app-bar trees in the
+      // same batch, so the native replay could not tell which root a batch
+      // belonged to and materialised the app bar as an extra page route.
+      this.ops = [];
       this.sent = false;
       this.flushing = false;
       this.flushTimer = null;
       this.rootNode = null;
       this.rendered = false;
+      this.isAppBar = false;
       this.frameworkType = 'glass-easel';
       liveContexts.add(this);
       // Selector-query viewport rect reads these (see WASubContext's
@@ -169,6 +174,13 @@
       // the Hero then gets the real tag/gesture/shuttle values.
       backfillHeroAttributes();
       if (this.flushing || this.ops.length === 0) return;
+      // The native replay keeps one node table per window.  Tag every batch
+      // with the originating context so updates rebuild the right root (the
+      // app-bar context is an overlay, not a page route).
+      if (!this.ops[0] || this.ops[0].op !== 'createContext') {
+        this.ops.unshift({ op: 'createContext', id: this.id,
+                           windowId: this.windowId });
+      }
       this.flushing = true;
       if (this.flushTimer !== null) {
         clearTimeout(this.flushTimer);
@@ -200,6 +212,27 @@
     }
   }
 
+  // Skyline app-bar contexts (`app.json#appBar`) clone a page context but the
+  // SDK attaches them through `SkylineGlobal.runtime.attachAppBar` and expects
+  // the runtime to install them as a window overlay (Dart `CreateAppBar`),
+  // not as another page route.  The SDK's base `attach()` still runs, so tag
+  // the attach so the native replay can tell them apart.
+  class BridgeAppBarContext extends BridgePageContext {
+    constructor(id, windowId) {
+      super(id, windowId);
+      this.isAppBar = true;
+    }
+    attach(root, host) {
+      this.ops.push({ op: 'attachAppBar', root: bridgeId(root), host: bridgeId(host) });
+      if (root && typeof root === 'object') {
+        appBarRoots.set(this.windowId, root);
+      }
+      if (this.flushTimer === null) {
+        this.flushTimer = setTimeout(() => { this.flushTimer = null; this.flush(); }, 2000);
+      }
+    }
+  }
+
   // -- appservice DOM touch dispatch -----------------------------------------
   // Skyline RuntimeCore calls runtime.registerTouchCallback(cb) and expects the
   // native runtime to feed it native hit-test results.  The element tree and
@@ -210,6 +243,10 @@
   const runtimeTransitionCallbacks = [];
   const runtimeTriggerEventCallbacks = [];
   const attachedRoots = new Map();
+  // App-bar overlay roots per window.  They paint above the page stack, so the
+  // hit test must visit them first and fall through to the page when the
+  // collapsed bar does not cover the point.
+  const appBarRoots = new Map();
   // Attached roots in page-stack order (skyline keeps covered pages alive
   // while navigateTo pushes a new route).  navigateBack restores the previous
   // root here as well so the JS hit test follows the visible page.
@@ -218,7 +255,7 @@
   const lastTouchPoint = new Map();
   // Debug handle for CDP inspection of the mirrored element tree.
   globalThis.__skylineDebug = {
-    attachedRoots, detachedPortals, lastTouchPoint,
+    attachedRoots, appBarRoots, detachedPortals, lastTouchPoint,
     touchCallbacks: runtimeTouchCallbacks,
     scrollOffsets,
     workletEventHandlers,
@@ -416,6 +453,10 @@
 
   function touchTargetElement(windowId, x, y) {
     const roots = [];
+    // The app bar paints above the page stack; only fall through when none of
+    // its elements (the collapsed player bar) cover the touch point.
+    const appBar = appBarRoots.get(windowId);
+    if (appBar) roots.push(appBar);
     const portals = detachedPortals.get(windowId);
     if (portals) {
       for (let i = portals.length - 1; i >= 0; i -= 1) roots.push(portals[i]);

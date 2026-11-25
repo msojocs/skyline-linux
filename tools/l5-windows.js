@@ -46,6 +46,10 @@ const IGNORE_RECTS = [[500, 0, 640, 140]];
 // Fixtures whose synthetic op stream cannot drive the official engine's native
 // builder path (or whose painted result is still an open fidelity gap).
 const KNOWN_DIVERGENCES = {
+  'appservice-appbar': {
+    note: 'the Windows synthetic replay only applies PageContext ops; the app-bar overlay is installed by the Skyline SDK runtime (attachAppBar/CreateAppBar), so the official frame contains only the page. Linux-side pixels are asserted in test:ops',
+    compare: false,
+  },
   'appservice-transform3d': {
     note: 'Linux 3D transform fidelity differs from the official engine',
     compare: true,

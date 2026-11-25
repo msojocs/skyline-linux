@@ -249,6 +249,72 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   return true;
 }
 
+// Builds the app-bar context tree and installs/replaces it as a window
+// overlay.  App bars (`app.json#appBar`) are not routes: the SDK attaches them
+// through `SkylineGlobal.runtime.attachAppBar`, and Dart's
+// `PageStackController.createAppBar` puts the widget into a full-screen
+// OverlayEntry.  Re-materialising on every app-bar batch reproduces the SDK's
+// setData/animated-style updates (the overlay entry is replaced).
+bool MaterializeAppBar(RuntimeHolder* holder, const PageBuilders& builders) {
+  if (g_page == nullptr || g_page->appbar_root_id == 0) return false;
+  AppNode* root = FindNode(g_page->appbar_root_id);
+  if (root == nullptr) return false;
+  auto* createAppBar = reinterpret_cast<CreateAppBarFn>(
+      FindCallback(holder->ffi_table, kCreateAppBarHash));
+  if (createAppBar == nullptr || builders.yg_node == nullptr ||
+      builders.yg_connector == nullptr || builders.text == nullptr ||
+      builders.text_span == nullptr || builders.decorated == nullptr ||
+      builders.opacity == nullptr) {
+    std::fprintf(stderr,
+                 "[skyline-runtime] app bar: callbacks not registered\n");
+    return false;
+  }
+  ResolveStyles(root, nullptr);
+  ComputeInlineWhitespace(root);
+  ClearSliverLayoutMarks();
+  // Release the previous overlay build's widget handles; the app-bar tree is
+  // not part of the page route, so no page rebuild resets it.
+  {
+    std::unordered_set<AppNode*> empty;
+    ResetNodeHandlesSkipping(root, true, empty);
+  }
+  const float viewport_w =
+      g_viewport_width > 0.0 ? static_cast<float>(g_viewport_width) : 320.0f;
+  const float viewport_h =
+      g_viewport_height > 0.0 ? static_cast<float>(g_viewport_height) : 240.0f;
+  PrepareLayoutBuffers(root);
+  MeasureNode(root, viewport_w, true, viewport_h, true);
+  root->measured_w = viewport_w;
+  root->measured_h = viewport_h;
+  std::vector<NodeMetric> metrics;
+  LayoutNode(root, 0.0f, 0.0f, viewport_w, viewport_h, &metrics);
+  WriteLayoutMetrics(metrics);
+
+  ResetDeferredFixedNodes();
+  g_fixed_root_node = root;
+  g_collect_fixed_nodes = true;
+  Dart_Handle widget = BuildWidget(
+      root, builders.yg_node, builders.yg_connector, builders.text,
+      builders.text_span, builders.decorated, builders.opacity,
+      builders.scroll, builders.list, builders.grid, builders.direct,
+      builders.list_builder, builders.grid_builder, true);
+  g_collect_fixed_nodes = false;
+  ResetDeferredFixedNodes();
+  if (widget == nullptr || Dart_IsError(widget)) {
+    std::fprintf(stderr, "[skyline-runtime] app bar: build failed\n");
+    return false;
+  }
+  DeletePersistent(&g_page->appbar_widget);
+  g_page->appbar_widget = Dart_NewPersistentHandle(widget);
+  createAppBar(widget);
+  PublishNodeRects();
+  std::fprintf(stderr,
+               "[skyline-runtime] app bar -> CreateAppBar (root=%u, %gx%g)\n",
+               g_page->appbar_root_id, static_cast<double>(viewport_w),
+               static_cast<double>(viewport_h));
+  return true;
+}
+
 void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   const PageBuilders builders = LoadPageBuilders(holder);
   if (builders.yg_node == nullptr || builders.yg_connector == nullptr ||
@@ -301,6 +367,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   g_intersection_unique_nodes.clear();
   g_intersection_node_observers.clear();
   bool attach_pending = false;
+  bool appbar_pending = false;
   for (const rapidjson::Value& op : ops_member->value.GetArray()) {
     ApplyOperation(op);
     const char* kind = MemberText(op, "op");
@@ -308,6 +375,8 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
       // `attachCustomRoute` follows `attach` in the SDK's op stream; defer the
       // build until the whole batch is applied so the config is visible.
       attach_pending = true;
+    } else if (std::strcmp(kind, "attachAppBar") == 0) {
+      appbar_pending = true;
     } else if (std::strcmp(kind, "notifyNavigateBack") == 0) {
       if (g_page->page_count > 0 && navigateBack != nullptr) {
         navigateBack(g_page->pending_back_delta,
@@ -352,6 +421,13 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
       FlattenFragments(root);
     }
     MaterializeAttachedPage(holder, builders, g_page->root_id, 0, 0, 0);
+  }
+  if (appbar_pending) {
+    if (AppNode* root = FindNode(g_page->appbar_root_id)) {
+      AttachDetachedPortalContent(root);
+      FlattenFragments(root);
+    }
+    MaterializeAppBar(holder, builders);
   }
   if (g_page->page_count == 0) {
     std::fprintf(stderr,
@@ -545,6 +621,18 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
                  descriptor);
     return;
   }
+  // Diagnostic: dump every replayed batch so a live page can be replayed as a
+  // host fixture (`SKYLINE_DUMP_OPS=<dir>` in the DevTools environment).
+  if (const char* dump_dir = std::getenv("SKYLINE_DUMP_OPS")) {
+    static int dump_index = 0;
+    char name[1024];
+    std::snprintf(name, sizeof(name), "%s/ops-%03d.json", dump_dir,
+                  dump_index++);
+    if (FILE* dump = std::fopen(name, "wb")) {
+      std::fwrite(json.data(), 1, json.size(), dump);
+      std::fclose(dump);
+    }
+  }
   g_ops_document = std::make_unique<rapidjson::Document>();
   rapidjson::Document& doc = *g_ops_document;
   doc.Parse(json.c_str());
@@ -583,6 +671,7 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
   bool created_route = false;
   bool general_dirty = false;
   bool attach_pending = false;
+  bool appbar_pending = false;
   for (const rapidjson::Value& op : ops_member->value.GetArray()) {
     ApplyOperation(op);
     const char* kind = MemberText(op, "op");
@@ -593,6 +682,9 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
       // custom config pending, so the next navigation would reuse this page's
       // stale host and render nothing.  Defer until the batch is applied.
       attach_pending = true;
+    } else if (std::strcmp(kind, "attachAppBar") == 0) {
+      // App-bar contexts are window overlays, not routes.
+      appbar_pending = true;
     } else if (std::strcmp(kind, "notifyNavigateBack") == 0) {
       auto* navigateBack = reinterpret_cast<NavigateBackFn>(
           FindCallback(holder->ffi_table, kNavigateBackHash));
@@ -643,6 +735,14 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
     g_page->pending_callback_id = 0;
   }
 
+  if (appbar_pending) {
+    if (AppNode* root = FindNode(g_page->appbar_root_id)) {
+      AttachDetachedPortalContent(root);
+      FlattenFragments(root);
+    }
+    MaterializeAppBar(holder, builders);
+  }
+
   if (g_page->force_rebuild) {
     structural = true;
     g_page->force_rebuild = false;
@@ -662,7 +762,16 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
   // list/content in the remaining thousands of ops.  MaterializeAttachedPage
   // only sees the tree at the attach op, so flush the post-attach changes as
   // well instead of skipping the update when a route was created.
-  if (needs_flush && g_page->page_count > 0) {
+  const bool appbar_batch =
+      g_page->appbar_context_id != 0 &&
+      g_page->active_context_id == g_page->appbar_context_id;
+  if (appbar_batch) {
+    // setData/animated-style updates from the app-bar context rebuild the
+    // overlay; the page route is untouched.
+    if (needs_flush && !appbar_pending) {
+      MaterializeAppBar(holder, builders);
+    }
+  } else if (needs_flush && g_page->page_count > 0) {
     if (structural) {
       ClearTransitions();
     } else {
@@ -673,10 +782,12 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
   }
   std::fprintf(stderr,
                "[skyline-runtime] live ops: %u ops (first=%d structural=%d "
-               "flush=%d route=%d pages=%d)\n",
+               "flush=%d route=%d pages=%d ctx=%llu appbar_ctx=%llu\n",
                static_cast<unsigned>(ops_member->value.GetArray().Size()),
                first_batch ? 1 : 0, structural ? 1 : 0, needs_flush ? 1 : 0,
-               created_route ? 1 : 0, g_page->page_count);
+               created_route ? 1 : 0, g_page->page_count,
+               static_cast<unsigned long long>(g_page->active_context_id),
+               static_cast<unsigned long long>(g_page->appbar_context_id));
 }
 
 // Synthetic keyboard input: append/delete text on the focused node and push
