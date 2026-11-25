@@ -401,12 +401,14 @@ test/oracle/     Wine 侧契约录制脚本
 `.github/workflows/release.yml` 在两种事件下构建 Linux 产物：
 
 - push 到 `master`：更新滚动预发布 `preview`（prerelease，tag 始终指向最新提交），
-  资产为 `skyline-linux-preview-<sha>-linux-x64.tar.gz` 与 `.sha256`；
+  资产为 `skyline-linux-preview-linux-x64.tar.gz` 与 `.sha256`；
 - push `v*` tag：创建/更新同名 Release（自动生成 release notes），资产为
   `skyline-linux-<tag>-linux-x64.tar.gz` 与 `.sha256`。
 
-CI 在 `ubuntu-latest` 上执行 `npm run native:build` 和 `npm test`，然后打包
-`skyline.node`、`sharedMemory.node`、stub `libskyline.so` 与 `BUILD-INFO.txt`。
-为控制时长与体积，CI 不拉取 20–30 GB 的 Flutter 引擎，也不生成 AOT 快照
-（依赖引擎的契约/渲染用例会自动跳过）；完整的开发者工具部署仍需在本地执行
-`engine:build` / `app:aot` / `devtools:stage`。
+CI 在 `ubuntu-latest` 上从固定 `build-deps` release 下载预编译的 release 引擎
+（`libflutter_engine.so`、`flutter_embedder.h`、`icudtl.dat`）和 AOT bundle
+（`libapp.so`、`flutter_assets`），然后执行 `npm run native:build` /
+`native:build:release` 与 `npm test`，打包完整的 `skyline.node`、
+`sharedMemory.node`、`libskyline.so`、引擎、ICU 和 `bundle/`。这样发布的归档
+可以直接用于开发者工具，不再是未链接引擎的 stub。引擎或 AOT 更新时需要重建
+`build-deps` release。
