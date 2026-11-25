@@ -395,3 +395,18 @@ test/oracle/     Wine 侧契约录制脚本
   （移除 vcpkg/spdlog 与外部 node_modules 依赖），L3/L4 直接以内置构建为被测目标。
 - [`msojocs/skyline-client-server`](https://github.com/msojocs/skyline-client-server)：现有
   Wine 服务端方案；本仓库的差分测试可作为其回归基线。
+
+## CI 与发布
+
+`.github/workflows/release.yml` 在两种事件下构建 Linux 产物：
+
+- push 到 `master`：更新滚动预发布 `preview`（prerelease，tag 始终指向最新提交），
+  资产为 `skyline-linux-preview-<sha>-linux-x64.tar.gz` 与 `.sha256`；
+- push `v*` tag：创建/更新同名 Release（自动生成 release notes），资产为
+  `skyline-linux-<tag>-linux-x64.tar.gz` 与 `.sha256`。
+
+CI 在 `ubuntu-latest` 上执行 `npm run native:build`、`npm test` 和
+`npm run test:native`，然后打包 `skyline.node`、`sharedMemory.node`、stub
+`libskyline.so` 与 `BUILD-INFO.txt`。为控制时长与体积，CI 不拉取 20–30 GB 的
+Flutter 引擎，也不生成 AOT 快照；完整的开发者工具部署仍需在本地执行
+`engine:build` / `app:aot` / `devtools:stage`。

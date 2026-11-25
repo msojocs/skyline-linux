@@ -1,0 +1,107 @@
+name: Build and Publish
+
+# Builds the Linux N-API addons on every push to master and publishes them as a
+# rolling `preview` prerelease; pushing a `v*` tag publishes a normal release.
+#
+# CI intentionally does not fetch the 20-30 GB Flutter engine checkout or build
+# an AOT snapshot.  The archives contain `skyline.node`, `sharedMemory.node`,
+# the stub `libskyline.so` and a BUILD-INFO.txt; full DevTools staging stays a
+# local step (`engine:build` / `app:aot` / `devtools:stage`).
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Linux x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build native modules
+        run: npm run native:build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Contract tests against the built addon
+        run: npm run test:native
+
+      - name: Package artifacts
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            label="${GITHUB_REF_NAME}"
+          else
+            label="preview-${GITHUB_SHA::7}"
+          fi
+          stage=dist/package
+          mkdir -p "$stage"
+          cp native/build/skyline.node native/build/sharedMemory.node \
+             native/build/libskyline.so "$stage/"
+          {
+            echo "skyline-linux native artifacts"
+            echo "ref=${GITHUB_REF}"
+            echo "commit=${GITHUB_SHA}"
+            echo "node=$(node --version)"
+            echo "cmake=$(cmake --version | head -n 1)"
+            echo
+            echo "CI builds do not include the Flutter engine, icudtl.dat or an"
+            echo "AOT snapshot. Run engine:build / app:aot / devtools:stage"
+            echo "locally for the full DevTools bundle."
+          } > "$stage/BUILD-INFO.txt"
+          archive="dist/skyline-linux-${label}-linux-x64.tar.gz"
+          tar -czf "$archive" -C "$stage" .
+          (cd dist && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
+          echo "archive=$archive" >> "$GITHUB_ENV"
+
+      - name: Remove previous preview release
+        if: github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The preview is a rolling release, so replace both the release and
+          # the tag with a fresh one pointing at this commit.
+          gh release delete preview --yes --cleanup-tag || true
+          git push origin :refs/tags/preview || true
+
+      - name: Publish preview release
+        if: github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: preview
+          target_commitish: ${{ github.sha }}
+          name: Preview ${{ github.sha }}
+          body: |
+            Rolling preview build from `master`.
+            Commit: `${{ github.sha }}`
+          prerelease: true
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
