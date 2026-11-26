@@ -150,7 +150,6 @@ mkdir -p "$build_dir" "$bundle_dir"
 # libflutter_engine.so.  The patched package:skyline opens skyline.node itself.
 cp -f "$node_addon" "$build_dir/skyline.node"
 cp -f "$engine_lib" "$build_dir/libflutter_engine.so"
-rm -f "$build_dir/libskyline.so"
 cp -f "$engine_icu" "$build_dir/icudtl.dat"
 chmod u+w "$build_dir/skyline.node" "$build_dir/libflutter_engine.so"
 "$patchelf_bin" --set-rpath '$ORIGIN' "$build_dir/skyline.node"
