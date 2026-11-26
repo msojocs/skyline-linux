@@ -91,9 +91,13 @@ SkParagraph。`backgroundUseLineMetrics` 在 `TextLine::paintBackground` 与
 
 ## 3. stub Linux 运行时与 appservice 第一帧
 
-`package:skyline` 在 Linux 上按名称打开 `libskyline.so`（`skylineAddonPath` 仅在
-Windows 分支使用）。`native/runtime/`（入口 `skyline_runtime_stub.cc` + 按
-`sources.txt` 拆分的 `appservice_*` 模块）提供 ABI 兼容的 stub：
+官方 `package:skyline` 在 Linux 上按名称打开 `libskyline.so`（`skylineAddonPath`
+仅在 Windows 分支使用）。本项目的 `app_compat/apply.py` 给开发者工具版本加了
+补丁：Linux DevTools 分支直接 `DynamicLibrary.open(skylineAddonPath)`，打开已经
+加载的 `skyline.node` 并通过其依赖 `libflutter_engine.so` 解析 73 个符号，因此
+DevTools 包不再需要 `libskyline.so`。`native/runtime/`（入口
+`skyline_runtime_stub.cc` + 按 `sources.txt` 拆分的 `appservice_*` 模块）提供
+ABI 兼容的 stub：
 
 - 从 `lookupFunction<Native, Dart>` 出现处提取 73 个符号的真实返回类型
   （`Void` / `IntPtr` / `Handle` / `Bool` / `Int32` / `Double` / 结构体），
@@ -142,8 +146,9 @@ npm run test:appservice
   的源码以 `SKYLINE_EMBEDDED` 复制进
   `flutter/shell/platform/embedder/skyline_runtime/`，在 `BUILD.gn` 的
   `embedder` target 中编译，并把 73 个符号加入
-  `embedder_exports.lst`；重建后 `libflutter_engine.so` 直接导出这些符号，并在同目录
-  创建 `libskyline.so` 符号链接。
+  `embedder_exports.lst`；重建后 `libflutter_engine.so` 直接导出这些符号。非
+  DevTools 的独立运行时仍在同目录创建 `libskyline.so` 符号链接；DevTools 版本
+  由上述补丁直接打开 `skyline.node`。
 - 页面构造在 `NotifyFlutterReady` 之后投递到 UI task runner：
   不能在 FFI callback 内同步再次调用 native callback（VM 会报
   `Cannot invoke native callback when API callbacks are prohibited`）。

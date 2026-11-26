@@ -154,7 +154,7 @@ npm run devtools:aot                 # native/engine/work/skyline-app/build/liba
 npm run native:build:release          # native/build-release/skyline.node
 npm run devtools:stage
 ../wechat-web-devtools-linux/bin/wechat-devtools
-# 脚本会写入 skyline.node、libflutter_engine.so、libskyline.so、icudtl.dat、
+# 脚本会写入 skyline.node、libflutter_engine.so、icudtl.dat、
 # bundle/libapp.so 和 flutter_assets（不含 JIT kernel_blob.bin），以及
 # sharedMemory.node；Dart 入口参数由 addon 根据 skyline-addon 路径自动识别。
 # 需要 JIT kernel（改 Dart 代码后免 AOT 的快速迭代）时：
@@ -409,6 +409,7 @@ CI 在 `ubuntu-latest` 上从固定 `build-deps` release 下载预编译的 rele
 （`libflutter_engine.so`、`flutter_embedder.h`、`icudtl.dat`）和 AOT bundle
 （`libapp.so`、`flutter_assets`），然后执行 `npm run native:build` /
 `native:build:release` 与 `npm test`，打包完整的 `skyline.node`、
-`sharedMemory.node`、`libskyline.so`、引擎、ICU 和 `bundle/`。这样发布的归档
-可以直接用于开发者工具，不再是未链接引擎的 stub。引擎或 AOT 更新时需要重建
-`build-deps` release。
+`sharedMemory.node`、引擎、ICU 和 `bundle/`。这样发布的归档可以直接用于开发者
+工具，不再是未链接引擎的 stub。开发者工具版本重新编译的 `package:skyline` 在
+Linux 上直接打开 `skyline.node`，不再需要 `libskyline.so`。引擎或 AOT 更新时需要
+重建 `build-deps` release。

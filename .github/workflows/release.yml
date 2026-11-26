@@ -70,7 +70,6 @@ jobs:
           cp native/build-release/skyline.node native/build-release/sharedMemory.node "$stage/"
           cp native/engine/out/linux-x64-release/libflutter_engine.so \
              native/engine/out/linux-x64-release/icudtl.dat "$stage/"
-          ln -sfn libflutter_engine.so "$stage/libskyline.so"
           cp -a native/engine/work/skyline-app/build "$stage/bundle"
           rm -f "$stage/bundle/flutter_assets/kernel_blob.bin"
           cp native/engine/out/linux-x64-release/icudtl.dat "$stage/bundle/icudtl.dat"

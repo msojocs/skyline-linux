@@ -13,9 +13,10 @@
 #     SDK-hash check).  `release` (default) stages the AOT snapshot
 #     `bundle/libapp.so` and drops `kernel_blob.bin`; `debug` stages the JIT
 #     kernel in `bundle/flutter_assets`;
-#   * `libflutter_engine.so`, `libskyline.so` (symlink) and `icudtl.dat` live
-#     next to `skyline.node`; both ELF files get RUNPATH=$ORIGIN so the addon
-#     and Dart's `DynamicLibrary.open('libskyline.so')` resolve them in place;
+#   * `libflutter_engine.so` and `icudtl.dat` live next to `skyline.node`;
+#     both ELF files get RUNPATH=$ORIGIN so the addon finds the engine in place.
+#     The patched `package:skyline` opens the loaded `skyline.node` itself, so
+#     no `libskyline.so` symlink is required;
 #   * the addon recognizes the DevTools layout from its own path and passes the
 #     `package:sample/devtools.dart` entrypoint arguments automatically;
 #   * `node_modules/sharedMemory/sharedMemory.node` is replaced with the local
@@ -146,11 +147,10 @@ bundle_dir="$addon_dir/bundle"
 mkdir -p "$build_dir" "$bundle_dir"
 
 # Native module + engine libraries.  RUNPATH=$ORIGIN lets the addon find
-# libflutter_engine.so and lets the Dart VM's dlopen("libskyline.so") resolve
-# the sibling symlink.
+# libflutter_engine.so.  The patched package:skyline opens skyline.node itself.
 cp -f "$node_addon" "$build_dir/skyline.node"
 cp -f "$engine_lib" "$build_dir/libflutter_engine.so"
-ln -sfn libflutter_engine.so "$build_dir/libskyline.so"
+rm -f "$build_dir/libskyline.so"
 cp -f "$engine_icu" "$build_dir/icudtl.dat"
 chmod u+w "$build_dir/skyline.node" "$build_dir/libflutter_engine.so"
 "$patchelf_bin" --set-rpath '$ORIGIN' "$build_dir/skyline.node"

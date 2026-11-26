@@ -395,6 +395,36 @@ elif banner_new in application_text:
 else:
     raise SystemExit(f"cannot find showDebugBanner anchor in {application}")
 
+# Linux DevTools: open the already loaded skyline.node instead of a separate
+# libskyline.so.  The addon's engine dependency exports the Skyline ABI, so
+# dlsym() through the addon handle finds all 73 lookup symbols (the same
+# approach the official Windows/macOS builds use).
+dylib_old = (
+    "    if (Platform.isAndroid || Platform.isOhos || Platform.isLinux) {\n"
+    "      return DynamicLibrary.open(skylineDylibNameSo);\n"
+    "    } else {\n"
+)
+dylib_new = (
+    "    if (Platform.isAndroid || Platform.isOhos || Platform.isLinux) {\n"
+    "      if (Platform.isLinux && this is SkylineApplicationDevtools) {\n"
+    "        // The DevTools already loaded skyline.node; its engine dependency\n"
+    "        // exports the Skyline symbols, so no libskyline.so is needed.\n"
+    "        return DynamicLibrary.open(\n"
+    "            (this as SkylineApplicationDevtools).skylineAddonPath);\n"
+    "      }\n"
+    "      return DynamicLibrary.open(skylineDylibNameSo);\n"
+    "    } else {\n"
+)
+application_text = application.read_text(encoding="utf-8")
+if dylib_new in application_text:
+    print(f"Linux DevTools dylib already patched in {application}")
+elif dylib_old in application_text:
+    application.write_text(
+        application_text.replace(dylib_old, dylib_new, 1), encoding="utf-8")
+    print(f"patched Linux DevTools dylib in {application}")
+else:
+    raise SystemExit(f"cannot find openSkylineDylib anchor in {application}")
+
 # Primary font family for emoji-only text runs.  NewTextSpan has no
 # `fontFamily` parameter, so the runtime prefixes the first fallback entry with
 # U+0001 when it wants that family to be primary.  The engine advertises
