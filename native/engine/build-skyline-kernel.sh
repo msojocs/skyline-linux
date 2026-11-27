@@ -81,9 +81,12 @@ if [ "$check_only" -eq 1 ]; then
   grep -q 'bool showDebugBanner = false;' \
     "$app/packages/skyline/lib/core/application.dart" \
     || die "debug banner patch missing (deterministic frames); run without --check"
-  grep -q 'Platform.isLinux && this is SkylineApplicationDevtools' \
+  grep -q 'if (File(addonPath).existsSync())' \
     "$app/packages/skyline/lib/core/application.dart" \
     || die "Linux DevTools dylib patch missing; run without --check"
+  grep -q 'SkylineApplication.instance?.dylib' \
+    "$app/packages/sample/lib/devtools.dart" \
+    || die "keyboard channel library patch missing; run without --check"
   grep -q 'primaryFontFamily' \
     "$app/packages/skyline/lib/core/ffi_registry.dart" \
     || die "primary font family patch missing (color emoji); run without --check"

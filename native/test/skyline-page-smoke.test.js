@@ -19,6 +19,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { devtoolsEntrypointArgs } = require('../../test/lib/host');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
@@ -87,12 +88,7 @@ test('skyline page: embedded runtime renders YGNode + DecoratedBox', {
       '--shm-key', key,
       '--timeout-ms', '20000',
       '--no-shutdown',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', String(width),
-      '--entrypoint-arg', String(height),
-      '--entrypoint-arg', '1',   // createRuntime=true
-      '--entrypoint-arg', 'stub',
+      ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
     ], { encoding: 'utf8', timeout: 45000, env });
 
     const details = parseResult(result.stdout);
@@ -168,12 +164,7 @@ test('skyline page: text node renders through the Flutter text engine', {
       '--shm-key', key,
       '--timeout-ms', '20000',
       '--no-shutdown',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', String(width),
-      '--entrypoint-arg', String(height),
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', 'stub',
+      ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
     ], { encoding: 'utf8', timeout: 45000, env });
 
     const details = parseResult(result.stdout);
@@ -256,12 +247,7 @@ test('skyline page: DecoratedBox border/radius and text render as a card', {
       '--shm-key', key,
       '--timeout-ms', '20000',
       '--no-shutdown',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', String(width),
-      '--entrypoint-arg', String(height),
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', 'stub',
+      ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
     ], { encoding: 'utf8', timeout: 45000, env });
 
     const details = parseResult(result.stdout);
@@ -344,12 +330,7 @@ test('skyline page: JSON descriptor drives row flex layout + text', {
       '--shm-key', key,
       '--timeout-ms', '20000',
       '--no-shutdown',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', String(width),
-      '--entrypoint-arg', String(height),
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', 'stub',
+      ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
     ], { encoding: 'utf8', timeout: 45000, env });
 
     const details = parseResult(result.stdout);
@@ -437,12 +418,7 @@ test('skyline page: nested JSON tree lays out row inside column', {
       '--shm-key', key,
       '--timeout-ms', '20000',
       '--no-shutdown',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', String(width),
-      '--entrypoint-arg', String(height),
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', 'stub',
+      ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
     ], { encoding: 'utf8', timeout: 45000, env });
 
     const details = parseResult(result.stdout);
@@ -511,12 +487,7 @@ function runJsonPage(descriptor, keyPrefix) {
     '--shm-key', key,
     '--timeout-ms', '20000',
     '--no-shutdown',
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', String(width),
-    '--entrypoint-arg', String(height),
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', 'stub',
+    ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
   ], { encoding: 'utf8', timeout: 45000, env });
 
   const details = parseResult(result.stdout);
@@ -720,12 +691,7 @@ test('skyline page: native delayed update repaints through DecoratedBoxUpdateCol
       '--timeout-ms', '1500',
       '--frames', '0',  // capture until timeout, keep the last frame
       '--no-shutdown',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', String(width),
-      '--entrypoint-arg', String(height),
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', 'stub',
+      ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
     ], { encoding: 'utf8', timeout: 45000, env });
     const details = parseResult(result.stdout);
     const diagnostics = [
@@ -782,12 +748,7 @@ test('skyline page: appendChild/removeChild ops relayout the tree', {
       '--timeout-ms', '2500',
       '--frames', '0',
       '--no-shutdown',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', String(width),
-      '--entrypoint-arg', String(height),
-      '--entrypoint-arg', '1',
-      '--entrypoint-arg', 'stub',
+      ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
     ], { encoding: 'utf8', timeout: 45000, env });
     const details = parseResult(result.stdout);
     const diagnostics = [
@@ -841,12 +802,7 @@ function runUpdatePage(descriptor, keyPrefix) {
     '--timeout-ms', '2500',
     '--frames', '0',
     '--no-shutdown',
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', String(width),
-    '--entrypoint-arg', String(height),
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', 'stub',
+    ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
   ], { encoding: 'utf8', timeout: 45000, env });
   const details = parseResult(result.stdout);
   const diagnostics = [

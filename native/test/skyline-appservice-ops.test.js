@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync, spawn } = require('node:child_process');
+const { devtoolsEntrypointArgs } = require('../../test/lib/host');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
@@ -93,12 +94,7 @@ function runHost(opsPath, options = {}) {
     ...(options.frames === undefined ? [] : ['--frames', String(options.frames)]),
     ...(options.args || []),
     '--no-shutdown',
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', String(width),
-    '--entrypoint-arg', String(height),
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', 'stub',
+    ...devtoolsEntrypointArgs({ width, height, skylineLibrary: engineLib }),
   ], { encoding: 'utf8', timeout: 45000, env });
 
   const details = parseResult(result.stdout);

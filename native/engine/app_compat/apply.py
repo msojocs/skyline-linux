@@ -319,7 +319,8 @@ if "skyline/keyboard" not in sample_text:
     final logical =
         int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0;
     final text = parts.length > 2 ? parts.sublist(2).join(' ') : '';
-    final library = DynamicLibrary.open('libskyline.so');
+    final library = SkylineApplication.instance?.dylib;
+    if (library == null) return null;
     final dispatch = library.lookupFunction<
         Void Function(Int32, Uint32, Pointer<Utf8>),
         void Function(int, int, Pointer<Utf8>)>('DispatchSkylineKeyEvent');
@@ -337,6 +338,37 @@ if "skyline/keyboard" not in sample_text:
     print(f"patched keyboard channel in {sample}")
 else:
     print(f"keyboard channel already patched in {sample}")
+
+# The keyboard channel resolves DispatchSkylineKeyEvent through the library
+# package:skyline already opened (skyline.node in the DevTools, the engine in
+# skyline_host).  The DevTools addon directory has no libskyline.so, so opening
+# it by name would throw on the first key event.  Trees patched before this
+# change still carry the by-name lookup.
+keyboard_lib_old = "    final library = DynamicLibrary.open('libskyline.so');\n"
+keyboard_lib_new = (
+    "    final library = SkylineApplication.instance?.dylib;\n"
+    "    if (library == null) return null;\n"
+)
+keyboard_import = (
+    "import 'package:skyline/core/application.dart' show SkylineApplication;\n"
+)
+sample_text = sample.read_text(encoding="utf-8")
+keyboard_text = sample_text
+if keyboard_lib_old in keyboard_text:
+    keyboard_text = keyboard_text.replace(keyboard_lib_old, keyboard_lib_new, 1)
+if keyboard_import not in keyboard_text:
+    skyline_import = 'import "package:skyline/skyline.dart";\n'
+    if skyline_import not in keyboard_text:
+        raise SystemExit(f"cannot find package:skyline import in {sample}")
+    keyboard_text = keyboard_text.replace(
+        skyline_import, skyline_import + keyboard_import, 1)
+if keyboard_lib_new not in keyboard_text:
+    raise SystemExit(f"cannot find keyboard channel library lookup in {sample}")
+if keyboard_text != sample_text:
+    sample.write_text(keyboard_text, encoding="utf-8")
+    print(f"keyboard channel now uses the opened Skyline library in {sample}")
+else:
+    print(f"keyboard channel library lookup already patched in {sample}")
 
 # Custom routes mutate the host connector's children in
 # `SkylineCupertinoPageTransition.build` (`children.clear()` + `children.add()`).
@@ -398,13 +430,16 @@ else:
 # Linux DevTools: open the already loaded skyline.node instead of a separate
 # libskyline.so.  The addon's engine dependency exports the Skyline ABI, so
 # dlsym() through the addon handle finds all 73 lookup symbols (the same
-# approach the official Windows/macOS builds use).
+# approach the official Windows/macOS builds use).  skyline_host passes the
+# engine (or the standalone stub runtime) as skylineAddonPath; anything that is
+# not a file keeps the legacy libskyline.so lookup instead of failing to boot.
 dylib_old = (
     "    if (Platform.isAndroid || Platform.isOhos || Platform.isLinux) {\n"
     "      return DynamicLibrary.open(skylineDylibNameSo);\n"
     "    } else {\n"
 )
-dylib_new = (
+# First version (c110f03): opened skylineAddonPath unconditionally.
+dylib_unchecked = (
     "    if (Platform.isAndroid || Platform.isOhos || Platform.isLinux) {\n"
     "      if (Platform.isLinux && this is SkylineApplicationDevtools) {\n"
     "        // The DevTools already loaded skyline.node; its engine dependency\n"
@@ -415,9 +450,30 @@ dylib_new = (
     "      return DynamicLibrary.open(skylineDylibNameSo);\n"
     "    } else {\n"
 )
+dylib_new = (
+    "    if (Platform.isAndroid || Platform.isOhos || Platform.isLinux) {\n"
+    "      if (Platform.isLinux && this is SkylineApplicationDevtools) {\n"
+    "        // The DevTools already loaded skyline.node; its engine dependency\n"
+    "        // exports the Skyline symbols, so no libskyline.so is needed.\n"
+    "        // Hosts that pass a placeholder instead of a file keep the\n"
+    "        // libskyline.so lookup below.\n"
+    "        final addonPath =\n"
+    "            (this as SkylineApplicationDevtools).skylineAddonPath;\n"
+    "        if (File(addonPath).existsSync()) {\n"
+    "          return DynamicLibrary.open(addonPath);\n"
+    "        }\n"
+    "      }\n"
+    "      return DynamicLibrary.open(skylineDylibNameSo);\n"
+    "    } else {\n"
+)
 application_text = application.read_text(encoding="utf-8")
 if dylib_new in application_text:
     print(f"Linux DevTools dylib already patched in {application}")
+elif dylib_unchecked in application_text:
+    application.write_text(
+        application_text.replace(dylib_unchecked, dylib_new, 1),
+        encoding="utf-8")
+    print(f"upgraded Linux DevTools dylib fallback in {application}")
 elif dylib_old in application_text:
     application.write_text(
         application_text.replace(dylib_old, dylib_new, 1), encoding="utf-8")

@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { devtoolsEntrypointArgs } = require('../test/lib/host');
 
 const repoRoot = path.resolve(__dirname, '..');
 const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
@@ -121,12 +122,7 @@ function render(fixturePath, options = {}) {
     '--timeout-ms', '1800',
     '--frames', '0',
     '--no-shutdown',
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', String(cssWidth),
-    '--entrypoint-arg', String(cssHeight),
-    '--entrypoint-arg', '1',
-    '--entrypoint-arg', 'stub',
+    ...devtoolsEntrypointArgs({ width: cssWidth, height: cssHeight, skylineLibrary: engineLib }),
   ], { encoding: 'utf8', timeout: 45000, env });
   try {
     if (!fs.existsSync(shmPath)) {

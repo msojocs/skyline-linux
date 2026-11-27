@@ -16,6 +16,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { devtoolsEntrypointArgs } = require('../../test/lib/host');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
@@ -97,12 +98,7 @@ test('appservice: recompiled kernel boots against the stub skyline runtime', {
       '--timeout-ms', '20000',
       '--no-shutdown',
       // package:sample/devtools.dart main(List<String> args)
-      '--entrypoint-arg', '1',                  // window id
-      '--entrypoint-arg', '1',                  // runtime holder pointer
-      '--entrypoint-arg', String(width),        // window width
-      '--entrypoint-arg', String(height),       // window height
-      '--entrypoint-arg', '1',                  // createRuntime=true
-      '--entrypoint-arg', 'stub',               // skylineAddonPath (needs non-empty)
+      ...devtoolsEntrypointArgs({ width, height, skylineLibrary: runtime }),
     ], { encoding: 'utf8', timeout: 45000, env });
 
     const details = parseResult(result.stdout);
