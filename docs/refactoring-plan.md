@@ -445,6 +445,49 @@ class OpsSession {
 `devtools:stage` 和 CI 都会明确失败，并提示正确的命令；干净构建之后
 `build:status` 报告所有步骤都是最新的。
 
+**状态（2026-11-27）：已完成，个别条目有调整。**
+
+- 指纹与 stamp：`tools/build-status.js` 计算三组输入指纹（运行时源码、`dart:ui`
+  补丁、`app_compat` 补丁）。`patch-dart-ui.sh`、`build-engine.sh`、
+  `build-skyline-kernel.sh`、`build-aot.sh` 在产物旁写 `skyline-build*.json`，
+  记录本次消费的指纹与源码提交。
+- 运行时指纹：`build-engine.sh` 在 `ninja` 之前，按引擎 checkout 中实际编译的运行时
+  副本生成 `skyline_runtime_build_id.hh`；`libflutter_engine.so` 导出
+  `SkylineRuntimeBuildId()`，启动日志 `embedded Dart API ready (build …)` 也会打印
+  该指纹。工具直接从二进制中读取标记串，不依赖 stamp。与计划的差异：addon 加载时
+  不做比较，改由测试、staging 与 CI 拦截。
+- `npm run build:status` 按流水线顺序列出过期步骤与重建命令。host 测试（每个文件
+  一个新鲜度用例，`SKYLINE_ALLOW_STALE_BUILD=1` 可改为 skip）、`l5:baseline`、
+  `devtools:stage`、`pack-build-deps.sh` 与 CI 都拒绝过期产物。未提供
+  `npm run build` 自动编排，按提示的命令手动执行。
+- `--check` 零写入：`kernel:skyline:check` 只做 `git apply --reverse --check` 与
+  stamp 比较。
+- `apply.py` 改为 6 个按文件划分的 unified diff（`native/engine/app_compat/*.patch`，
+  补丁头保留原有说明），用 `git apply` 应用，无法应用时提示 `--refresh-sources`。
+  补丁由原脚本在纯净恢复树上的输出生成，现有工作树逐字节一致，kernel 不变。
+- 顺带修复：3e9bb16 删除了复制 `dart_ui_compat/*.dart` 的步骤，修改这三个文件不会
+  进入引擎；`ui:patch` 现在重新安装并按内容校验。
+- 路径与版本：`test/lib/env.js` 新增 `devtoolsDir()`（读取与 staging 相同的
+  `SKYLINE_DEVTOOLS_DIR`）、`windowsResourceCandidates()` 与 `revisionValue()`，
+  录制器、契约测试与 `wxlib:style` 改用它们；`REVISION` 固定
+  `DEVTOOLS_VERSION=2.02.2609250` 与 `WXLIB_VERSION=2.25.3`，`wxlib:style` 默认使用
+  后者。shell 脚本仍各自读取 `SKYLINE_DEVTOOLS_DIR`。
+- CMake：删除固定指向 debug 引擎、且因为没有 install 规则而从未生效的
+  `INSTALL_RPATH`。独立的 `libskyline.so` 仍被 `test:appservice` 使用，因此保留。
+- CI：下载 `build-deps` 后校验 sha256，并用 `build-status --check engine-release,aot`
+  确认引擎与 AOT 对应当前源码；新增 `test:native`；打包改为
+  `stage-devtools-addon.sh --output`（归档布局不变）。新增
+  `native/engine/pack-build-deps.sh`，生成带 stamp 与 `BUILD-DEPS.json` 的 deps 包。
+- **需要人工处理**：现有 `build-deps` release 没有 `.sha256` 与 stamp，合入 `master`
+  之前需要用 `pack-build-deps.sh` 重新发布，否则 CI 会在校验步骤失败。actions 仍按
+  主版本 tag 固定（C3 未做）。
+- 验证：一次完整重建后 `build:status` 全部为 ok；故意修改
+  `native/runtime/appservice_css.cc` 后，`build:status`、`test:ops` 的新鲜度用例与
+  `stage-devtools-addon.sh --output` 都失败，并提示 `npm run runtime:embed`；修改
+  `app_compat` 或 `dart:ui` 补丁时，对应的 SDK、引擎、kernel 与 AOT 都被标记为过期。
+  最终状态下 `npm test` 共 260 个用例（新增 5 个新鲜度用例），236 pass、0 fail、
+  24 skip；`test:native` 53 pass、10 skip。
+
 ### P2 测试基础设施（5–8 人日）
 
 任务：
@@ -658,12 +701,12 @@ runtime 中没有超过 1000 行的手写文件；core 单测在 CI 中运行。
 |---|---|
 | `native/runtime/*.cc`、`*.hh`、`sources.txt` | `runtime:embed`（debug）与 `runtime:embed -- --runtime-mode release`（二者都会重建引擎）→ `native:build` 与 `native:build:release` → `devtools:stage`；导出签名有变化时还需要 `kernel:skyline` 与 `devtools:aot` |
 | `native/engine/patches/*`、`dart_ui_compat/*` | `ui:patch` → `kernel:skyline` → `engine:build`（debug 与 release）→ `native:build*` → `devtools:aot` → `devtools:stage` |
-| `native/engine/app_compat/apply.py` | `kernel:skyline` → `devtools:aot` → `devtools:stage` |
+| `native/engine/app_compat/*.patch`（P1 之前为 `apply.py`） | `kernel:skyline` → `devtools:aot` → `devtools:stage` |
 | `native/src/**`（含 bootstrap）、`native/host/**` | `native:build` 与 `native:build:release` → `devtools:stage`（bootstrap 分片已登记为 CMake 配置依赖，构建时会自动重新生成） |
 | 重新执行 `engine:fetch` | 引擎 checkout 中的 `BUILD.gn` 与导出表修改会被还原：`ui:patch` → `runtime:embed`（两种模式）→ 重建引擎 |
 | 新增或修改夹具 | `l5:baseline`；如需 Windows 对照，执行 `l5:windows -- --only <name> --write` |
 
-P1 的 `build:status` 落地后，这张表由工具自动给出。
+P1 之后，`npm run build:status` 会根据实际过期的步骤给出这张表中对应的命令。
 
 ## 附录 B：native 代码读取的环境变量
 
