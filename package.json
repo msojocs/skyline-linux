@@ -36,6 +36,7 @@
     "spec:symbols:check": "node tools/extract-kernel-symbols.js --check",
     "test:reference": "SKYLINE_LINUX_SKYLINE_ADDON=reference/skyline-node.js node --test test/contract.test.js",
     "env:check": "node tools/check-env.js",
+    "build:status": "node tools/build-status.js",
     "native:build": "cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release && cmake --build native/build",
     "test:native": "SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node node --test test/contract.test.js",
     "toolchain:fetch": "bash native/engine/fetch-toolchain.sh",

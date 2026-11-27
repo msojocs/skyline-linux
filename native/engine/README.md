@@ -95,7 +95,7 @@ Flutter:
 The snapshot must be produced by a gen_snapshot built with the same product
 configuration as the engine.  The generic toolchain download is a JIT-release
 build, so `engine:build --runtime-mode release` also builds
-`out/host_release/gen_snapshot`, and `build-aot.sh` prefers it (override with
+`out/host_release/gen_snapshot`, and `build-aot.sh` requires it (override with
 `SKYLINE_GEN_SNAPSHOT`).
 
 The host and the N-API backend load the snapshot through
@@ -108,7 +108,7 @@ verifies `createWindow` on an AOT-only bundle (no `kernel_blob.bin`).
 ### Skyline appservice AOT
 
 ```bash
-# Release engine with the embedded runtime exports (73 symbols + libskyline.so).
+# Release engine with the embedded runtime exports (73 symbols).
 npm run runtime:embed -- --runtime-mode release
 
 # AOT for the recompiled appservice (patched SDK).
@@ -135,7 +135,8 @@ recompiles the official application against the public SDK:
 npm run ui:patch          # dart_ui_compat/{application,mmtrace,skyline_ext}.dart
                           # + patches/*.patch via git apply;
                           # rebuilds platform_strong.dill
-npm run kernel:skyline    # tools/reconstruct-kernel-sources.js + frontend_server
+npm run kernel:skyline    # tools/reconstruct-kernel-sources.js + app_compat/*.patch
+                          # + frontend_server
 npm run test:kernel       # static + compile-level assertions
 npm run engine:build      # core snapshot now contains Application etc.
 npm run smoke:build       # apps/dart-ui-compat-smoke against the patched SDK
@@ -166,6 +167,32 @@ Dart API and exports it from `libflutter_engine.so`.  It builds a real page via
 `NewDecoratedBox` → `NewYGNode` → `CreatePageRoute`; `test:page` asserts a
 320×240 `#FF3366` frame.
 
+## Build freshness
+
+Every step records the fingerprints of the inputs it consumed (`skyline-build*.json`
+next to its outputs), and `build-engine.sh` compiles the fingerprint of the
+embedded runtime copies into `libflutter_engine.so` (`SkylineRuntimeBuildId`).
+`npm run build:status` (`tools/build-status.js`) compares them with the sources
+and prints the commands that rebuild stale artifacts, in pipeline order:
+
+```text
+patched-sdk     ok
+engine-debug    stale    native/runtime sources changed since the engine was built
+engine-release  stale    native/runtime sources changed since the engine was built
+app-sources     ok
+kernel          ok
+aot             ok
+
+Rebuild, in order:
+  npm run runtime:embed
+  npm run runtime:embed -- --runtime-mode release
+```
+
+The host tests (`test:ops`, `test:page`, `test:appservice`, `test:skyline:aot`,
+`test:l5`), `npm run l5:baseline`, `devtools:stage`, `pack-build-deps.sh` and CI
+refuse stale artifacts.  `SKYLINE_ALLOW_STALE_BUILD=1` (tests),
+`--allow-stale` (staging, `l5-baseline.js --write`) override that on purpose.
+
 ## Layout
 
 | path | contents | committed |
@@ -183,7 +210,9 @@ Dart API and exports it from `libflutter_engine.so`.  It builds a real page via
 | `patch-dart-ui.sh` | installs the compat layer, rebuilds/stages the patched SDK | yes |
 | `build-skyline-kernel.sh` | reconstructs the official sources and compiles the app | yes |
 | `patch-skyline-runtime.sh` | embeds the runtime in `libflutter_engine.so` (full Dart API) | yes |
-| `app_compat/apply.py` | guards `YGConnector.coordinateStackingChildren` for non-stacking nodes | yes |
+| `app_compat/*.patch` | unified diffs applied to the reconstructed `package:skyline` / `package:sample` sources (each patch header explains why) | yes |
+| `stage-devtools-addon.sh` | stages the addon into the DevTools tree (`--output DIR`: flat release layout) | yes |
+| `pack-build-deps.sh` | packs the release engine + AOT bundle for the CI `build-deps` release | yes |
 | `checkout/` | flutter/flutter monorepo checkout | **no** |
 | `depot_tools/` | depot_tools checkout | **no** |
 | `toolchain/` | downloaded SDKs, header, `icudtl.dat`, `gen_snapshot` | **no** |

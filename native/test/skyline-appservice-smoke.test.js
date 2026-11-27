@@ -16,7 +16,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { devtoolsEntrypointArgs } = require('../../test/lib/host');
+const { checkBuildCurrent, devtoolsEntrypointArgs } = require('../../test/lib/host');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
@@ -54,6 +54,12 @@ function parseResult(stdout) {
     return null;
   }
 }
+
+test('appservice: build artifacts match the sources', {
+  skip: prerequisiteSkip() || false,
+}, t => {
+  checkBuildCurrent(t, ['engine-debug', 'kernel']);
+});
 
 test('appservice: stub runtime exports all 73 addon lookup symbols', {
   skip: fs.existsSync(runtime) ? false : 'native/build/libskyline.so (npm run native:build)',

@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Stages a self-contained Linux Skyline addon into the WeChat DevTools tree.
 #
-#   bash native/engine/stage-devtools-addon.sh [--devtools-dir DIR]
+#   bash native/engine/stage-devtools-addon.sh [--devtools-dir DIR | --output DIR]
 #                                               [--engine-mode debug|release]
+#                                               [--allow-stale]
+#
+# `--output DIR` writes the same files into a flat directory instead (the
+# release archive layout: skyline.node, libflutter_engine.so, icudtl.dat,
+# sharedMemory.node and bundle/).  The engine and the Dart snapshot must match
+# the current sources (tools/build-status.js); `--allow-stale` skips that check.
 #
 # The DevTools loads `node_modules/skyline-addon/build/skyline.node` from
 # `resources/app.asar.unpacked`.  After this script has run, `bin/wechat-devtools`
@@ -57,6 +63,8 @@ source "$SCRIPT_DIR/env.sh"
 devtools_dir=${SKYLINE_DEVTOOLS_DIR:-"$ENGINE_REPO_ROOT/../wechat-web-devtools-linux"}
 shared_memory_node=${SKYLINE_SHARED_MEMORY_NODE:-}
 engine_mode=${SKYLINE_DEVTOOLS_ENGINE:-release}
+output_dir=""
+allow_stale=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --engine-mode)
@@ -65,6 +73,12 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --engine-mode=*) engine_mode=${1#*=}; shift ;;
+    --output)
+      [ $# -ge 2 ] || die "--output requires a value"
+      output_dir=$2
+      shift 2
+      ;;
+    --allow-stale) allow_stale=1; shift ;;
     --devtools-dir)
       [ $# -ge 2 ] || die "--devtools-dir requires a value"
       devtools_dir=$2
@@ -98,15 +112,38 @@ case "$engine_mode" in
 esac
 : "${shared_memory_node:=$default_shared_memory}"
 
-if [ -d "$devtools_dir/resources/app.asar.unpacked" ]; then
-  devtools_resources="$devtools_dir/resources/app.asar.unpacked"
-elif [ -d "$devtools_dir/resources/app" ]; then
-  devtools_resources="$devtools_dir/resources/app"
+if [ -n "$output_dir" ]; then
+  # Flat release-archive layout (created only after all checks pass).
+  case "$output_dir" in
+    /*) build_dir="$output_dir" ;;
+    *) build_dir="$PWD/$output_dir" ;;
+  esac
+  bundle_dir="$build_dir/bundle"
+  shared_memory_target="$build_dir/sharedMemory.node"
+  stage_target="$build_dir"
 else
-  die "DevTools app tree not found under $devtools_dir/resources"
+  if [ -d "$devtools_dir/resources/app.asar.unpacked" ]; then
+    devtools_resources="$devtools_dir/resources/app.asar.unpacked"
+  elif [ -d "$devtools_dir/resources/app" ]; then
+    devtools_resources="$devtools_dir/resources/app"
+  else
+    die "DevTools app tree not found under $devtools_dir/resources"
+  fi
+  addon_dir="$devtools_resources/node_modules/skyline-addon"
+  shared_memory_dir="$devtools_resources/node_modules/sharedMemory"
+  [ -d "$addon_dir" ] || die "addon directory not found: $addon_dir"
+  # The stock Linux sharedMemory addon detects Electron via `process.versions`,
+  # but the appservice page deletes `process`; setMemory then tries to return an
+  # external ArrayBuffer, which Electron rejects ("External buffers are not
+  # allowed").  The in-repo native/shared-memory build recognizes Electron from
+  # the user agent as well and returns the 16-byte handle.
+  [ -d "$shared_memory_dir" ] || die \
+    "sharedMemory directory not found: $shared_memory_dir"
+  build_dir="$addon_dir/build"
+  bundle_dir="$addon_dir/bundle"
+  shared_memory_target="$shared_memory_dir/sharedMemory.node"
+  stage_target="$addon_dir"
 fi
-addon_dir="$devtools_resources/node_modules/skyline-addon"
-shared_memory_dir="$devtools_resources/node_modules/sharedMemory"
 engine_lib="$engine_stage/libflutter_engine.so"
 engine_icu="$engine_stage/icudtl.dat"
 assets="$ENGINE_SKYLINE_APP/build/flutter_assets"
@@ -118,19 +155,24 @@ if [ "$engine_mode" = release ]; then
   cmake -S native -B native/build-release -DSKYLINE_ENGINE_ROOT=\"$engine_stage\" -DCMAKE_BUILD_TYPE=Release && cmake --build native/build-release"
   [ -f "$engine_lib" ] || die "missing $engine_lib; run: npm run runtime:embed -- --runtime-mode release"
   [ -f "$aot_library" ] || die "missing $aot_library; run: npm run devtools:aot"
+  fresh_steps=engine-release,aot
 else
   [ -f "$node_addon" ] || die "missing $node_addon; run: npm run native:build"
   [ -f "$engine_lib" ] || die "missing $engine_lib; run: npm run engine:build"
   [ -f "$kernel" ] || die "missing $kernel; run: npm run kernel:skyline"
+  fresh_steps=engine-debug,kernel
 fi
 [ -f "$engine_icu" ] || die "missing $engine_icu; run: npm run engine:build"
 [ -d "$assets" ] || die "missing $assets; run: npm run kernel:skyline"
-[ -d "$addon_dir" ] || die "addon directory not found: $addon_dir"
 [ -f "$shared_memory_node" ] || die \
   "missing sharedMemory addon: $shared_memory_node (run: npm run native:build or native:build:release)"
 if ! nm -D --defined-only "$engine_lib" 2>/dev/null | grep -q ' SkylineApplyLiveOps$'; then
   die "$engine_lib has no embedded Skyline runtime; run:
   bash native/engine/patch-skyline-runtime.sh --runtime-mode $engine_mode"
+fi
+if [ "$allow_stale" -eq 0 ]; then
+  node "$ENGINE_REPO_ROOT/tools/build-status.js" --check "$fresh_steps" >&2 ||
+    die "the $engine_mode engine or Dart snapshot is stale (see above); rebuild it, or pass --allow-stale"
 fi
 
 patchelf_bin=${PATCHELF:-}
@@ -140,10 +182,8 @@ fi
 [ -n "$patchelf_bin" ] || die \
   "patchelf not found; install it (apt install patchelf, or pip install patchelf)"
 
-log "staging addon into $addon_dir ($engine_mode engine)"
+log "staging addon into $stage_target ($engine_mode engine)"
 
-build_dir="$addon_dir/build"
-bundle_dir="$addon_dir/bundle"
 mkdir -p "$build_dir" "$bundle_dir"
 
 # Native module + engine libraries.  RUNPATH=$ORIGIN lets the addon find
@@ -172,14 +212,7 @@ else
   rm -f "$bundle_dir/libapp.so"
 fi
 
-# The stock Linux sharedMemory addon detects Electron via `process.versions`,
-# but the appservice page deletes `process`; setMemory then tries to return an
-# external ArrayBuffer, which Electron rejects ("External buffers are not
-# allowed").  The in-repo native/shared-memory build recognizes Electron from
-# the user agent as well and returns the 16-byte handle.
-[ -d "$shared_memory_dir" ] || die \
-  "sharedMemory directory not found: $shared_memory_dir"
-cp -f "$shared_memory_node" "$shared_memory_dir/sharedMemory.node"
+cp -f "$shared_memory_node" "$shared_memory_target"
 
 # Verify the staged files are what the addon will actually load.
 if [ "$engine_mode" = release ]; then
@@ -199,8 +232,10 @@ readelf -d "$build_dir/libflutter_engine.so" | grep -q 'RUNPATH.*\$ORIGIN' ||
 
 log "staged:"
 du -sh "$build_dir/skyline.node" "$build_dir/libflutter_engine.so" \
-  "$bundle_dir/flutter_assets" "$shared_memory_dir/sharedMemory.node" >&2
+  "$bundle_dir/flutter_assets" "$shared_memory_target" >&2
 if [ "$engine_mode" = release ]; then
   du -sh "$bundle_dir/libapp.so" >&2
 fi
-log "start with: $devtools_dir/bin/wechat-devtools"
+if [ -z "$output_dir" ]; then
+  log "start with: $devtools_dir/bin/wechat-devtools"
+fi

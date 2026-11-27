@@ -146,6 +146,7 @@ ninja -C "$out_dir" flutter_patched_sdk/platform_strong.dill
 mkdir -p "$patched_sdk_dir"
 cp "$out_dir/flutter_patched_sdk/platform_strong.dill" "$patched_sdk_dir/"
 cp "$out_dir/flutter_patched_sdk/vm_outline_strong.dill" "$patched_sdk_dir/"
+node "$ENGINE_REPO_ROOT/tools/build-status.js" stamp patched-sdk --dir "$patched_sdk_dir"
 log "patched SDK staged in $patched_sdk_dir"
 
 if [ "$build_engine" -eq 1 ]; then

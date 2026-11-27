@@ -20,6 +20,7 @@ const zlib = require('node:zlib');
 const repoRoot = path.resolve(__dirname, '..', '..');
 const l5 = require(path.join(repoRoot, 'tools', 'l5-baseline.js'));
 const { compareFrames, sha256 } = require(path.join(repoRoot, 'test', 'lib', 'l5.js'));
+const { checkBuildCurrent } = require(path.join(repoRoot, 'test', 'lib', 'host.js'));
 
 function skipReason() {
   const missing = l5.prerequisites();
@@ -53,6 +54,10 @@ test('L5: fixture lists and baselines cover the same fixtures', () => {
     `L5 fixture sets disagree:\n  ${problems.join('\n  ')}\n` +
     'List new fixtures in FIXTURES or EXCLUDED_FIXTURES (tools/l5-baseline.js), then run ' +
     'npm run l5:baseline and npm run l5:windows -- --only <name> --write.');
+});
+
+test('L5: build artifacts match the sources', { skip: skipReason() }, t => {
+  checkBuildCurrent(t, ['engine-debug', 'kernel']);
 });
 
 test('L5: Linux frame baseline is deterministic', {

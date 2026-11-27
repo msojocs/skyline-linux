@@ -144,6 +144,11 @@ npm run l5:baseline                  # 生成 Linux L5 帧哈希基线
 npm run l5:windows                   # Wine 官方引擎采集 spec/l5-baseline.win32.json
 npm run test:l5                      # Linux 基线 + Windows 逐像素容差比较
 
+# 1e-2. 产物新鲜度：每个构建步骤记录输入指纹，引擎内嵌运行时源码指纹。
+#       改动 native/runtime、dart:ui 补丁或 app_compat 补丁后，按提示重建；
+#       host 测试、l5:baseline、devtools:stage 与 CI 都会拒绝过期产物。
+npm run build:status
+
 # 1f. 部署到微信开发者工具（复制文件后直接启动，无需环境变量）
 #     默认部署 release 引擎 + AOT 快照：debug 引擎以 -O0/_DEBUG/GLIBCXX_DEBUG
 #     编译软件光栅化，模拟器分辨率下滚动只有 ~25fps；release 引擎的引擎侧
@@ -410,9 +415,22 @@ test/oracle/     Wine 侧契约录制脚本
 
 CI 在 `ubuntu-latest` 上从固定 `build-deps` release 下载预编译的 release 引擎
 （`libflutter_engine.so`、`flutter_embedder.h`、`icudtl.dat`）和 AOT bundle
-（`libapp.so`、`flutter_assets`），然后执行 `npm run native:build` /
-`native:build:release` 与 `npm test`，打包完整的 `skyline.node`、
-`sharedMemory.node`、引擎、ICU 和 `bundle/`。这样发布的归档可以直接用于开发者
-工具，不再是未链接引擎的 stub。开发者工具版本重新编译的 `package:skyline` 在
-Linux 上直接打开 `skyline.node`，不再需要 `libskyline.so`。引擎或 AOT 更新时需要
-重建 `build-deps` release。
+（`libapp.so`、`flutter_assets`），校验 sha256，并用
+`node tools/build-status.js --check engine-release,aot` 确认引擎里嵌入的运行时与
+AOT 快照对应当前提交的源码（`native/runtime`、`dart:ui` 补丁、`app_compat` 补丁）；
+不一致时 CI 失败。随后执行 `npm run native:build` / `native:build:release`、
+`npm test` 与 `npm run test:native`，再用
+`stage-devtools-addon.sh --output` 打包完整的 `skyline.node`、`sharedMemory.node`、
+引擎、ICU 和 `bundle/`。这样发布的归档可以直接用于开发者工具。开发者工具版本
+重新编译的 `package:skyline` 在 Linux 上直接打开 `skyline.node`，不再需要
+`libskyline.so`。
+
+修改运行时、`dart:ui` 补丁或 `app_compat` 补丁后，需要在本机重建 release 引擎与
+AOT，再重新发布 `build-deps`：
+
+```bash
+npm run build:status                       # 列出过期产物与重建命令
+bash native/engine/pack-build-deps.sh      # 拒绝过期产物；写入 dist/
+gh release upload build-deps dist/skyline-linux-deps-linux-x64.tar.gz \
+  dist/skyline-linux-deps-linux-x64.tar.gz.sha256 --clobber
+```

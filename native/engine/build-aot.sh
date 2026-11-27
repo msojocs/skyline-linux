@@ -127,3 +127,7 @@ fi
 size=$(wc -c < "$out_lib")
 sha=$(sha256sum "$out_lib" | awk '{print $1}')
 log "libapp.so: $size bytes, sha256 $sha"
+
+stamp_args=(stamp aot --app-dir "$app_dir")
+[ "$patched_sdk" -eq 1 ] && stamp_args+=(--patched-sdk)
+node "$ENGINE_REPO_ROOT/tools/build-status.js" "${stamp_args[@]}"

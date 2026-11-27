@@ -4,10 +4,11 @@ name: Build and Publish
 # complete archive as a rolling `preview` prerelease; a `v*` tag publishes a
 # normal release.
 #
-# The 20-30 GB Flutter engine checkout is not built on CI.  The pinned prebuilt
-# release engine and app bundle are downloaded from the `build-deps` release and
-# used to link skyline.node and to package the archive.  Rebuild that deps
-# release when the engine or the AOT bundle changes.
+# The 20-30 GB Flutter engine checkout is not built on CI.  The prebuilt release
+# engine (with the embedded native/runtime) and the AOT bundle are downloaded
+# from the `build-deps` release and used to link skyline.node and to package the
+# archive.  CI fails when they do not match the sources of the commit
+# (tools/build-status.js); republish them with native/engine/pack-build-deps.sh.
 
 on:
   push:
@@ -39,15 +40,24 @@ jobs:
       - name: Restore prebuilt engine and bundle
         run: |
           set -euo pipefail
-          mkdir -p native/engine/out/linux-x64-release \
-                   native/engine/work/skyline-app/build
-          curl -fL --retry 3 -o /tmp/skyline-deps.tar.gz \
-            https://github.com/msojocs/skyline-linux/releases/download/build-deps/skyline-linux-deps-linux-x64.tar.gz
+          base=https://github.com/msojocs/skyline-linux/releases/download/build-deps
+          name=skyline-linux-deps-linux-x64.tar.gz
+          mkdir -p /tmp/skyline-deps-download
+          curl -fL --retry 3 -o "/tmp/skyline-deps-download/$name" "$base/$name"
+          curl -fL --retry 3 -o "/tmp/skyline-deps-download/$name.sha256" "$base/$name.sha256"
+          (cd /tmp/skyline-deps-download && sha256sum -c "$name.sha256")
           rm -rf /tmp/skyline-deps
           mkdir -p /tmp/skyline-deps
-          tar -xzf /tmp/skyline-deps.tar.gz -C /tmp/skyline-deps
+          tar -xzf "/tmp/skyline-deps-download/$name" -C /tmp/skyline-deps
+          mkdir -p native/engine/out/linux-x64-release \
+                   native/engine/work/skyline-app/build
           cp -a /tmp/skyline-deps/engine/. native/engine/out/linux-x64-release/
           cp -a /tmp/skyline-deps/bundle/. native/engine/work/skyline-app/build/
+
+      - name: Check prebuilt deps match the sources
+        # The engine embeds native/runtime and the bundle is the AOT snapshot of
+        # the patched package:skyline; neither is rebuilt here.
+        run: node tools/build-status.js --check engine-release,aot
 
       - name: Build native modules
         run: |
@@ -55,7 +65,9 @@ jobs:
           npm run native:build:release
 
       - name: Run tests
-        run: npm test
+        run: |
+          npm test
+          npm run test:native
 
       - name: Package artifacts
         run: |
@@ -66,20 +78,15 @@ jobs:
             label="preview"
           fi
           stage=dist/package
-          mkdir -p "$stage"
-          cp native/build-release/skyline.node native/build-release/sharedMemory.node "$stage/"
-          cp native/engine/out/linux-x64-release/libflutter_engine.so \
-             native/engine/out/linux-x64-release/icudtl.dat "$stage/"
-          cp -a native/engine/work/skyline-app/build "$stage/bundle"
-          rm -f "$stage/bundle/flutter_assets/kernel_blob.bin"
-          cp native/engine/out/linux-x64-release/icudtl.dat "$stage/bundle/icudtl.dat"
-          patchelf --set-rpath '$ORIGIN' "$stage/skyline.node" "$stage/libflutter_engine.so"
+          bash native/engine/stage-devtools-addon.sh --engine-mode release --output "$stage"
+          deps_commit=$(node -p "require('./native/engine/out/linux-x64-release/skyline-build.json').commit")
           {
             echo "skyline-linux full artifacts"
             echo "ref=${GITHUB_REF}"
             echo "commit=${GITHUB_SHA}"
             echo "node=$(node --version)"
             echo "engine=deps:build-deps"
+            echo "deps_commit=${deps_commit}"
           } > "$stage/BUILD-INFO.txt"
           archive="dist/skyline-linux-${label}-linux-x64.tar.gz"
           tar -czf "$archive" -C "$stage" .

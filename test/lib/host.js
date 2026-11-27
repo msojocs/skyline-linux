@@ -3,6 +3,8 @@
 // Helpers for tests and tools that launch `skyline_host` with the
 // `package:sample/devtools.dart` entrypoint.
 
+const { buildProblems } = require('../../tools/build-status');
+
 /**
  * `--entrypoint-arg` pairs for devtools.dart `main(args)`:
  * window id, runtime holder pointer, width, height, createRuntime and
@@ -28,4 +30,22 @@ function devtoolsEntrypointArgs({
     .flatMap(value => ['--entrypoint-arg', String(value)]);
 }
 
-module.exports = { devtoolsEntrypointArgs };
+/**
+ * Fails the test `t` when the given build steps (tools/build-status.js, e.g.
+ * `['engine-debug', 'kernel']`) are stale: host tests would otherwise exercise
+ * an old embedded runtime or Dart snapshot and pass or fail for the wrong
+ * reason.  `SKYLINE_ALLOW_STALE_BUILD=1` turns the failure into a skip.
+ */
+function checkBuildCurrent(t, steps) {
+  const problems = buildProblems(steps);
+  if (problems.length === 0) return;
+  if (process.env.SKYLINE_ALLOW_STALE_BUILD === '1') {
+    t.skip(`stale build allowed by SKYLINE_ALLOW_STALE_BUILD: ${problems.join('; ')}`);
+    return;
+  }
+  throw new Error(
+    'build artifacts are stale (set SKYLINE_ALLOW_STALE_BUILD=1 to run anyway):\n  ' +
+    problems.join('\n  '));
+}
+
+module.exports = { checkBuildCurrent, devtoolsEntrypointArgs };

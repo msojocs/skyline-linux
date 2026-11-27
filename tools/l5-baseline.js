@@ -17,6 +17,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { devtoolsEntrypointArgs } = require('../test/lib/host');
+const { buildProblems } = require('./build-status');
 
 const repoRoot = path.resolve(__dirname, '..');
 const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
@@ -287,6 +288,12 @@ function main() {
     process.exit(1);
   }
   if (process.argv.includes('--write')) {
+    // A baseline recorded from a stale engine/kernel would bake in old frames.
+    const stale = buildProblems(['engine-debug', 'kernel']);
+    if (stale.length > 0 && !process.argv.includes('--allow-stale')) {
+      console.error(`refusing to write a baseline from stale artifacts (--allow-stale overrides):\n  ${stale.join('\n  ')}`);
+      process.exit(1);
+    }
     const baseline = record();
     fs.writeFileSync(baselinePath, JSON.stringify(baseline, null, 1) + '\n');
     console.error(`wrote ${baselinePath}`);

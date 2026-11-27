@@ -24,7 +24,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync, spawn } = require('node:child_process');
-const { devtoolsEntrypointArgs } = require('../../test/lib/host');
+const { checkBuildCurrent, devtoolsEntrypointArgs } = require('../../test/lib/host');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
@@ -237,6 +237,12 @@ function legacyBundle() {
   }
   return null;
 }
+
+test('appservice ops: build artifacts match the sources', {
+  skip: prerequisiteSkip() || false,
+}, t => {
+  checkBuildCurrent(t, ['engine-debug', 'kernel']);
+});
 
 test('appservice ops: committed stripe fixture replays through the runtime', {
   skip: prerequisiteSkip() || false,

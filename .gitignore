@@ -14,3 +14,4 @@ apps/empty-page/build/
 native/engine/work/
 apps/dart-ui-compat-smoke/build/
 apps/*/.dart_tool/
+dist/

@@ -19,7 +19,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { devtoolsEntrypointArgs } = require('../../test/lib/host');
+const { checkBuildCurrent, devtoolsEntrypointArgs } = require('../../test/lib/host');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
@@ -66,6 +66,12 @@ function parseResult(stdout) {
     return null;
   }
 }
+
+test('skyline page: build artifacts match the sources', {
+  skip: prerequisiteSkip() || false,
+}, t => {
+  checkBuildCurrent(t, ['engine-debug', 'kernel']);
+});
 
 test('skyline page: embedded runtime renders YGNode + DecoratedBox', {
   skip: prerequisiteSkip() || false,

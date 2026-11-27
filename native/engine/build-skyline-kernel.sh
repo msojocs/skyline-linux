@@ -104,6 +104,8 @@ if [ "$check_only" -eq 1 ]; then
   if [ -n "$hash" ] && ! head -c 64 "$out" | grep -aq "$hash"; then
     die "kernel header does not contain the public SDK hash $hash"
   fi
+  node "$ENGINE_REPO_ROOT/tools/build-status.js" --check kernel >&2 ||
+    die "kernel is stale (see above); run without --check"
   log "kernel ok: $out"
   exit 0
 fi
@@ -151,4 +153,5 @@ fi
 size=$(wc -c < "$out")
 sha=$(sha256sum "$out" | awk '{print $1}')
 log "kernel_blob.bin: $size bytes, sha256 $sha"
+node "$ENGINE_REPO_ROOT/tools/build-status.js" stamp kernel
 log "assets ready: $assets"

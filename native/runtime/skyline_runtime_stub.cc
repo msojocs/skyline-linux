@@ -20,6 +20,16 @@
 // `skyline-runtime` test checks it.
 #include "internal/skyline_runtime_module.hh"
 
+// Fingerprint of the runtime sources compiled into this binary.  The engine
+// build (native/engine/build-engine.sh) generates the header next to the
+// copied sources; standalone CMake builds are "unversioned".
+#if __has_include("skyline_runtime_build_id.hh")
+#include "skyline_runtime_build_id.hh"
+#endif
+#ifndef SKYLINE_RUNTIME_BUILD_ID
+#define SKYLINE_RUNTIME_BUILD_ID "unversioned"
+#endif
+
 
 // ABI/bootstrap state.  Declared in internal/skyline_runtime_abi.hh.
 std::vector<RuntimeHolder*> g_known_holders;
@@ -72,12 +82,19 @@ void LogTwo(const char* level, SkylineHandle /*tag*/, SkylineHandle /*message*/)
 // Bootstrap / runtime objects
 // ---------------------------------------------------------------------------
 
+// Returns "SKYLINE_RUNTIME_BUILD_ID=<sha256>"; tools/build-status.js finds the
+// same prefixed string in the binary to detect engines with a stale runtime.
+SKYLINE_EXPORT extern "C" const char* SkylineRuntimeBuildId() {
+  return "SKYLINE_RUNTIME_BUILD_ID=" SKYLINE_RUNTIME_BUILD_ID;
+}
+
 SKYLINE_EXPORT extern "C" intptr_t InitDartAPIDLSkyline(void* data) {
 #ifdef SKYLINE_EMBEDDED
   // The full Dart API is linked in; nothing to initialize.
   (void)data;
   g_dart_api_initialized = true;
-  std::fprintf(stderr, "[skyline-runtime] embedded Dart API ready\n");
+  std::fprintf(stderr, "[skyline-runtime] embedded Dart API ready (build %s)\n",
+               SKYLINE_RUNTIME_BUILD_ID);
   return 0;
 #else
 #if __has_include(<dart_api_dl.h>)

@@ -21,7 +21,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { devtoolsEntrypointArgs } = require('../../test/lib/host');
+const { checkBuildCurrent, devtoolsEntrypointArgs } = require('../../test/lib/host');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const host = path.join(repoRoot, 'native', 'build-release', 'skyline_host');
@@ -63,6 +63,12 @@ function pixelAt(pixels, x, y) {
   const offset = (y * width + x) * 4;
   return [...pixels.subarray(offset, offset + 4)];
 }
+
+test('skyline aot: build artifacts match the sources', {
+  skip: prerequisiteSkip() || false,
+}, t => {
+  checkBuildCurrent(t, ['engine-release', 'aot']);
+});
 
 test('skyline aot: appservice stripes render on the release engine', {
   skip: prerequisiteSkip() || false,
