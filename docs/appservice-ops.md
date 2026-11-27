@@ -404,7 +404,7 @@ paint 回调即可绘制。请求期间节点保留 `image_pending`，失败则�
   1. `FlutterEngineSendKeyEvent` 交给 Flutter framework；
   2. `FlutterEngineSendPlatformMessage` 在 `skyline/keyboard` 通道发送
      `"<kind> <logical> <text>"`。重编译的 appservice kernel
-     （`app_compat/apply.py` 注入）在 UI 线程接收消息并调用嵌入运行时的
+     （`app_compat/devtools-entrypoint.patch` 注入）在 UI 线程接收消息并调用嵌入运行时的
      `DispatchSkylineKeyEvent`，后者向焦点节点追加/删除文本并走
      `TextSpanUpdate*` 细粒度刷新。
   `focusInput` 设置焦点，`keyboardStatus` 调用 Dart 注册的

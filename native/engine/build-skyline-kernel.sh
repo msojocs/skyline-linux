@@ -16,7 +16,12 @@
 # Sources are reconstructed from the official Windows kernel_blob.bin (the
 # kernel embeds uriToSource for every compiled package).  They are generated
 # under native/engine/work/ and are not committed: the repository ships no
-# official binaries or proprietary sources.
+# official binaries or proprietary sources.  The Linux compat changes are the
+# unified diffs in native/engine/app_compat/*.patch; --refresh-sources
+# regenerates pristine sources before applying them (needed when a patch no
+# longer applies, e.g. after the sources were edited by hand).
+#
+# --check   verify the patches and the kernel build stamp without writing
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -61,38 +66,49 @@ if [ ! -f "$ENGINE_PATCHED_SDK/platform_strong.dill" ]; then
   die "patched SDK missing at $ENGINE_PATCHED_SDK; run: bash native/engine/patch-dart-ui.sh"
 fi
 
-python3 "$ENGINE_DIR/app_compat/apply.py" "$app"
+app_compat_dir="$ENGINE_DIR/app_compat"
+
+# git apply on the reconstructed tree.  It lives inside this (ignored)
+# repository, so stop repository discovery at its parent: git then patches it
+# as a plain directory, like GNU patch without fuzz.
+app_git_apply() {
+  (cd "$app" && GIT_CEILING_DIRECTORIES="$(dirname "$app")" git apply "$@")
+}
+
+app_compat_patches() {
+  find "$app_compat_dir" -maxdepth 1 -name '*.patch' -print | sort
+}
+
+apply_app_compat() {
+  local patch name
+  while IFS= read -r patch; do
+    name=$(basename "$patch")
+    if app_git_apply --reverse --check "$patch" >/dev/null 2>&1; then
+      log "app compat already applied: $name"
+    elif app_git_apply --check "$patch" >/dev/null 2>&1; then
+      app_git_apply "$patch"
+      log "app compat applied: $name"
+    else
+      die "app compat patch $name does not apply to $app (sources edited or reconstructed from another kernel); run: npm run kernel:skyline -- --refresh-sources"
+    fi
+  done < <(app_compat_patches)
+}
 
 if [ "$check_only" -eq 1 ]; then
+  while IFS= read -r patch; do
+    app_git_apply --reverse --check "$patch" >/dev/null 2>&1 ||
+      die "app compat patch not applied: $(basename "$patch") (run without --check)"
+  done < <(app_compat_patches)
   [ -s "$out" ] || die "missing $out; run without --check"
   hash=$(revision_value PUBLIC_KERNEL_SDK_HASH)
   if [ -n "$hash" ] && ! head -c 64 "$out" | grep -aq "$hash"; then
     die "kernel header does not contain the public SDK hash $hash"
   fi
-  grep -q 'enableStackingPaint ?? false' "$app/packages/skyline/lib/widgets/yoga.dart" \
-    || die "app compat patch missing; run without --check"
-  grep -q 'WidgetType.kTexture)' "$app/packages/skyline/lib/widgets/yoga.dart" \
-    || die "native view hit-test patch missing; run without --check"
-  grep -q 'Headless Linux' "$app/packages/skyline/lib/widgets/texture.dart" \
-    || die "native view compat patch missing; run without --check"
-  grep -q 'List<Widget>.of(children)' \
-    "$app/packages/skyline/lib/widgets/multi_child_render_object_widget.dart" \
-    || die "growable widget children patch missing (custom routes); run without --check"
-  grep -q 'bool showDebugBanner = false;' \
-    "$app/packages/skyline/lib/core/application.dart" \
-    || die "debug banner patch missing (deterministic frames); run without --check"
-  grep -q 'if (File(addonPath).existsSync())' \
-    "$app/packages/skyline/lib/core/application.dart" \
-    || die "Linux DevTools dylib patch missing; run without --check"
-  grep -q 'SkylineApplication.instance?.dylib' \
-    "$app/packages/sample/lib/devtools.dart" \
-    || die "keyboard channel library patch missing; run without --check"
-  grep -q 'primaryFontFamily' \
-    "$app/packages/skyline/lib/core/ffi_registry.dart" \
-    || die "primary font family patch missing (color emoji); run without --check"
   log "kernel ok: $out"
   exit 0
 fi
+
+apply_app_compat
 
 mkdir -p "$assets"
 rm -f "$out"

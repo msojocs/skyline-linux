@@ -1,0 +1,67 @@
+Linux compat for package:skyline widgets/texture.dart.
+
+Headless Linux native-view fallback.  The public engine has no platform-view
+registry, so SkylineTextureView uses a synthetic texture id and an opaque,
+pointer-listening placeholder (black slot).  Pointer events still flow through
+SkylineWidgetsFlutterBinding.forwardNativeViewPointerEvent into the runtime's
+HandleNativeViewPointerEvent.
+
+diff --git a/packages/skyline/lib/widgets/texture.dart b/packages/skyline/lib/widgets/texture.dart
+index eed2819..bc9880a 100644
+--- a/packages/skyline/lib/widgets/texture.dart
++++ b/packages/skyline/lib/widgets/texture.dart
+@@ -295,6 +295,10 @@ class SkylineTextureView extends SkylineLeafRenderObjectWidget {
+           // ignore TODO(jintaochen)
+         },
+       );
++    } else if (Platform.isLinux) {
++      // Headless Linux: no platform-view registry.  Use a synthetic
++      // texture id and the pointer-listening placeholder below.
++      _textureId = id;
+     } else {
+       _controller = PlatformViewsService.initAndroidView(
+         id: id,
+@@ -401,6 +405,19 @@ class SkylineTextureView extends SkylineLeafRenderObjectWidget {
+         gestureRecognizers: _gestureRecognizers,
+         clipBehavior: _clipBehavior,
+       ));
++    } else if (Platform.isLinux) {
++      // Headless Linux native-view placeholder.  Keep the pointer
++      // listener so events reach HandleNativeViewPointerEvent.
++      _decoratedBox = createScaleRender(RenderConstrainedBox(
++          additionalConstraints: const BoxConstraints.expand()));
++      return RenderPointerListener(
++        behavior: HitTestBehavior.opaque,
++        onPointerMove: sendPointerEvent,
++        onPointerCancel: sendPointerEvent,
++        onPointerDown: sendPointerEvent,
++        onPointerUp: sendPointerEvent,
++        child: _decoratedBox,
++      );
+     } else {
+       return createScaleRender(TransparentRenderAndroidView(
+         viewController: _controller! as TextureAndroidViewController,
+@@ -467,6 +484,12 @@ class SkylineTextureView extends SkylineLeafRenderObjectWidget {
+       }
+     }
+ 
++    if (Platform.isLinux) {
++      // Opaque placeholder slot; native content lives outside the
++      // headless replay runtime.
++      return const BoxDecoration(color: Colors.black);
++    }
++
+     // Android: scale模式下任一方向有缩放即用黑色背景填充留白
+     if (Platform.isAndroid &&
+         _scaleValid &&
+@@ -517,6 +540,10 @@ class SkylineTextureView extends SkylineLeafRenderObjectWidget {
+           render.updateGestureRecognizers(_gestureRecognizers);
+         }
+       }
++    } else if (Platform.isLinux) {
++      RenderPointerListener listener = renderObject as RenderPointerListener;
++      _decoratedBox = listener.child as RenderDecoratedBox;
++      updateScaleRender(_decoratedBox!);
+     } else {
+       RenderAndroidView render =
+           updateScaleRender(renderObject) as RenderAndroidView;

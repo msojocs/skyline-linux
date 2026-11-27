@@ -495,7 +495,7 @@ uint32_t ParseColorString(const char* value, uint32_t fallback) {
 // True when the (whitespace-normalized) run consists only of emoji
 // codepoints, ZWJ/skin-tone/keycap modifiers and spaces.  The FFI has no
 // primary `fontFamily` argument, so emoji-only runs get a marker-prefixed
-// color-emoji family that app_compat/apply.py turns into TextStyle.fontFamily
+// color-emoji family that app_compat/ffi-registry.patch turns into TextStyle.fontFamily
 // (the SkParagraph FontCollection patch lets that family win over DejaVu's
 // monochrome U+2764).  Mixed text keeps the previous default-font behaviour.
 bool IsEmojiOnlyText(const char* value) {
@@ -587,7 +587,7 @@ Dart_Handle CreateTextWidget(NewTextFn newText,
                                               "DejaVu Sans"};
     std::vector<std::string> families;
     // A leading U+0001 marks a primary family (the FFI has no fontFamily
-    // argument); app_compat/apply.py strips the marker into TextStyle's
+    // argument); app_compat/ffi-registry.patch strips the marker into TextStyle's
     // fontFamily and keeps the rest as the fallback chain.
     if (IsEmojiOnlyText(value)) {
       families.push_back(std::string(1, '\x01') + "Noto Color Emoji");

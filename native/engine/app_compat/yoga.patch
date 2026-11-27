@@ -1,0 +1,76 @@
+Linux compat for package:skyline widgets/yoga.dart.
+
+1. YGConnector.updateChildren/removeChild call coordinateStackingChildren()
+   unconditionally.  That method asserts enableStackingPaint; connectors created
+   without stacking (the Linux runtime) therefore threw when the native side
+   updated children.  Guard the call; non-stacking connectors paint via
+   firstChild.
+2. Native-view hit testing: plain YGNode render objects do not forward hit
+   tests to their single child, so the texture widget's RenderPointerListener
+   never saw pointers.  Treat kTexture like a proxy for hit testing (report the
+   hit; hitTestWithPaintTransform adds the listener exactly once).
+3. Connector-backed YGNodes: the shadow-node hit test is authoritative.  The raw
+   RenderBox fallback (YGConnectorRenderObject.hitTest == size.contains) made
+   every full-viewport fixed/portal overlay swallow all pointers, so scroll
+   views behind it never received gestures (the address-book root-portal A-Z
+   index blocked the whole page).
+
+diff --git a/packages/skyline/lib/widgets/yoga.dart b/packages/skyline/lib/widgets/yoga.dart
+index a4e132f..51fdb84 100644
+--- a/packages/skyline/lib/widgets/yoga.dart
++++ b/packages/skyline/lib/widgets/yoga.dart
+@@ -768,6 +768,15 @@ class YGNodeRenderObject extends YGRenderBox
+         !enableLayoutParagraph && concreteWidgetType == WidgetType.kText) {
+       return hitTestYGConnector(result, position);
+     }
++    if (concreteWidgetType == WidgetType.kTexture) {
++      // Native views: report the hit without adding the listener here;
++      // hitTestWithPaintTransform adds it exactly once.
++      final RenderBox? textureChild = child;
++      return textureChild != null &&
++          textureChild.hasSize &&
++          textureChild.size.contains(position);
++    }
++
+     if (concreteWidgetType == WidgetType.kHero) {
+       return hitTestHero(result, position);
+     }
+@@ -798,7 +807,13 @@ class YGNodeRenderObject extends YGRenderBox
+       return true;
+     }
+ 
+-    if (hitTestYGNode(result, position)) {
++    // Connector-backed nodes already ran the authoritative shadow-node hit
++    // test above.  YGConnectorRenderObject.hitTest only checks the whole box,
++    // so falling back to it would make a full-viewport fixed/portal overlay
++    // swallow pointers even when no child contains the point (blocking the
++    // scroll view behind the address-book A-Z index).
++    if (concreteWidgetType != WidgetType.kYGConnector &&
++        hitTestYGNode(result, position)) {
+       result.add(BoxHitTestEntry(this, position));
+       return true;
+     }
+@@ -905,7 +920,9 @@ class YGConnector extends SkylineMultiChildRenderObjectWidget
+ 
+     // Proactively update stacking children in case it's paint method is not
+     // being called somehow, which leads to memory leak and hitTest issue.
+-    renderObject?.coordinateStackingChildren();
++    if (renderObject?.enableStackingPaint ?? false) {
++      renderObject?.coordinateStackingChildren();
++    }
+     assert(!children.contains(child));
+     markNeedsLayout();
+   }
+@@ -929,7 +946,11 @@ class YGConnector extends SkylineMultiChildRenderObjectWidget
+ 
+     // Proactively update stacking children in case it's paint method is not
+     // being called somehow, which leads to memory leak and hitTest issue.
+-    renderObject?.coordinateStackingChildren();
++    // Linux compat: non-stacking connectors must not call this (it asserts
++    // enableStackingPaint); they paint via firstChild anyway.
++    if (renderObject?.enableStackingPaint ?? false) {
++      renderObject?.coordinateStackingChildren();
++    }
+     markNeedsLayout();
+   }
+ 

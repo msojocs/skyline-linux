@@ -1,0 +1,26 @@
+Linux compat for package:skyline widgets/multi_child_render_object_widget.dart.
+
+Custom routes mutate the host connector's children in
+SkylineCupertinoPageTransition.build (children.clear() + children.add()).  The
+embedder passes widget children as a fixed-length Dart list, so every custom
+route build threw "Cannot change the length of a fixed-length list" and the
+pushed page stayed invisible.  Keep a growable copy in the base multi-child
+widget.
+
+diff --git a/packages/skyline/lib/widgets/multi_child_render_object_widget.dart b/packages/skyline/lib/widgets/multi_child_render_object_widget.dart
+index 2fa7e24..865f8ac 100644
+--- a/packages/skyline/lib/widgets/multi_child_render_object_widget.dart
++++ b/packages/skyline/lib/widgets/multi_child_render_object_widget.dart
+@@ -8,8 +8,11 @@ abstract class SkylineMultiChildRenderObjectWidget extends RenderObjectWidget {
+   /// The [children] argument must not be null and must not contain any null
+   /// objects.
+   SkylineMultiChildRenderObjectWidget(
+-      {Key? key, this.children = const <Widget>[]})
++      {Key? key, List<Widget> children = const <Widget>[]})
+       : assert(children != null),
++        // Linux compat: the embedder passes a fixed-length list; custom
++        // routes mutate connector.children, so keep a growable copy.
++        children = List<Widget>.of(children),
+         super(key: key) {
+     assert(() {
+       for (int index = 0; index < children.length; index++) {

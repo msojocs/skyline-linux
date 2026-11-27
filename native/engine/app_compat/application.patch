@@ -1,0 +1,43 @@
+Linux compat for package:skyline core/application.dart.
+
+1. Flutter paints the DEBUG banner only when asserts are enabled (the JIT host
+   kernel) and it needs a fallback font.  The DevTools runtime is release (no
+   banner), so disable it to keep golden frames font-independent.
+2. Linux DevTools: open the already loaded skyline.node instead of a separate
+   libskyline.so.  The addon's engine dependency exports the Skyline ABI, so
+   dlsym() through the addon handle finds all 73 lookup symbols (the approach
+   the official Windows/macOS builds use).  skyline_host passes the engine (or
+   the standalone stub runtime) as skylineAddonPath; anything that is not a
+   file keeps the libskyline.so lookup instead of failing to boot.
+
+diff --git a/packages/skyline/lib/core/application.dart b/packages/skyline/lib/core/application.dart
+index 1252e16..70cc271 100644
+--- a/packages/skyline/lib/core/application.dart
++++ b/packages/skyline/lib/core/application.dart
+@@ -143,7 +143,7 @@ class SkylineApplication {
+   /// The singleton instance of this object.
+   static SkylineApplication? get instance => _instance;
+   static SkylineApplication? _instance;
+-  bool showDebugBanner = true;
++  bool showDebugBanner = false;
+ 
+   static const skylineDylibNameSo = 'libskyline.so';
+   static const skylineDylibNameDylib = 'libskyline.dylib';
+@@ -382,6 +382,17 @@ class SkylineApplication {
+     }
+ 
+     if (Platform.isAndroid || Platform.isOhos || Platform.isLinux) {
++      if (Platform.isLinux && this is SkylineApplicationDevtools) {
++        // The DevTools already loaded skyline.node; its engine dependency
++        // exports the Skyline symbols, so no libskyline.so is needed.
++        // Hosts that pass a placeholder instead of a file keep the
++        // libskyline.so lookup below.
++        final addonPath =
++            (this as SkylineApplicationDevtools).skylineAddonPath;
++        if (File(addonPath).existsSync()) {
++          return DynamicLibrary.open(addonPath);
++        }
++      }
+       return DynamicLibrary.open(skylineDylibNameSo);
+     } else {
+       if (this is SkylineApplicationDevtools) {

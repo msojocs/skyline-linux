@@ -92,7 +92,7 @@ SkParagraph。`backgroundUseLineMetrics` 在 `TextLine::paintBackground` 与
 ## 3. stub Linux 运行时与 appservice 第一帧
 
 官方 `package:skyline` 在 Linux 上按名称打开 `libskyline.so`（`skylineAddonPath`
-仅在 Windows 分支使用）。本项目的 `app_compat/apply.py` 给开发者工具版本加了
+仅在 Windows 分支使用）。本项目的 `app_compat/application.patch` 给开发者工具版本加了
 补丁：Linux DevTools 分支在 `skylineAddonPath` 是已存在的文件时直接
 `DynamicLibrary.open(skylineAddonPath)`，打开已经加载的 `skyline.node` 并通过其
 依赖 `libflutter_engine.so` 解析 73 个符号，因此 DevTools 包不再需要
@@ -205,10 +205,12 @@ npm run test:appservice
   `appendChild` 对 growable list 的依赖），随后对所有子节点调用
   `MarkYGNodeNeedsLayout` 使缓冲区尺寸变化生效。测试：红节点 → append 绿节点
   （上下各半）→ remove 红节点（绿铺满）。
-- `native/engine/app_compat/apply.py`：给 `YGConnector.updateChildren`/
-  `removeChild` 的 `coordinateStackingChildren()` 加
-  `enableStackingPaint` 守卫；非 stacking connector 不再触发断言。重建源树后由
-  `build-skyline-kernel.sh` 自动应用。
+- `native/engine/app_compat/*.patch`：对恢复出的源码树打的 unified diff，例如
+  `yoga.patch` 给 `YGConnector.updateChildren`/`removeChild` 的
+  `coordinateStackingChildren()` 加 `enableStackingPaint` 守卫，非 stacking
+  connector 不再触发断言；每个补丁头部说明原因。`build-skyline-kernel.sh` 用
+  `git apply` 应用（已应用则跳过，无法应用时提示 `--refresh-sources`），
+  `--check` 只做 `git apply --reverse --check`，不写源码树。
 - appservice/V8 节点操作流：`tools/record-skyline-ops.js` 在 Node V8 中运行官方
   渲染层 bundle (`assets/app.js`)，抓取其发往 `SkylineGlobal` 原生绑定的节点
   操作；`SKYLINE_APP_SERVICE_OPS=@ops.json` 让嵌入式运行时回放该操作流

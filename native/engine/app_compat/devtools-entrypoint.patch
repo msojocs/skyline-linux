@@ -1,0 +1,63 @@
+Host hooks for package:sample/lib/devtools.dart (the DevTools entrypoint).
+
+1. Optional HTTP platform-channel smoke hook: when SKYLINE_HTTP_TEST_URL is
+   set, the entrypoint performs one HttpForwarder.httpGet and prints the result
+   (ForwardHttpGet -> RequestHttpResource -> OnForwardHttpGetResponse, used by
+   the appservice ops test).
+2. Keyboard platform channel: the headless host cannot call into the Dart
+   isolate from its own thread, so it sends a 'skyline/keyboard' platform
+   message.  The handler forwards the payload to the embedded runtime export
+   DispatchSkylineKeyEvent on the UI thread, resolved through the library
+   package:skyline already opened (skyline.node in the DevTools, the engine in
+   skyline_host; the DevTools addon directory has no libskyline.so).
+
+diff --git a/packages/sample/lib/devtools.dart b/packages/sample/lib/devtools.dart
+index 6eb119e..81adbbe 100644
+--- a/packages/sample/lib/devtools.dart
++++ b/packages/sample/lib/devtools.dart
+@@ -1,4 +1,11 @@
+ import "package:skyline/skyline.dart";
++import 'package:skyline/core/application.dart' show SkylineApplication;
++import 'dart:convert';
++import 'dart:ffi';
++import 'package:ffi/ffi.dart';
++import 'package:flutter/services.dart';
++import 'dart:io';
++import 'package:skyline/utils/http_forwarder.dart';
+ import 'dart:convert';
+ 
+ void main(List<String> args) {
+@@ -11,4 +18,33 @@ void main(List<String> args) {
+       createRuntime: int.parse(args[4]) == 1,
+       skylineAddonPath: args[5],
+   );
++
++  ServicesBinding.instance.defaultBinaryMessenger
++      .setMessageHandler('skyline/keyboard', (ByteData? data) async {
++    if (data == null) return null;
++    final raw = utf8.decode(
++        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
++    final parts = raw.split(' ');
++    final kind = int.tryParse(parts.isNotEmpty ? parts[0] : '0') ?? 0;
++    final logical =
++        int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0;
++    final text = parts.length > 2 ? parts.sublist(2).join(' ') : '';
++    final library = SkylineApplication.instance?.dylib;
++    if (library == null) return null;
++    final dispatch = library.lookupFunction<
++        Void Function(Int32, Uint32, Pointer<Utf8>),
++        void Function(int, int, Pointer<Utf8>)>('DispatchSkylineKeyEvent');
++    final pointer = text.isEmpty ? nullptr : text.toNativeUtf8();
++    dispatch(kind, logical, pointer);
++    if (pointer != nullptr) calloc.free(pointer);
++    return null;
++  });
++
++  final httpTestUrl = Platform.environment['SKYLINE_HTTP_TEST_URL'];
++  if (httpTestUrl != null && httpTestUrl.isNotEmpty) {
++    HttpForwarder.httpGet(httpTestUrl).then((data) {
++      final text = data == null ? '' : String.fromCharCodes(data);
++      print('SKYLINE_HTTP_RESULT ${data?.length ?? 0} $text');
++    });
++  }
+ }

@@ -1,0 +1,41 @@
+Linux compat for package:skyline core/ffi_registry.dart.
+
+Primary font family for emoji-only text runs.  NewTextSpan has no fontFamily
+parameter, so the runtime prefixes the first fallback entry with U+0001 when it
+wants that family to be primary.  The engine uses "Noto Color Emoji" as the
+primary for pure emoji runs; with the SkParagraph FontCollection patch this
+reaches the color emoji font instead of DejaVu's monochrome U+2764.
+
+diff --git a/packages/skyline/lib/core/ffi_registry.dart b/packages/skyline/lib/core/ffi_registry.dart
+index 20a2d28..b51ef2c 100644
+--- a/packages/skyline/lib/core/ffi_registry.dart
++++ b/packages/skyline/lib/core/ffi_registry.dart
+@@ -2136,6 +2136,18 @@ Object newTextSpan(
+   final fontFamilyFallback = fontFamilyFallbackObj as List<dynamic>?;
+   final shadows = shadowsObj as List<dynamic>?;
+   final children = childrenObj as List<dynamic>;
++  // Linux compat: the FFI has no primary fontFamily argument.  A first
++  // fallback entry prefixed with U+0001 selects the primary family
++  // (emoji-only runs use a color emoji font this way); the remaining
++  // entries stay in the fallback chain.
++  String? primaryFontFamily;
++  List<String>? fallbackFamilies = fontFamilyFallback?.cast<String>();
++  if (fallbackFamilies != null &&
++      fallbackFamilies.isNotEmpty &&
++      fallbackFamilies.first.startsWith(String.fromCharCode(1))) {
++    primaryFontFamily = fallbackFamilies.first.substring(1);
++    fallbackFamilies = fallbackFamilies.sublist(1);
++  }
+   // only apply decoration when it's specified manually,
+   // otherwise it will overwrite decoration in parent TextSpan
+   bool shouldApplyDecoration = false;
+@@ -2171,7 +2183,8 @@ Object newTextSpan(
+     height: height.isNaN ? null : height,
+     leadingDistribution: TextLeadingDistribution.even,
+     shadows: shadows?.cast<Shadow>(),
+-    fontFamilyFallback: fontFamilyFallback?.cast<String>(),
++    fontFamily: primaryFontFamily,
++    fontFamilyFallback: fallbackFamilies,
+   );
+   final textSpan = SkylineTextSpan(
+       text: text,
