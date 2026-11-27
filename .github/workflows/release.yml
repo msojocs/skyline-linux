@@ -66,8 +66,19 @@ jobs:
 
       - name: Run tests
         run: |
-          npm test
+          set -o pipefail
+          npm test 2>&1 | tee /tmp/npm-test.log
           npm run test:native
+          # The release engine + AOT bundle from build-deps run the appservice
+          # replay for real; fail instead of skipping when they are missing.
+          SKYLINE_REQUIRE_ENGINE=1 npm run test:skyline:aot
+          {
+            echo '### npm test'
+            echo '```'
+            grep -E '^# (tests|pass|fail|skipped|todo)' /tmp/npm-test.log
+            echo '```'
+            echo 'Skipped tests need the debug engine and JIT kernel, which CI does not build.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package artifacts
         run: |
