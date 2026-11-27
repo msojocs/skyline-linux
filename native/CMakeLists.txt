@@ -94,8 +94,9 @@ set_target_properties(skyline_node PROPERTIES
   SUFFIX ".node"
   OUTPUT_NAME "skyline"
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  # Build tree only: there are no install rules.  native/engine/
+  # stage-devtools-addon.sh rewrites RUNPATH to $ORIGIN when staging.
   BUILD_RPATH "${SKYLINE_ENGINE_ROOT}"
-  INSTALL_RPATH "$ORIGIN/../engine/out/linux-x64-debug"
 )
 # Node-API symbols are provided by the host process at load time.
 if(NOT APPLE)
@@ -237,9 +238,6 @@ if(SKYLINE_BUILD_HOST)
     )
     set_target_properties(skyline_host PROPERTIES
       BUILD_RPATH "${SKYLINE_ENGINE_ROOT}"
-      INSTALL_RPATH "$ORIGIN/../engine/out/linux-x64-debug"
-      BUILD_WITH_INSTALL_RPATH FALSE
-      SKIP_BUILD_RPATH FALSE
     )
     message(STATUS "skyline_host: engine found at ${SKYLINE_ENGINE_ROOT}")
   else()
