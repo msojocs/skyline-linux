@@ -27,6 +27,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { windowsResourceCandidates } = require('../test/lib/env');
 
 const repoRoot = path.resolve(__dirname, '..');
 
@@ -73,13 +74,8 @@ function firstExisting(candidates) {
 }
 
 function defaultBundle() {
-  const resources = [
-    process.env.SKYLINE_WIN_RESOURCES,
-    path.resolve(repoRoot, '..', 'wechat-web-devtools-linux', 'cache', 'devtools', 'resources', 'app.asar.unpacked'),
-    path.resolve(repoRoot, '..', 'wechat-web-devtools-linux', 'tmp', 'official-win-resources', 'resources', 'app.asar.unpacked'),
-  ].filter(Boolean);
   const candidates = [];
-  for (const resource of resources) {
+  for (const resource of windowsResourceCandidates()) {
     const assets = path.join(resource, 'node_modules', 'skyline-addon', 'bundle', 'flutter_assets', 'assets');
     candidates.push(path.join(assets, 'app.js'), path.join(assets, 'app_0.js'));
   }

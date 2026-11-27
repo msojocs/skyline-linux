@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
 const path = require('node:path');
-const { specPath, oraclePaths, linuxSharedMemoryDefault } = require('./lib/env');
+const { specPath, oraclePaths, linuxSharedMemoryDefault, devtoolsDir } = require('./lib/env');
 const { runOnce } = require('./lib/runner');
 const { compareCase } = require('./lib/compare');
 const { byId } = require('./cases');
@@ -23,7 +23,7 @@ const linuxShared = linuxSharedMemoryDefault();
 const referenceAddon = path.resolve(__dirname, '..', 'reference', 'skyline-node.js');
 const linuxAddon = process.env.SKYLINE_LINUX_SKYLINE_ADDON || referenceAddon;
 const repoRoot = path.resolve(__dirname, '..');
-const aotStageBundle = path.resolve(repoRoot, '..', 'wechat-web-devtools-linux',
+const aotStageBundle = path.join(devtoolsDir(),
   'resources', 'app.asar.unpacked', 'node_modules', 'skyline-addon', 'bundle');
 const linuxBundle = process.env.SKYLINE_LINUX_BUNDLE || (linuxAddon.includes('build-release') &&
   fs.existsSync(path.join(aotStageBundle, 'libapp.so'))

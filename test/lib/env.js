@@ -24,12 +24,30 @@ function linuxSharedMemoryDefault() {
   ]);
 }
 
-function windowsResources() {
-  const candidates = [
+// Sibling Linux WeChat DevTools checkout.  SKYLINE_DEVTOOLS_DIR overrides it,
+// matching native/engine/stage-devtools-addon.sh.
+function devtoolsDir() {
+  return process.env.SKYLINE_DEVTOOLS_DIR || path.resolve(repoRoot, '..', 'wechat-web-devtools-linux');
+}
+
+// Reads KEY=VALUE from native/engine/REVISION (pinned versions).
+function revisionValue(key) {
+  const text = fs.readFileSync(path.join(repoRoot, 'native', 'engine', 'REVISION'), 'utf8');
+  const match = new RegExp(`^${key}=(.*)$`, 'm').exec(text);
+  return match ? match[1].trim() : null;
+}
+
+// Official Windows `resources/app.asar.unpacked` trees, most specific first.
+function windowsResourceCandidates() {
+  return [
     process.env.SKYLINE_WIN_RESOURCES,
-    path.resolve(repoRoot, '../wechat-web-devtools-linux/cache/devtools/resources/app.asar.unpacked'),
-    path.resolve(repoRoot, '../wechat-web-devtools-linux/tmp/official-win-resources/resources/app.asar.unpacked'),
+    path.join(devtoolsDir(), 'cache', 'devtools', 'resources', 'app.asar.unpacked'),
+    path.join(devtoolsDir(), 'tmp', 'official-win-resources', 'resources', 'app.asar.unpacked'),
   ].filter(Boolean);
+}
+
+function windowsResources() {
+  const candidates = windowsResourceCandidates();
   // Prefer a tree that contains the Flutter bundle, which the oracle recorder
   // needs; some extracted snapshots only contain the .node modules.
   for (const candidate of candidates) {
@@ -84,7 +102,10 @@ function specPath() {
 module.exports = {
   repoRoot,
   firstExisting,
+  devtoolsDir,
+  revisionValue,
   linuxSharedMemoryDefault,
+  windowsResourceCandidates,
   windowsResources,
   windowsElectron,
   wineBinary,

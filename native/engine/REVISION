@@ -26,6 +26,13 @@ ARTIFACT_BASE=https://storage.googleapis.com/flutter_infra_release/flutter/ddf47
 # depot_tools revision pinned by the root DEPS at FLUTTER_GIT_REV.
 DEPOT_TOOLS_REV=580b4ff3f5cd0dcaa2eacda28cefe0f45320e8f7
 
+# WeChat DevTools release whose official kernel_blob.bin / renderer bundle the
+# Skyline sources and op fixtures were recovered from, and the wxlib vendor
+# package (js/vendor/<version>.wxvpkg) it ships.  Builtin component base
+# styles (tools/extract-wxlib-style.js) depend on WXLIB_VERSION.
+DEVTOOLS_VERSION=2.02.2609250
+WXLIB_VERSION=2.25.3
+
 # Metadata reported by the official Windows module (SkylineDebugInfo).
 SKYLINE_VERSION=1.4.21
 SKYLINE_GIT_REV=ef3edf6c94265dfe314f9197ff4e100f99aac070

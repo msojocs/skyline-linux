@@ -25,6 +25,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync, spawn } = require('node:child_process');
 const { checkBuildCurrent, devtoolsEntrypointArgs } = require('../../test/lib/host');
+const { windowsResourceCandidates } = require('../../test/lib/env');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
@@ -223,14 +224,7 @@ function recordRealOps(options = {}) {
 }
 
 function legacyBundle() {
-  const resources = [
-    process.env.SKYLINE_WIN_RESOURCES,
-    path.resolve(repoRoot, '..', 'wechat-web-devtools-linux', 'cache',
-      'devtools', 'resources', 'app.asar.unpacked'),
-    path.resolve(repoRoot, '..', 'wechat-web-devtools-linux', 'tmp',
-      'official-win-resources', 'resources', 'app.asar.unpacked'),
-  ].filter(Boolean);
-  for (const resource of resources) {
+  for (const resource of windowsResourceCandidates()) {
     const candidate = path.join(resource, 'node_modules', 'skyline-addon',
       'bundle', 'flutter_assets', 'assets', 'app_0.js');
     if (fs.existsSync(candidate)) return candidate;

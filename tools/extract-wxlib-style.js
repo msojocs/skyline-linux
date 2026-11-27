@@ -22,9 +22,10 @@
 //   tmp/wxlib-style/2.25.3/WASkylineStyleV2.css
 //
 // Different wxlib versions can carry different builtin-component styles, so
-// consumers must pin the version (`--vendor 2.25.3`) and record it alongside
-// any rendering baseline taken with those styles.  `--list` prints every
-// vendor package bundled in the DevTools with its WAVersion.json metadata.
+// consumers must pin the version and record it alongside any rendering
+// baseline taken with those styles.  `--vendor` defaults to WXLIB_VERSION in
+// native/engine/REVISION.  `--list` prints every vendor package bundled in the
+// DevTools with its WAVersion.json metadata.
 //
 // Usage:
 //   node tools/extract-wxlib-style.js [--resources <devtools/resources>]
@@ -44,14 +45,15 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { devtoolsDir, revisionValue } = require('../test/lib/env');
+
 const repoRoot = path.resolve(__dirname, '..');
 
 function parseArgs(argv) {
   const options = {
-    resources: process.env.SKYLINE_DEVTOOLS_RESOURCES ||
-      path.resolve(repoRoot, '..', 'wechat-web-devtools-linux', 'resources'),
+    resources: process.env.SKYLINE_DEVTOOLS_RESOURCES || path.join(devtoolsDir(), 'resources'),
     out: null,
-    vendor: process.env.SKYLINE_WXLIB_VERSION || null,
+    vendor: process.env.SKYLINE_WXLIB_VERSION || revisionValue('WXLIB_VERSION'),
     list: false,
     quiet: false,
   };
