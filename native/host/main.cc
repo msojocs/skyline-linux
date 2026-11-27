@@ -9,22 +9,18 @@
 
 #include <flutter_embedder.h>
 
-#include <atomic>
 #include <chrono>
-#include <cmath>
-#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <deque>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <vector>
 
+#include "embedder/embedder.hh"
 #include "frame_writer.hh"
 
 // Weak references keep the host usable with an engine built without the
@@ -40,13 +36,15 @@ constexpr int kExitTimeout = 71;
 constexpr int kExitSharedMemory = 72;
 constexpr int kExitBadArguments = 78;
 
+using skyline::embedder::FileExists;
+using skyline::embedder::JoinPath;
+
 struct HostState {
+  // Vsync batons, platform tasks and accessibility requests; serviced by the
+  // main thread, which runs FlutterEngineRun.
+  skyline::embedder::PlatformLoop loop{"[host]"};
+
   std::mutex mutex;
-  std::condition_variable cv;
-
-  std::deque<intptr_t> batons;
-  uint32_t vsync_count = 0;
-
   // `presented` becomes true once `captured_frames` reaches `target_frames`.
   bool presented = false;
   bool stop_capturing = false;
@@ -56,56 +54,17 @@ struct HostState {
 
   uint32_t width = 0;
   uint32_t height = 0;
-  size_t row_bytes = 0;
   std::vector<uint8_t> rgba;
 
-  // Set before FlutterEngineRun; used by the callbacks.
-  std::string pixel_format = "bgra";
-
-  // Accessibility requests queued by the embedded runtime from the Dart UI
-  // thread.  They are applied on the platform thread (the thread that called
-  // FlutterEngineRun), which is where the embedder semantics APIs must run.
-  std::deque<std::pair<int32_t, int32_t>> accessibility_requests;
+  // Set before FlutterEngineRun; used by the present callback.
+  bool rgba_surface = false;
 };
-
-HostState* g_accessibility_host = nullptr;
-
-void OnAccessibilitySink(int32_t kind, int32_t value) {
-  HostState* state = g_accessibility_host;
-  if (state == nullptr) return;
-  {
-    std::lock_guard<std::mutex> lock(state->mutex);
-    state->accessibility_requests.emplace_back(kind, value);
-  }
-  state->cv.notify_all();
-}
 
 // The embedder forwards the framework's semantics tree here.  Under
 // SKYLINE_APP_SERVICE_DEBUG each node is logged so automation/tests can assert
 // labels/roles without a platform accessibility service.
 void OnSemanticsUpdate(const FlutterSemanticsUpdate2* update, void* /*data*/) {
-  if (update == nullptr || std::getenv("SKYLINE_APP_SERVICE_DEBUG") == nullptr) {
-    return;
-  }
-  for (size_t i = 0; i < update->node_count; i++) {
-    const FlutterSemanticsNode2* node = update->nodes[i];
-    if (node == nullptr) continue;
-    const bool is_button =
-        node->flags2 != nullptr && node->flags2->is_button;
-    const bool is_text_field =
-        node->flags2 != nullptr && node->flags2->is_text_field;
-    const bool is_header = node->flags2 != nullptr && node->flags2->is_header;
-    std::fprintf(stderr,
-                 "[host] semantics node: id=%d label=\"%s\" value=\"%s\" "
-                 "button=%d textField=%d header=%d children=%zu "
-                 "rect=(%g,%g %gx%g)\n",
-                 node->id, node->label != nullptr ? node->label : "",
-                 node->value != nullptr ? node->value : "", is_button ? 1 : 0,
-                 is_text_field ? 1 : 0, is_header ? 1 : 0, node->child_count,
-                 node->rect.left, node->rect.top,
-                 node->rect.right - node->rect.left,
-                 node->rect.bottom - node->rect.top);
-  }
+  skyline::embedder::LogSemanticsUpdate("[host]", update);
 }
 
 struct Options {
@@ -169,61 +128,38 @@ void OnLogMessage(const char* tag, const char* message, void* /*user_data*/) {
 }
 
 void OnVsync(void* user_data, intptr_t baton) {
-  auto* state = static_cast<HostState*>(user_data);
-  {
-    std::lock_guard<std::mutex> lock(state->mutex);
-    state->batons.push_back(baton);
-    ++state->vsync_count;
-  }
-  state->cv.notify_all();
+  static_cast<HostState*>(user_data)->loop.OnVsync(baton);
 }
 
 bool OnSurfacePresent(void* user_data, const void* allocation, size_t row_bytes,
                       size_t height) {
   auto* state = static_cast<HostState*>(user_data);
   if (allocation == nullptr || row_bytes < 4 || height == 0) return true;
+  {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    ++state->present_count;
+    if (state->stop_capturing) return true;
+    if (state->captured_frames >= state->target_frames) return true;
 
-  std::lock_guard<std::mutex> lock(state->mutex);
-  ++state->present_count;
-  if (state->stop_capturing) return true;
-  if (state->captured_frames >= state->target_frames) return true;
-
-  const uint32_t width = static_cast<uint32_t>(row_bytes / 4);
-  const size_t frame_size = static_cast<size_t>(width) * height * 4;
-  state->rgba.resize(frame_size);
-
-  const uint8_t* src = static_cast<const uint8_t*>(allocation);
-  uint8_t* dst = state->rgba.data();
-  if (state->pixel_format == "rgba") {
-    for (size_t y = 0; y < height; ++y) {
-      std::memcpy(dst + y * width * 4, src + y * row_bytes,
-                  static_cast<size_t>(width) * 4);
-    }
-  } else {
-    // Skia's N32 software surface is BGRA on little-endian Linux; the contract
-    // wants RGBA8.  Swap R/B and keep A.
-    for (size_t y = 0; y < height; ++y) {
-      const uint8_t* row_src = src + y * row_bytes;
-      uint8_t* row_dst = dst + y * width * 4;
-      for (uint32_t x = 0; x < width; ++x) {
-        row_dst[x * 4 + 0] = row_src[x * 4 + 2];
-        row_dst[x * 4 + 1] = row_src[x * 4 + 1];
-        row_dst[x * 4 + 2] = row_src[x * 4 + 0];
-        row_dst[x * 4 + 3] = row_src[x * 4 + 3];
-      }
+    const uint32_t width = static_cast<uint32_t>(row_bytes / 4);
+    state->rgba.resize(static_cast<size_t>(width) * height * 4);
+    skyline::embedder::CopyFrame(allocation, row_bytes, width, height,
+                                 state->rgba.data(), state->rgba_surface);
+    state->width = width;
+    state->height = static_cast<uint32_t>(height);
+    ++state->captured_frames;
+    if (state->captured_frames >= state->target_frames) {
+      state->presented = true;
+      state->stop_capturing = true;
     }
   }
-
-  state->width = width;
-  state->height = static_cast<uint32_t>(height);
-  state->row_bytes = row_bytes;
-  ++state->captured_frames;
-  if (state->captured_frames >= state->target_frames) {
-    state->presented = true;
-    state->stop_capturing = true;
-  }
-  state->cv.notify_all();
+  state->loop.Wake();
   return true;
+}
+
+bool Presented(HostState* state) {
+  std::lock_guard<std::mutex> lock(state->mutex);
+  return state->presented;
 }
 
 bool ParseInt(const char* value, int* out) {
@@ -527,34 +463,6 @@ bool ParseOptions(int argc, char** argv, Options* opts) {
   return true;
 }
 
-std::string JoinPath(const std::string& dir, const std::string& name) {
-  if (!dir.empty() && dir.back() == '/') return dir + name;
-  return dir + "/" + name;
-}
-
-bool FileExists(const std::string& path) {
-  std::FILE* f = std::fopen(path.c_str(), "rb");
-  if (f == nullptr) return false;
-  std::fclose(f);
-  return true;
-}
-
-// Returns the batons that are currently queued.
-std::deque<intptr_t> TakeBatons(HostState* state) {
-  std::lock_guard<std::mutex> lock(state->mutex);
-  std::deque<intptr_t> result;
-  result.swap(state->batons);
-  return result;
-}
-
-void ReturnBatons(FlutterEngine engine, const std::deque<intptr_t>& batons) {
-  for (intptr_t baton : batons) {
-    const uint64_t now = FlutterEngineGetCurrentTime();
-    const uint64_t target = now + 16666667;  // 60 Hz hint.
-    (void)FlutterEngineOnVsync(engine, baton, now, target);
-  }
-}
-
 void OnKeyEvent(bool handled, void* /*user_data*/) {
   std::fprintf(stderr, "[host] key event handled=%d\n", handled ? 1 : 0);
 }
@@ -567,29 +475,20 @@ int main(int argc, char** argv) {
 
   const std::string kernel = JoinPath(opts.assets, "kernel_blob.bin");
   const bool has_kernel = FileExists(kernel);
-  const bool force_aot = !opts.aot_library.empty();
-  bool use_aot = force_aot || !has_kernel;
-  std::string aot_library = opts.aot_library;
-  if (aot_library.empty()) {
-    const std::string candidates[] = {
-        JoinPath(opts.assets, "libapp.so"),
-        JoinPath(opts.assets, "../libapp.so"),
-    };
-    for (const std::string& candidate : candidates) {
-      if (FileExists(candidate)) {
-        aot_library = candidate;
-        break;
-      }
-    }
-  }
-  if (!has_kernel && (!use_aot || aot_library.empty() ||
-                      !FileExists(aot_library))) {
+  const bool use_aot = !opts.aot_library.empty() || !has_kernel;
+  const std::string aot_library =
+      !opts.aot_library.empty()
+          ? opts.aot_library
+          : skyline::embedder::FindAotLibrary(JoinPath(opts.assets, ".."),
+                                              opts.assets);
+  const bool has_aot = !aot_library.empty() && FileExists(aot_library);
+  if (!has_kernel && !has_aot) {
     std::fprintf(stderr,
                  "missing kernel blob and AOT snapshot: %s / libapp.so\n",
                  kernel.c_str());
     return kExitBadArguments;
   }
-  if (use_aot && (aot_library.empty() || !FileExists(aot_library))) {
+  if (use_aot && !has_aot) {
     std::fprintf(stderr, "missing AOT snapshot: %s\n", aot_library.c_str());
     return kExitBadArguments;
   }
@@ -599,376 +498,236 @@ int main(int argc, char** argv) {
   }
 
   HostState state;
-  state.pixel_format = opts.pixel_format;
+  state.rgba_surface = opts.pixel_format == "rgba";
   state.target_frames =
       opts.frames > 0 ? static_cast<uint32_t>(opts.frames) : UINT32_MAX;
 
-  FlutterRendererConfig renderer = {};
-  renderer.type = kSoftware;
-  renderer.software.struct_size = sizeof(FlutterSoftwareRendererConfig);
-  renderer.software.surface_present_callback = &OnSurfacePresent;
-
-  FlutterProjectArgs args = {};
-  args.struct_size = sizeof(FlutterProjectArgs);
-  args.assets_path = opts.assets.c_str();
-  args.icu_data_path = opts.icu.c_str();
-  FlutterEngineAOTData aot_data = nullptr;
-  if (use_aot && !aot_library.empty() && FileExists(aot_library)) {
-    FlutterEngineAOTDataSource source = {};
-    source.type = kFlutterEngineAOTDataSourceTypeElfPath;
-    source.elf_path = aot_library.c_str();
-    if (FlutterEngineCreateAOTData(&source, &aot_data) != kSuccess ||
-        aot_data == nullptr) {
-      std::fprintf(stderr, "cannot load AOT snapshot: %s\n",
-                   aot_library.c_str());
-      return kExitEngineRunFailed;
-    }
-    args.aot_data = aot_data;
-    std::fprintf(stderr, "[host] AOT snapshot: %s\n", aot_library.c_str());
-  }
-  args.vsync_callback = &OnVsync;
-  args.log_message_callback = &OnLogMessage;
-  args.log_tag = "skyline_host";
-  args.shutdown_dart_vm_when_done = true;
+  skyline::embedder::EngineConfig config;
+  config.assets = opts.assets;
+  config.icu = opts.icu;
+  if (use_aot) config.aot_library = aot_library;
+  config.entrypoint = opts.entrypoint;
+  config.entrypoint_args = opts.entrypoint_args;
+  config.program = "skyline_engine_host";
+  config.present = &OnSurfacePresent;
+  config.vsync = &OnVsync;
   // D10: capture the framework semantics tree (only produced once the runtime
   // enables semantics through the accessibility sink below).
-  args.update_semantics_callback2 = &OnSemanticsUpdate;
-  if (!opts.entrypoint.empty()) {
-    args.custom_dart_entrypoint = opts.entrypoint.c_str();
-  }
-  std::vector<const char*> dart_entrypoint_argv;
-  dart_entrypoint_argv.reserve(opts.entrypoint_args.size());
-  for (const std::string& value : opts.entrypoint_args) {
-    dart_entrypoint_argv.push_back(value.c_str());
-  }
-  if (!dart_entrypoint_argv.empty()) {
-    args.dart_entrypoint_argc = static_cast<int>(dart_entrypoint_argv.size());
-    args.dart_entrypoint_argv = dart_entrypoint_argv.data();
-  }
-  const char* flutter_argv[] = {"skyline_engine_host", "--disable-vm-service"};
-  args.command_line_argc = 2;
-  args.command_line_argv = flutter_argv;
+  config.semantics = &OnSemanticsUpdate;
+  config.log_message = &OnLogMessage;
+  config.user_data = &state;
 
-  FlutterEngine engine = nullptr;
-  const FlutterEngineResult run_result =
-      FlutterEngineRun(FLUTTER_ENGINE_VERSION, &renderer, &args, &state, &engine);
-  if (run_result != kSuccess || engine == nullptr) {
-    std::fprintf(stderr, "FlutterEngineRun failed: %d\n",
-                 static_cast<int>(run_result));
+  std::unique_ptr<skyline::embedder::RunningEngine> engine;
+  try {
+    engine = std::make_unique<skyline::embedder::RunningEngine>(config);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "%s\n", error.what());
     return kExitEngineRunFailed;
+  }
+  if (use_aot) {
+    std::fprintf(stderr, "[host] AOT snapshot: %s\n", aot_library.c_str());
   }
   // The embedded runtime (linked into libflutter_engine.so) may have queued an
   // accessibility state before the host existed.  Install the sink now; its
   // setter replays semantics-enabled state, and the ops below drive features.
-  g_accessibility_host = &state;
+  skyline::embedder::SetAccessibilityTarget(&state.loop);
   if (SkylineSetAccessibilitySink != nullptr) {
-    SkylineSetAccessibilitySink(&OnAccessibilitySink);
+    SkylineSetAccessibilitySink(&skyline::embedder::RouteAccessibility);
   }
-  auto collect_aot = [&aot_data]() {
-    if (aot_data != nullptr) {
-      FlutterEngineCollectAOTData(aot_data);
-      aot_data = nullptr;
+  // Shuts the engine down on the platform (creation) thread.
+  auto finish = [&](int code) {
+    skyline::embedder::ClearAccessibilityTarget(&state.loop);
+    const FlutterEngineResult result = engine->Shutdown();
+    if (code == kExitOk && result != kSuccess) {
+      std::fprintf(stderr, "FlutterEngineShutdown failed: %d\n",
+                   static_cast<int>(result));
     }
+    return code;
   };
 
-  FlutterWindowMetricsEvent metrics = {};
-  metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
-  metrics.width = static_cast<size_t>(std::ceil(opts.width * opts.dpr));
-  metrics.height = static_cast<size_t>(std::ceil(opts.height * opts.dpr));
-  metrics.pixel_ratio = opts.dpr;
-  metrics.view_id = 0;  // kFlutterImplicitViewId
   const FlutterEngineResult metrics_result =
-      FlutterEngineSendWindowMetricsEvent(engine, &metrics);
+      engine->SendMetrics(opts.width, opts.height, opts.dpr);
   if (metrics_result != kSuccess) {
     std::fprintf(stderr, "FlutterEngineSendWindowMetricsEvent failed: %d\n",
                  static_cast<int>(metrics_result));
-    FlutterEngineShutdown(engine);
-    collect_aot();
-    return kExitEngineRunFailed;
+    return finish(kExitEngineRunFailed);
   }
 
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(opts.timeout_ms);
-  const uint64_t pointer_start_ns = FlutterEngineGetCurrentTime();
+  const uint64_t script_start_ns = FlutterEngineGetCurrentTime();
+  auto due = [script_start_ns](int at_ms) {
+    return FlutterEngineGetCurrentTime() >=
+           script_start_ns + static_cast<uint64_t>(at_ms) * 1000000ull;
+  };
   size_t next_pointer = 0;
   size_t next_key = 0;
   size_t next_resize = 0;
   bool pointer_error_reported = false;
-  bool got_frame = false;
-  {
-    std::unique_lock<std::mutex> lock(state.mutex);
-    while (!state.presented) {
-      // Dispatch any pointer events whose script time has elapsed.  Keep the
-      // lock released while calling into the engine: the present callback may
-      // take the same mutex.
-      while (next_pointer < opts.pointer_events.size()) {
-        const auto& scripted = opts.pointer_events[next_pointer];
-        const uint64_t now_ns = FlutterEngineGetCurrentTime();
-        const uint64_t due_ns =
-            pointer_start_ns + static_cast<uint64_t>(scripted.at_ms) * 1000000ull;
-        if (now_ns < due_ns) break;
-        FlutterPointerEvent event = {};
-        event.struct_size = sizeof(event);
-        event.phase = scripted.phase;
-        event.timestamp = now_ns;
-        event.x = scripted.x * opts.dpr;
-        event.y = scripted.y * opts.dpr;
-        event.device = scripted.device;
-        event.device_kind = scripted.mouse ? kFlutterPointerDeviceKindMouse
-                                           : kFlutterPointerDeviceKindTouch;
-        event.buttons =
-            scripted.mouse &&
-                    (scripted.phase == kDown || scripted.phase == kMove)
-                ? kFlutterPointerButtonMousePrimary
-                : 0;
-        event.signal_kind = scripted.signal_kind;
-        event.scroll_delta_x = scripted.scroll_dx;
-        event.scroll_delta_y = scripted.scroll_dy;
-        const char* view_id_env = std::getenv("SKYLINE_POINTER_VIEW_ID");
-        event.view_id = view_id_env != nullptr ? std::atoi(view_id_env) : 0;
-        lock.unlock();
-        const FlutterEngineResult pointer_result =
-            FlutterEngineSendPointerEvent(engine, &event, 1);
-        lock.lock();
-        if (pointer_result != kSuccess && !pointer_error_reported) {
-          std::fprintf(stderr, "FlutterEngineSendPointerEvent failed: %d\n",
-                       static_cast<int>(pointer_result));
-          pointer_error_reported = true;
-        }
-        ++next_pointer;
+  while (!Presented(&state)) {
+    // Dispatch the scripted events whose time has come.  This thread ran
+    // FlutterEngineRun, so it may call the input embedder APIs directly.
+    while (next_pointer < opts.pointer_events.size() &&
+           due(opts.pointer_events[next_pointer].at_ms)) {
+      const auto& scripted = opts.pointer_events[next_pointer];
+      FlutterPointerEvent event = {};
+      event.struct_size = sizeof(event);
+      event.phase = scripted.phase;
+      event.timestamp = FlutterEngineGetCurrentTime();
+      event.x = scripted.x * opts.dpr;
+      event.y = scripted.y * opts.dpr;
+      event.device = scripted.device;
+      event.device_kind = scripted.mouse ? kFlutterPointerDeviceKindMouse
+                                         : kFlutterPointerDeviceKindTouch;
+      event.buttons =
+          scripted.mouse && (scripted.phase == kDown || scripted.phase == kMove)
+              ? kFlutterPointerButtonMousePrimary
+              : 0;
+      event.signal_kind = scripted.signal_kind;
+      event.scroll_delta_x = scripted.scroll_dx;
+      event.scroll_delta_y = scripted.scroll_dy;
+      const char* view_id_env = std::getenv("SKYLINE_POINTER_VIEW_ID");
+      event.view_id = view_id_env != nullptr ? std::atoi(view_id_env) : 0;
+      const FlutterEngineResult pointer_result =
+          FlutterEngineSendPointerEvent(engine->get(), &event, 1);
+      if (pointer_result != kSuccess && !pointer_error_reported) {
+        std::fprintf(stderr, "FlutterEngineSendPointerEvent failed: %d\n",
+                     static_cast<int>(pointer_result));
+        pointer_error_reported = true;
       }
-
-      // Dispatch scripted key events.  Both the embedder path
-      // (`FlutterEngineSendKeyEvent`, delivered to the Flutter framework) and
-      // the embedded runtime channel (synthetic appservice input) are fed.
-      while (next_key < opts.key_events.size()) {
-        const auto& scripted = opts.key_events[next_key];
-        const uint64_t now_ns = FlutterEngineGetCurrentTime();
-        const uint64_t due_ns =
-            pointer_start_ns + static_cast<uint64_t>(scripted.at_ms) * 1000000ull;
-        if (now_ns < due_ns) break;
-        FlutterKeyEvent event = {};
-        event.struct_size = sizeof(event);
-        event.timestamp = static_cast<double>(now_ns);
-        event.type = scripted.type;
-        event.physical = scripted.physical;
-        event.logical = scripted.logical;
-        event.character =
-            scripted.character.empty() ? nullptr : scripted.character.c_str();
-        event.synthesized = false;
-        event.device_type = kFlutterKeyEventDeviceTypeKeyboard;
-        lock.unlock();
-        const FlutterEngineResult key_result =
-            FlutterEngineSendKeyEvent(engine, &event, &OnKeyEvent, nullptr);
-        if (key_result != kSuccess) {
-          std::fprintf(stderr, "FlutterEngineSendKeyEvent failed: %d\n",
-                       static_cast<int>(key_result));
-        }
-        if (DispatchSkylineKeyEvent != nullptr) {
-          int32_t runtime_kind = 0;
-          if (scripted.type == kFlutterKeyEventTypeUp) {
-            runtime_kind = 1;
-          } else if (scripted.type == kFlutterKeyEventTypeRepeat) {
-            runtime_kind = 2;
-          }
-          // Deliver on the engine's UI thread: the sample appservice registers
-          // a 'skyline/keyboard' message handler that calls the embedded
-          // runtime export.  Calling it directly here would touch the Dart
-          // isolate from the wrong OS thread.
-          std::string payload = std::to_string(runtime_kind) + " " +
-                                std::to_string(scripted.logical) + " " +
-                                scripted.character;
-          FlutterPlatformMessage message = {};
-          message.struct_size = sizeof(message);
-          message.channel = "skyline/keyboard";
-          message.message =
-              reinterpret_cast<const uint8_t*>(payload.data());
-          message.message_size = payload.size();
-          message.response_handle = nullptr;
-          const FlutterEngineResult message_result =
-              FlutterEngineSendPlatformMessage(engine, &message);
-          if (message_result != kSuccess) {
-            std::fprintf(stderr,
-                         "FlutterEngineSendPlatformMessage failed: %d\n",
-                         static_cast<int>(message_result));
-          }
-        } else {
-          std::fprintf(stderr,
-                       "[host] DispatchSkylineKeyEvent unavailable\n");
-        }
-        lock.lock();
-        std::fprintf(stderr, "[host] key event sent: at=%d type=%d logical=%llu\n",
-                     scripted.at_ms, static_cast<int>(scripted.type),
-                     static_cast<unsigned long long>(scripted.logical));
-        ++next_key;
-      }
-
-      // Apply scripted viewport updates (resize path).
-      while (next_resize < opts.resize_events.size()) {
-        const auto& scripted = opts.resize_events[next_resize];
-        const uint64_t now_ns = FlutterEngineGetCurrentTime();
-        const uint64_t due_ns =
-            pointer_start_ns + static_cast<uint64_t>(scripted.at_ms) * 1000000ull;
-        if (now_ns < due_ns) break;
-        const double dpr = scripted.dpr > 0.0 ? scripted.dpr : opts.dpr;
-        FlutterWindowMetricsEvent metrics = {};
-        metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
-        metrics.width =
-            static_cast<size_t>(std::ceil(scripted.width * dpr));
-        metrics.height =
-            static_cast<size_t>(std::ceil(scripted.height * dpr));
-        metrics.pixel_ratio = dpr;
-        metrics.view_id = 0;
-        lock.unlock();
-        const FlutterEngineResult resize_result =
-            FlutterEngineSendWindowMetricsEvent(engine, &metrics);
-        lock.lock();
-        if (resize_result != kSuccess) {
-          std::fprintf(stderr,
-                       "FlutterEngineSendWindowMetricsEvent (resize) failed: %d\n",
-                       static_cast<int>(resize_result));
-        }
-        std::fprintf(stderr,
-                     "[host] resize: at=%d %gx%g dpr=%g -> %zux%zu\n",
-                     scripted.at_ms, scripted.width, scripted.height, dpr,
-                     metrics.width, metrics.height);
-        ++next_resize;
-      }
-
-      const bool pending_pointers = next_pointer < opts.pointer_events.size();
-      const bool pending_keys = next_key < opts.key_events.size();
-      const bool pending_resizes = next_resize < opts.resize_events.size();
-      const bool pending_events =
-          pending_pointers || pending_keys || pending_resizes;
-      const std::cv_status status =
-          pending_events
-              ? state.cv.wait_for(lock, std::chrono::milliseconds(5))
-              : state.cv.wait_until(lock, deadline);
-
-      // The engine posts semantic updates (and other platform callbacks) to the
-      // platform task runner.  This host does not run an fml message loop, so
-      // drain the pending tasks explicitly on every iteration.
-      lock.unlock();
-      __FlutterEngineFlushPendingTasksNow();
-      lock.lock();
-
-      // Apply accessibility requests on the platform thread (the embedder API
-      // requires the FlutterEngineRun thread).
-      std::deque<std::pair<int32_t, int32_t>> accessibility;
-      accessibility.swap(state.accessibility_requests);
-      if (!accessibility.empty()) {
-        lock.unlock();
-        for (const auto& request : accessibility) {
-          if (request.first == 0) {
-            const FlutterAccessibilityFeature features =
-                request.second != 0
-                    ? kFlutterAccessibilityFeatureAccessibleNavigation
-                    : static_cast<FlutterAccessibilityFeature>(0);
-            const FlutterEngineResult result =
-                FlutterEngineUpdateAccessibilityFeatures(engine, features);
-            std::fprintf(stderr,
-                         "[host] accessibility features: %d (result=%d)\n",
-                         static_cast<int>(features),
-                         static_cast<int>(result));
-          } else {
-            const FlutterEngineResult result =
-                FlutterEngineUpdateSemanticsEnabled(engine,
-                                                    request.second != 0);
-            std::fprintf(stderr,
-                         "[host] semantics enabled: %d (result=%d)\n",
-                         request.second != 0 ? 1 : 0,
-                         static_cast<int>(result));
-          }
-        }
-        lock.lock();
-      }
-
-      if (!state.presented && std::chrono::steady_clock::now() >= deadline) {
-        break;
-      }
-      if (!pending_events && status == std::cv_status::timeout &&
-          !state.presented) {
-        break;
-      }
-      if (!state.batons.empty()) {
-        std::deque<intptr_t> batons;
-        batons.swap(state.batons);
-        lock.unlock();
-        ReturnBatons(engine, batons);
-        lock.lock();
-      }
+      ++next_pointer;
     }
+
+    // Scripted key events feed both the embedder path
+    // (`FlutterEngineSendKeyEvent`, delivered to the Flutter framework) and
+    // the embedded runtime channel (synthetic appservice input).
+    while (next_key < opts.key_events.size() &&
+           due(opts.key_events[next_key].at_ms)) {
+      const auto& scripted = opts.key_events[next_key];
+      FlutterKeyEvent event = {};
+      event.struct_size = sizeof(event);
+      event.timestamp = static_cast<double>(FlutterEngineGetCurrentTime());
+      event.type = scripted.type;
+      event.physical = scripted.physical;
+      event.logical = scripted.logical;
+      event.character =
+          scripted.character.empty() ? nullptr : scripted.character.c_str();
+      event.synthesized = false;
+      event.device_type = kFlutterKeyEventDeviceTypeKeyboard;
+      const FlutterEngineResult key_result =
+          FlutterEngineSendKeyEvent(engine->get(), &event, &OnKeyEvent, nullptr);
+      if (key_result != kSuccess) {
+        std::fprintf(stderr, "FlutterEngineSendKeyEvent failed: %d\n",
+                     static_cast<int>(key_result));
+      }
+      if (DispatchSkylineKeyEvent != nullptr) {
+        int32_t runtime_kind = 0;
+        if (scripted.type == kFlutterKeyEventTypeUp) {
+          runtime_kind = 1;
+        } else if (scripted.type == kFlutterKeyEventTypeRepeat) {
+          runtime_kind = 2;
+        }
+        // Deliver on the engine's UI thread: the sample appservice registers
+        // a 'skyline/keyboard' message handler that calls the embedded
+        // runtime export.  Calling it directly here would touch the Dart
+        // isolate from the wrong OS thread.
+        std::string payload = std::to_string(runtime_kind) + " " +
+                              std::to_string(scripted.logical) + " " +
+                              scripted.character;
+        FlutterPlatformMessage message = {};
+        message.struct_size = sizeof(message);
+        message.channel = "skyline/keyboard";
+        message.message = reinterpret_cast<const uint8_t*>(payload.data());
+        message.message_size = payload.size();
+        message.response_handle = nullptr;
+        const FlutterEngineResult message_result =
+            FlutterEngineSendPlatformMessage(engine->get(), &message);
+        if (message_result != kSuccess) {
+          std::fprintf(stderr, "FlutterEngineSendPlatformMessage failed: %d\n",
+                       static_cast<int>(message_result));
+        }
+      } else {
+        std::fprintf(stderr, "[host] DispatchSkylineKeyEvent unavailable\n");
+      }
+      std::fprintf(stderr, "[host] key event sent: at=%d type=%d logical=%llu\n",
+                   scripted.at_ms, static_cast<int>(scripted.type),
+                   static_cast<unsigned long long>(scripted.logical));
+      ++next_key;
+    }
+
+    // Scripted viewport updates (resize path).
+    while (next_resize < opts.resize_events.size() &&
+           due(opts.resize_events[next_resize].at_ms)) {
+      const auto& scripted = opts.resize_events[next_resize];
+      const double dpr = scripted.dpr > 0.0 ? scripted.dpr : opts.dpr;
+      const FlutterEngineResult resize_result =
+          engine->SendMetrics(scripted.width, scripted.height, dpr);
+      if (resize_result != kSuccess) {
+        std::fprintf(stderr,
+                     "FlutterEngineSendWindowMetricsEvent (resize) failed: %d\n",
+                     static_cast<int>(resize_result));
+      }
+      std::fprintf(stderr, "[host] resize: at=%d %gx%g dpr=%g -> %zux%zu\n",
+                   scripted.at_ms, scripted.width, scripted.height, dpr,
+                   skyline::embedder::PhysicalPixels(scripted.width, dpr),
+                   skyline::embedder::PhysicalPixels(scripted.height, dpr));
+      ++next_resize;
+    }
+
+    const bool pending_events = next_pointer < opts.pointer_events.size() ||
+                                next_key < opts.key_events.size() ||
+                                next_resize < opts.resize_events.size();
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) break;
+    state.loop.RunOnce(
+        engine->get(),
+        pending_events ? std::chrono::milliseconds(5)
+                       : std::chrono::duration_cast<std::chrono::milliseconds>(
+                             deadline - now));
+  }
+
+  bool got_frame = false;
+  uint32_t present_count = 0;
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
     got_frame = state.captured_frames > 0;
+    present_count = state.present_count;
     state.stop_capturing = true;
   }
 
   std::fprintf(stderr,
                "host wait finished: got_frame=%d vsync=%u present=%u batons=%zu\n",
-               got_frame ? 1 : 0, state.vsync_count, state.present_count,
-               state.batons.size());
+               got_frame ? 1 : 0, state.loop.vsync_count(), present_count,
+               state.loop.pending_batons());
   std::fflush(stderr);
-
-  if (got_frame) {
-    // Return outstanding batons so shutdown does not leak frame requests.
-    const auto drain_until =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
-    while (std::chrono::steady_clock::now() < drain_until) {
-      {
-        std::unique_lock<std::mutex> lock(state.mutex);
-        if (!state.batons.empty()) {
-          std::deque<intptr_t> batons;
-          batons.swap(state.batons);
-          lock.unlock();
-          ReturnBatons(engine, batons);
-          continue;
-        }
-        state.cv.wait_for(lock, std::chrono::milliseconds(20));
-      }
-      std::deque<intptr_t> pending = TakeBatons(&state);
-      if (pending.empty()) {
-        // Nothing pending; small grace period before shutdown.
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      } else {
-        ReturnBatons(engine, pending);
-      }
-    }
-    // Drain one final time in case a baton arrived during the grace period.
-    ReturnBatons(engine, TakeBatons(&state));
-  }
 
   if (!got_frame) {
     std::fprintf(stderr,
                  "timeout after %d ms: no software frame (vsync=%u present=%u)\n",
-                 opts.timeout_ms, state.vsync_count, state.present_count);
-    FlutterEngineShutdown(engine);
-    collect_aot();
-    return kExitTimeout;
+                 opts.timeout_ms, state.loop.vsync_count(), present_count);
+    return finish(kExitTimeout);
   }
+  // Return outstanding batons so shutdown does not leak frame requests.
+  state.loop.DrainVsync(engine->get(), std::chrono::milliseconds(150));
 
   const uint32_t width = state.width;
   const uint32_t height = state.height;
   const size_t frame_size = static_cast<size_t>(width) * height * 4;
   if (frame_size == 0 || state.rgba.size() != frame_size) {
     std::fprintf(stderr, "invalid captured frame\n");
-    FlutterEngineShutdown(engine);
-    collect_aot();
-    return kExitSharedMemory;
+    return finish(kExitSharedMemory);
   }
 
   skyline::SharedFrameWriter writer(opts.shm_key);
   if (!writer.Valid()) {
     std::fprintf(stderr, "cannot open shared memory for key %s\n",
                  opts.shm_key.c_str());
-    FlutterEngineShutdown(engine);
-    collect_aot();
-    return kExitSharedMemory;
+    return finish(kExitSharedMemory);
   }
   std::string error;
   if (!writer.WriteFrame(1, state.rgba.data(), frame_size, &error)) {
     std::fprintf(stderr, "cannot write shared memory: %s\n", error.c_str());
-    FlutterEngineShutdown(engine);
-    collect_aot();
-    return kExitSharedMemory;
+    return finish(kExitSharedMemory);
   }
 
   const uint32_t first = state.rgba[0];
@@ -981,8 +740,8 @@ int main(int argc, char** argv) {
       "\"vsyncCount\":%u,\"presentCount\":%u,\"shmPath\":\"%s\","
       "\"shmDataSize\":%zu}\n",
       width, height, frame_size, opts.pixel_format.c_str(), first, second, third,
-      fourth, state.vsync_count, state.present_count, writer.path().c_str(),
-      static_cast<size_t>(8 + frame_size * 4));
+      fourth, state.loop.vsync_count(), present_count, writer.path().c_str(),
+      writer.data_size());
   std::fflush(stdout);
 
   if (opts.no_shutdown) {
@@ -990,15 +749,7 @@ int main(int argc, char** argv) {
     std::_Exit(kExitOk);
   }
 
-  // FlutterEngineShutdown must run on the platform (creation) thread.  The
-  // appservice kernel keeps timers/async work alive and can make shutdown slow;
-  // use --no-shutdown in smoke tests that only need the frame.
-  g_accessibility_host = nullptr;
-  const FlutterEngineResult shutdown_result = FlutterEngineShutdown(engine);
-  if (shutdown_result != kSuccess) {
-    std::fprintf(stderr, "FlutterEngineShutdown failed: %d\n",
-                 static_cast<int>(shutdown_result));
-  }
-  collect_aot();
-  return kExitOk;
+  // The appservice kernel keeps timers/async work alive and can make shutdown
+  // slow; use --no-shutdown in smoke tests that only need the frame.
+  return finish(kExitOk);
 }

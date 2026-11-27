@@ -67,7 +67,10 @@ target_include_directories(skyline_node PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 if(EXISTS "${SKYLINE_ENGINE_LIB}" AND EXISTS "${SKYLINE_ENGINE_HEADER}")
-  target_sources(skyline_node PRIVATE host/flutter_window_backend.cc)
+  target_sources(skyline_node PRIVATE
+    host/flutter_window_backend.cc
+    host/embedder/embedder.cc
+  )
   target_include_directories(skyline_node PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/host"
     "${SKYLINE_ENGINE_ROOT}"
@@ -131,6 +134,7 @@ else()
     "${NODE_INCLUDE_DIR}"
     "${SKYLINE_SHARED_MEMORY_DIR}/third_party/node-addon-api"
     "${SKYLINE_SHARED_MEMORY_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
   )
   target_link_libraries(shared_memory PRIVATE Threads::Threads)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -235,6 +239,7 @@ if(SKYLINE_BUILD_HOST)
     add_executable(skyline_host
       host/main.cc
       host/frame_writer.cc
+      host/embedder/embedder.cc
     )
     target_include_directories(skyline_host PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}/host"

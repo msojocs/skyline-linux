@@ -122,6 +122,10 @@ descriptor（全零即可）。
 外层头只属于 Linux 文件格式，用于按 key 打开时获知长度；公共 API 不得暴露它——
 `getMemory` / `copyMemoryToBuffer` 的起点始终是数据区（即帧头）。
 
+下面的路径、头部长度、版本号与帧预算在 `native/include/skyline/frame_protocol.h`
+中只定义一次，`sharedMemory.node`、`skyline.node` 的窗口后端与 `skyline_host` 都
+引用它。
+
 ### 4.1 外层头（Linux 文件格式，16 字节）
 
 | 偏移 | 类型 | 含义 |

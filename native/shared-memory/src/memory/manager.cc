@@ -135,7 +135,7 @@ namespace SharedMemory {
         
         if (is_wine) {
             // Wine环境下使用/dev/shm目录
-            file_path = "/dev/shm/skyline_" + key + ".dat";
+            file_path = SKYLINE_SHM_DIR "/" SKYLINE_SHM_NAME_PREFIX + key + SKYLINE_SHM_NAME_SUFFIX;
             logger->debug("Using Wine shared memory path: {}", file_path);
             
             // 确保/dev/shm目录存在
@@ -158,7 +158,7 @@ namespace SharedMemory {
             
             // 创建文件路径
             std::string shared_memory_dir = std::string(user_path) + "\\SharedMemory";
-            file_path = shared_memory_dir + "\\skyline_" + key + ".dat";
+            file_path = shared_memory_dir + "\\" SKYLINE_SHM_NAME_PREFIX + key + SKYLINE_SHM_NAME_SUFFIX;
             
             // 确保目录存在
             create_directory(shared_memory_dir);
@@ -234,7 +234,7 @@ namespace SharedMemory {
             if (create) {
                 SharedMemoryHeader* header = static_cast<SharedMemoryHeader*>(address_);
                 header->size = size;
-                header->version = 1;
+                header->version = SKYLINE_SHM_VERSION;
                 logger->debug("Initialized shared memory header: size={}, version={}", size, header->version);
             }
             else {
@@ -300,7 +300,7 @@ namespace SharedMemory {
 #else
         // Linux实现
         // 创建共享内存名称
-        std::string shm_name = "/skyline_" + key + ".dat";
+        std::string shm_name = "/" SKYLINE_SHM_NAME_PREFIX + key + SKYLINE_SHM_NAME_SUFFIX;
         
         try {
             int flags = O_RDWR;
@@ -376,7 +376,7 @@ namespace SharedMemory {
             if (create) {
                 SharedMemoryHeader* header = static_cast<SharedMemoryHeader*>(address_);
                 header->size = size;
-                header->version = 1;
+                header->version = SKYLINE_SHM_VERSION;
                 logger->debug("Initialized shared memory header: size=%zu, version=%d", size, header->version);
             }
             

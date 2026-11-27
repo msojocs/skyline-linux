@@ -6,6 +6,8 @@
 #include <string>
 #include <cstddef>
 
+#include "skyline/frame_protocol.h"
+
 // 平台特定的头文件
 #ifdef _WIN32
 #include <windows.h>
@@ -26,11 +28,13 @@ namespace SharedMemory {
     // the shared-memory directory or create ambiguous names.
     bool validate_key(const std::string& key);
 
-    // 共享内存头部结构
+    // 共享内存头部结构（skyline/frame_protocol.h）
     struct SharedMemoryHeader {
         size_t size;          // 用户数据大小
         int version;          // 版本号
     };
+    static_assert(sizeof(SharedMemoryHeader) == SKYLINE_SHM_HEADER_BYTES,
+                  "shared-memory header must match the frame protocol");
 
     // 共享内存管理器类
     class SharedMemoryManager : public std::enable_shared_from_this<SharedMemoryManager> {

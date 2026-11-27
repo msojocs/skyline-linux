@@ -35,6 +35,9 @@
 - 诊断：`window <id> ready` / `first frame WxH` / `destroy window` /
   `window <id> stopped` 输出到 stderr；宽度/高度/dpr 非法或 bundle 缺 kernel
   时 `createWindow` 同步抛错；引擎启动有 15 s 超时。
+- 引擎启动与关闭、platform 线程循环（vsync baton、platform task、无障碍请求、
+  `FlushPendingTasks`）、BGRA→RGBA 拷贝、帧头发布、语义树日志与 AOT 资源查找在
+  `native/host/embedder/` 中实现，独立 `skyline_host` 共用同一份代码。
 - CMake 会自动设置 `rpath` 指向 `native/engine/out/linux-x64-debug`；引擎缺失时
   仍生成 StubWindowBackend 版本。
 - `createWindow` 运行 bundle 的默认 `main`（官方契约没有 entrypoint 参数）；需要

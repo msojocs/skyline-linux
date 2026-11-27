@@ -7,7 +7,7 @@
 namespace skyline {
 
 // Writes one frame into the Linux shared-memory file format documented in
-// docs/contract.md section 4:
+// docs/contract.md section 4 and skyline/frame_protocol.h:
 //
 //   outer header (16 bytes): u64 data_size | i32 version(1) | 4 bytes padding
 //   data region:             u32 frame_id | u32 frame_size | RGBA8 pixels
@@ -23,6 +23,9 @@ class SharedFrameWriter {
 
   bool Valid() const { return fd_ >= 0; }
   const std::string& path() const { return path_; }
+  // Size of the data area (frame header plus the frame budget); 0 before the
+  // first frame.
+  size_t data_size() const { return data_size_; }
 
   // Grows the mapping on the first frame (official glue budgets four frames),
   // zeroes newly allocated bytes, then publishes frame_size followed by frame_id.

@@ -6,17 +6,15 @@
 #include <sys/statvfs.h>
 #include <unistd.h>
 
-#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <limits>
 
+#include "embedder/embedder.hh"
+#include "skyline/frame_protocol.h"
+
 namespace skyline {
 namespace {
-
-constexpr size_t kOuterHeaderBytes = 16;
-constexpr size_t kFrameHeaderBytes = 8;
-constexpr uint32_t kFormatVersion = 1;
 
 bool IsValidKey(const std::string& key) {
   if (key.empty() || key.size() > 200) return false;
@@ -49,7 +47,8 @@ std::string ErrnoMessage(const char* what) {
 
 SharedFrameWriter::SharedFrameWriter(std::string key) : key_(std::move(key)) {
   if (!IsValidKey(key_)) return;
-  path_ = "/dev/shm/skyline_" + key_ + ".dat";
+  path_ = std::string(SKYLINE_SHM_DIR "/" SKYLINE_SHM_NAME_PREFIX) + key_ +
+          SKYLINE_SHM_NAME_SUFFIX;
   fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
 }
 
@@ -75,15 +74,18 @@ bool SharedFrameWriter::WriteFrame(uint32_t frame_id, const void* pixels,
     if (error) *error = "empty frame";
     return false;
   }
-  if (frame_size > (std::numeric_limits<size_t>::max() - 8) / 4) {
+  if (frame_size > (std::numeric_limits<size_t>::max() -
+                    SKYLINE_FRAME_HEADER_BYTES) /
+                       SKYLINE_FRAME_BUDGET) {
     if (error) *error = "frame too large";
     return false;
   }
 
   // Official DevTools budgets four RGBA frames plus the 8-byte frame header.
   // The data region and outer header sizes come from contract 4.3.
-  const size_t required_data = 8 + frame_size * 4;
-  const size_t required_file = kOuterHeaderBytes + required_data;
+  const size_t required_data =
+      SKYLINE_FRAME_HEADER_BYTES + frame_size * SKYLINE_FRAME_BUDGET;
+  const size_t required_file = SKYLINE_SHM_HEADER_BYTES + required_data;
   if (mapping_ == nullptr || required_file > file_size_) {
     struct statvfs vfs {};
     if (::statvfs("/dev/shm", &vfs) == 0) {
@@ -117,16 +119,13 @@ bool SharedFrameWriter::WriteFrame(uint32_t frame_id, const void* pixels,
     file_size_ = required_file;
     data_size_ = required_data;
     PutU64(mapping_, static_cast<uint64_t>(data_size_));
-    PutU32(mapping_ + 8, kFormatVersion);
+    PutU32(mapping_ + 8, SKYLINE_SHM_VERSION);
     // bytes 12..15 stay zero (alignment padding).
   }
 
-  uint8_t* data = mapping_ + kOuterHeaderBytes;
-  std::memcpy(data + kFrameHeaderBytes, pixels, frame_size);
-  // Publish size before id so a concurrent reader never sees an id with a stale size.
-  PutU32(data + 4, static_cast<uint32_t>(frame_size));
-  std::atomic_thread_fence(std::memory_order_release);
-  PutU32(data, frame_id);
+  uint8_t* data = mapping_ + SKYLINE_SHM_HEADER_BYTES;
+  std::memcpy(data + SKYLINE_FRAME_HEADER_BYTES, pixels, frame_size);
+  embedder::WriteFrameHeader(data, frame_id, static_cast<uint32_t>(frame_size));
   if (::msync(mapping_, file_size_, MS_SYNC) != 0) {
     if (error) *error = ErrnoMessage("msync");
     return false;

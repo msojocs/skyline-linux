@@ -11,46 +11,32 @@
 
 #include <flutter_embedder.h>
 
-#include "skyline/runtime_api.h"
-
-#include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <deque>
-#include <map>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "embedder/embedder.hh"
+#include "skyline/frame_protocol.h"
+#include "skyline/runtime_api.h"
+
 namespace skyline {
 namespace {
 
-constexpr size_t kFrameHeaderBytes = 8;
-constexpr uint64_t kVsyncPeriodNanos = 16666667;  // 60 Hz hint.
+using embedder::FileExists;
+using embedder::JoinPath;
+
 constexpr int32_t kTouchDevice = 1;
 constexpr int32_t kMouseDevice = 2;
-
-bool FileExists(const std::string& path) {
-  std::FILE* file = std::fopen(path.c_str(), "rb");
-  if (file == nullptr) return false;
-  std::fclose(file);
-  return true;
-}
-
-std::string JoinPath(const std::string& dir, const std::string& name) {
-  if (dir.empty()) return name;
-  if (dir.back() == '/') return dir + name;
-  return dir + "/" + name;
-}
 
 std::string ResolveAssets(const std::string& bundle_path) {
   if (const char* override_path = std::getenv("SKYLINE_ASSETS")) {
@@ -69,22 +55,13 @@ std::string ResolveAot(const std::string& bundle_path,
       return override_path;
     }
   }
-  const std::string candidates[] = {
-      JoinPath(bundle_path, "libapp.so"),
-      JoinPath(assets, "libapp.so"),
-      JoinPath(assets, "../libapp.so"),
-  };
-  for (const std::string& candidate : candidates) {
-    if (FileExists(candidate)) return candidate;
-  }
-  return {};
+  return embedder::FindAotLibrary(bundle_path, assets);
 }
 
-std::string ResolveIcu(const std::string& bundle_path) {  const std::string candidates[] = {
-      JoinPath(bundle_path, "icudtl.dat"),
-      JoinPath(JoinPath(bundle_path, "flutter_assets"), "icudtl.dat"),
-  };
-  for (const std::string& candidate : candidates) {
+std::string ResolveIcu(const std::string& bundle_path) {
+  for (const std::string& candidate :
+       {JoinPath(bundle_path, "icudtl.dat"),
+        JoinPath(JoinPath(bundle_path, "flutter_assets"), "icudtl.dat")}) {
     if (FileExists(candidate)) return candidate;
   }
   if (const char* override_path = std::getenv("SKYLINE_ICU")) {
@@ -98,43 +75,20 @@ std::string ResolveIcu(const std::string& bundle_path) {  const std::string cand
   return {};
 }
 
-void PutU32(uint8_t* out, uint32_t value) {
-  out[0] = static_cast<uint8_t>(value);
-  out[1] = static_cast<uint8_t>(value >> 8);
-  out[2] = static_cast<uint8_t>(value >> 16);
-  out[3] = static_cast<uint8_t>(value >> 24);
-}
-
 void LogMessage(const char* tag, const char* message, void* /*user_data*/) {
   std::fprintf(stderr, "[skyline-engine:%s] %s\n", tag != nullptr ? tag : "?",
                message != nullptr ? message : "");
 }
 
 void OnSemanticsUpdate(const FlutterSemanticsUpdate2* update, void* /*data*/) {
-  if (update == nullptr || std::getenv("SKYLINE_APP_SERVICE_DEBUG") == nullptr) {
-    return;
-  }
-  for (size_t i = 0; i < update->node_count; i++) {
-    const FlutterSemanticsNode2* node = update->nodes[i];
-    if (node == nullptr) continue;
-    const bool is_button =
-        node->flags2 != nullptr && node->flags2->is_button;
-    const bool is_text_field =
-        node->flags2 != nullptr && node->flags2->is_text_field;
-    const bool is_header = node->flags2 != nullptr && node->flags2->is_header;
-    std::fprintf(stderr,
-                 "[skyline-engine] semantics node: id=%d label=\"%s\" "
-                 "value=\"%s\" button=%d textField=%d header=%d children=%zu\n",
-                 node->id, node->label != nullptr ? node->label : "",
-                 node->value != nullptr ? node->value : "", is_button ? 1 : 0,
-                 is_text_field ? 1 : 0, is_header ? 1 : 0,
-                 node->child_count);
-  }
+  embedder::LogSemanticsUpdate("[skyline-engine]", update);
 }
 
 class WindowHost {
  public:
-  explicit WindowHost(CreateWindowArgs args) : args_(std::move(args)) {}
+  explicit WindowHost(CreateWindowArgs args)
+      : args_(std::move(args)),
+        loop_("[skyline-engine] window " + FormatId(args_.window_id)) {}
   ~WindowHost() { Stop(); }
 
   WindowHost(const WindowHost&) = delete;
@@ -168,17 +122,14 @@ class WindowHost {
       throw std::runtime_error(
           "icudtl.dat not found (set SKYLINE_ICU or install the engine stage)");
     }
-    physical_width_ = static_cast<uint32_t>(std::ceil(width * dpr));
-    physical_height_ = static_cast<uint32_t>(std::ceil(height * dpr));
     pixel_ratio_ = dpr;
 
     thread_ = std::thread([this]() { Run(); });
     std::unique_lock<std::mutex> lock(mutex_);
     if (!ready_cv_.wait_for(lock, std::chrono::seconds(15),
                             [this]() { return ready_; })) {
-      stop_ = true;
       lock.unlock();
-      cv_.notify_all();
+      loop_.Stop();
       if (thread_.joinable()) thread_.join();
       throw std::runtime_error("Flutter engine did not start in time");
     }
@@ -191,11 +142,7 @@ class WindowHost {
   }
 
   void Stop() {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      stop_ = true;
-    }
-    cv_.notify_all();
+    loop_.Stop();
     if (thread_.joinable()) thread_.join();
   }
 
@@ -217,17 +164,6 @@ class WindowHost {
     frame_buffer_size_ = size;
   }
 
-  // Queue a closure for the platform thread (the `Run` thread owns `engine_`
-  // and is the only thread allowed to call the input embedder APIs).
-  void PostPlatformTask(std::function<void()> task) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (stop_ || !ready_) return;
-      platform_tasks_.push_back(std::move(task));
-    }
-    cv_.notify_all();
-  }
-
   // DevTools simulator input.  The caller passes logical (CSS) pixels; Flutter
   // expects physical pixels for the implicit view.
   //
@@ -237,21 +173,16 @@ class WindowHost {
   // weak_ptr thread check.  Marshal the event onto the platform thread and
   // keep the mailbox FIFO so down/move/up stay ordered.
   void SendPointer(WindowBackend::PointerPhase phase, double x, double y) {
-    double dpr = 1.0;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      dpr = pixel_ratio_;
-    }
     FlutterPointerEvent event = {};
     event.struct_size = sizeof(event);
     event.timestamp = FlutterEngineGetCurrentTime();
-    event.x = x * dpr;
-    event.y = y * dpr;
+    event.x = x * pixel_ratio_;
+    event.y = y * pixel_ratio_;
     // Touch and mouse need distinct device ids: the engine keeps one pointer
     // state per device, so hovering with a "touch" device while it is down
     // trips the converter's !is_down checks.
     event.device = phase == WindowBackend::PointerPhase::kHover ? kMouseDevice
-                                                        : kTouchDevice;
+                                                               : kTouchDevice;
     event.view_id = 0;
     event.signal_kind = kFlutterPointerSignalKindNone;
     switch (phase) {
@@ -277,7 +208,6 @@ class WindowHost {
         break;
     }
     PostPlatformTask([this, event, phase]() {
-      if (engine_ == nullptr) return;
       // Synthetic touch sequences from the simulator can repeat a phase (for
       // example a click handler firing after a touch sequence).  The engine
       // aborts the whole process on a duplicate down / orphan move / up, so
@@ -294,22 +224,17 @@ class WindowHost {
           if (!touch_down_) return;
         }
       }
-      FlutterEngineSendPointerEvent(engine_, &event, 1);
+      FlutterEngineSendPointerEvent(engine_->get(), &event, 1);
     });
   }
 
   void SendWheel(double x, double y, double delta_x, double delta_y) {
-    double dpr = 1.0;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      dpr = pixel_ratio_;
-    }
     FlutterPointerEvent event = {};
     event.struct_size = sizeof(event);
     event.phase = kMove;
     event.timestamp = FlutterEngineGetCurrentTime();
-    event.x = x * dpr;
-    event.y = y * dpr;
+    event.x = x * pixel_ratio_;
+    event.y = y * pixel_ratio_;
     event.device = kMouseDevice;
     event.view_id = 0;
     event.device_kind = kFlutterPointerDeviceKindMouse;
@@ -317,111 +242,78 @@ class WindowHost {
     event.scroll_delta_x = delta_x;
     event.scroll_delta_y = delta_y;
     PostPlatformTask([this, event]() {
-      if (engine_ != nullptr) FlutterEngineSendPointerEvent(engine_, &event, 1);
+      FlutterEngineSendPointerEvent(engine_->get(), &event, 1);
     });
   }
 
  private:
-  void Run() {
-    FlutterRendererConfig renderer = {};
-    renderer.type = kSoftware;
-    renderer.software.struct_size = sizeof(FlutterSoftwareRendererConfig);
-    renderer.software.surface_present_callback = &WindowHost::OnPresent;
+  static std::string FormatId(double window_id) {
+    char text[32];
+    std::snprintf(text, sizeof(text), "%g", window_id);
+    return text;
+  }
 
-    FlutterProjectArgs project = {};
-    project.struct_size = sizeof(FlutterProjectArgs);
-    project.assets_path = assets_.c_str();
-    project.icu_data_path = icu_.c_str();
-    if (use_aot_) {
-      FlutterEngineAOTDataSource source = {};
-      source.type = kFlutterEngineAOTDataSourceTypeElfPath;
-      source.elf_path = aot_library_.c_str();
-      if (FlutterEngineCreateAOTData(&source, &aot_data_) != kSuccess ||
-          aot_data_ == nullptr) {
-        Fail("cannot load AOT snapshot: " + aot_library_);
-        return;
-      }
-      project.aot_data = aot_data_;
-      std::fprintf(stderr, "[skyline-engine] window %g: AOT snapshot %s\n",
-                   args_.window_id, aot_library_.c_str());
+  // Queues a closure for the platform thread (the `Run` thread owns the
+  // engine and is the only thread allowed to call the input embedder APIs).
+  void PostPlatformTask(std::function<void()> task) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!ready_ || !init_error_.empty()) return;
     }
-    project.vsync_callback = &WindowHost::OnVsync;
-    project.log_message_callback = &LogMessage;
-    project.log_tag = "skyline_host";
-    project.shutdown_dart_vm_when_done = true;
-    project.update_semantics_callback2 = &OnSemanticsUpdate;
-    const char* command_line[] = {"skyline_engine", "--disable-vm-service"};
-    project.command_line_argc = 2;
-    project.command_line_argv = command_line;
+    loop_.Post(std::move(task));
+  }
 
+  void Run() {
     // The DevTools' Skyline Dart entrypoint (`package:sample/devtools.dart
     // main`) expects [window id, runtime holder, width, height, createRuntime,
     // addon path].  Plain test apps use a zero-argument main, so only pass
     // these for the DevTools packaging.  The DevTools always loads the addon
     // from its own `node_modules/skyline-addon/` directory, which is enough to
     // recognize it without requiring environment variables.
+    embedder::EngineConfig config;
+    config.assets = assets_;
+    config.icu = icu_;
+    if (use_aot_) config.aot_library = aot_library_;
     const bool devtools_entrypoint =
         std::getenv("SKYLINE_DEVTOOLS") != nullptr ||
         args_.bundle_path.find("skyline-addon") != std::string::npos ||
         args_.skyline_addon_path.find("skyline-addon") != std::string::npos;
-    std::vector<std::string> dart_args;
     if (devtools_entrypoint) {
-      dart_args.push_back(
-          std::to_string(static_cast<long long>(args_.window_id)));
-      dart_args.push_back("1");
-      dart_args.push_back(std::to_string(args_.width));
-      dart_args.push_back(std::to_string(args_.height));
-      dart_args.push_back("1");
-      dart_args.push_back(args_.skyline_addon_path.empty()
-                              ? "stub"
-                              : args_.skyline_addon_path);
+      config.entrypoint_args = {
+          std::to_string(static_cast<long long>(args_.window_id)),
+          "1",
+          std::to_string(args_.width),
+          std::to_string(args_.height),
+          "1",
+          args_.skyline_addon_path.empty() ? "stub" : args_.skyline_addon_path,
+      };
     }
-    std::vector<const char*> dart_argv;
-    dart_argv.reserve(dart_args.size());
-    for (const std::string& value : dart_args) {
-      dart_argv.push_back(value.c_str());
-    }
-    if (!dart_argv.empty()) {
-      project.dart_entrypoint_argc = static_cast<int>(dart_argv.size());
-      project.dart_entrypoint_argv = dart_argv.data();
-    }
+    config.present = &WindowHost::OnPresent;
+    config.vsync = &WindowHost::OnVsync;
+    config.semantics = &OnSemanticsUpdate;
+    config.log_message = &LogMessage;
+    config.user_data = this;
 
-    FlutterEngine engine = nullptr;
-    const FlutterEngineResult run_result = FlutterEngineRun(
-        FLUTTER_ENGINE_VERSION, &renderer, &project, this, &engine);
-    if (run_result != kSuccess || engine == nullptr) {
-      if (aot_data_ != nullptr) {
-        FlutterEngineCollectAOTData(aot_data_);
-        aot_data_ = nullptr;
-      }
-      Fail("FlutterEngineRun failed: " +
-           std::to_string(static_cast<int>(run_result)));
+    try {
+      engine_ = std::make_unique<embedder::RunningEngine>(config);
+    } catch (const std::exception& error) {
+      Fail(error.what());
       return;
     }
-    engine_ = engine;
-    {
-      std::lock_guard<std::mutex> lock(accessibility_mutex_);
-      accessibility_host_ = this;
+    if (use_aot_) {
+      std::fprintf(stderr, "[skyline-engine] window %g: AOT snapshot %s\n",
+                   args_.window_id, aot_library_.c_str());
     }
-    SkylineSetAccessibilitySink(&WindowHost::AccessibilitySink);
+    embedder::SetAccessibilityTarget(&loop_);
+    SkylineSetAccessibilitySink(&embedder::RouteAccessibility);
 
-    FlutterWindowMetricsEvent metrics = {};
-    metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
-    metrics.width = physical_width_;
-    metrics.height = physical_height_;
-    metrics.pixel_ratio = pixel_ratio_;
-    metrics.view_id = 0;  // kFlutterImplicitViewId
     const FlutterEngineResult metrics_result =
-        FlutterEngineSendWindowMetricsEvent(engine, &metrics);
+        engine_->SendMetrics(args_.width, args_.height, pixel_ratio_);
     if (metrics_result != kSuccess) {
+      embedder::ClearAccessibilityTarget(&loop_);
+      engine_.reset();
       Fail("FlutterEngineSendWindowMetricsEvent failed: " +
            std::to_string(static_cast<int>(metrics_result)));
-      FlutterEngineShutdown(engine);
-      engine_ = nullptr;
-      if (aot_data_ != nullptr) {
-        FlutterEngineCollectAOTData(aot_data_);
-        aot_data_ = nullptr;
-      }
       return;
     }
 
@@ -431,82 +323,19 @@ class WindowHost {
     }
     ready_cv_.notify_all();
     std::fprintf(stderr,
-                 "[skyline-engine] window %g ready (%ux%u @%g, assets=%s)\n",
-                 args_.window_id, physical_width_, physical_height_,
+                 "[skyline-engine] window %g ready (%zux%zu @%g, assets=%s)\n",
+                 args_.window_id,
+                 embedder::PhysicalPixels(args_.width, pixel_ratio_),
+                 embedder::PhysicalPixels(args_.height, pixel_ratio_),
                  pixel_ratio_, assets_.c_str());
 
-    while (true) {
-      std::deque<intptr_t> batons;
-      std::deque<std::function<void()>> tasks;
-      std::deque<std::pair<int32_t, int32_t>> accessibility;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait_for(lock, std::chrono::milliseconds(5), [this]() {
-          return stop_ || !batons_.empty() || !platform_tasks_.empty() ||
-                 !accessibility_requests_.empty();
-        });
-        if (stop_ && batons_.empty() && platform_tasks_.empty()) break;
-        batons.swap(batons_);
-        tasks.swap(platform_tasks_);
-        accessibility.swap(accessibility_requests_);
-      }
-      // Semantics updates are posted to the platform task runner; this host
-      // services vsync manually, so drain the platform tasks explicitly.
-      __FlutterEngineFlushPendingTasksNow();
-      // Accessibility must be applied on the platform thread.
-      for (const auto& request : accessibility) {
-        if (request.first == 0) {
-          const FlutterAccessibilityFeature features =
-              request.second != 0
-                  ? kFlutterAccessibilityFeatureAccessibleNavigation
-                  : static_cast<FlutterAccessibilityFeature>(0);
-          FlutterEngineUpdateAccessibilityFeatures(engine, features);
-          std::fprintf(stderr,
-                       "[skyline-engine] window %g accessibility features: %d\n",
-                       args_.window_id, static_cast<int>(features));
-        } else {
-          FlutterEngineUpdateSemanticsEnabled(engine, request.second != 0);
-          std::fprintf(stderr,
-                       "[skyline-engine] window %g semantics enabled: %d\n",
-                       args_.window_id, request.second != 0 ? 1 : 0);
-        }
-      }
-      for (auto& task : tasks) task();
-      for (intptr_t baton : batons) {
-        const uint64_t now = FlutterEngineGetCurrentTime();
-        FlutterEngineOnVsync(engine, baton, now, now + kVsyncPeriodNanos);
-      }
-    }  // loop
-
+    while (loop_.RunOnce(engine_->get(), std::chrono::milliseconds(5))) {
+    }
     // Return outstanding batons so shutdown does not wait on the vsync
     // service (matches the offline host's drain window).
-    const auto drain_until =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
-    while (std::chrono::steady_clock::now() < drain_until) {
-      std::deque<intptr_t> pending;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        if (batons_.empty()) {
-          cv_.wait_for(lock, std::chrono::milliseconds(5));
-        }
-        pending.swap(batons_);
-      }
-      for (intptr_t baton : pending) {
-        const uint64_t now = FlutterEngineGetCurrentTime();
-        FlutterEngineOnVsync(engine, baton, now, now + kVsyncPeriodNanos);
-      }
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(accessibility_mutex_);
-      if (accessibility_host_ == this) accessibility_host_ = nullptr;
-    }
-    FlutterEngineShutdown(engine);
-    engine_ = nullptr;
-    if (aot_data_ != nullptr) {
-      FlutterEngineCollectAOTData(aot_data_);
-      aot_data_ = nullptr;
-    }
+    loop_.DrainVsync(engine_->get(), std::chrono::milliseconds(150));
+    embedder::ClearAccessibilityTarget(&loop_);
+    engine_.reset();
     std::fprintf(stderr, "[skyline-engine] window %g stopped\n",
                  args_.window_id);
   }
@@ -521,29 +350,7 @@ class WindowHost {
   }
 
   static void OnVsync(void* user_data, intptr_t baton) {
-    auto* self = static_cast<WindowHost*>(user_data);
-    {
-      std::lock_guard<std::mutex> lock(self->mutex_);
-      self->batons_.push_back(baton);
-    }
-    self->cv_.notify_all();
-  }
-
-  void EnqueueAccessibility(int32_t kind, int32_t value) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      accessibility_requests_.emplace_back(kind, value);
-    }
-    cv_.notify_all();
-  }
-
-  static void AccessibilitySink(int32_t kind, int32_t value) {
-    WindowHost* host = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(accessibility_mutex_);
-      host = accessibility_host_;
-    }
-    if (host != nullptr) host->EnqueueAccessibility(kind, value);
+    static_cast<WindowHost*>(user_data)->loop_.OnVsync(baton);
   }
 
   static bool OnPresent(void* user_data, const void* allocation,
@@ -562,26 +369,12 @@ class WindowHost {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (frame_buffer_ != nullptr &&
-          frame_buffer_size_ >= kFrameHeaderBytes + frame_size) {
-        auto* destination = static_cast<uint8_t*>(frame_buffer_) +
-                            kFrameHeaderBytes;
-        const auto* source = static_cast<const uint8_t*>(allocation);
-        // Skia's N32 software surface is BGRA on little-endian Linux; the
-        // contract wants RGBA8.
-        for (size_t y = 0; y < height; ++y) {
-          const uint8_t* row_src = source + y * row_bytes;
-          uint8_t* row_dst = destination + y * width * 4;
-          for (uint32_t x = 0; x < width; ++x) {
-            row_dst[x * 4 + 0] = row_src[x * 4 + 2];
-            row_dst[x * 4 + 1] = row_src[x * 4 + 1];
-            row_dst[x * 4 + 2] = row_src[x * 4 + 0];
-            row_dst[x * 4 + 3] = row_src[x * 4 + 3];
-          }
-        }
-        auto* header = static_cast<uint8_t*>(frame_buffer_);
-        PutU32(header + 4, static_cast<uint32_t>(frame_size));
-        std::atomic_thread_fence(std::memory_order_release);
-        PutU32(header, ++frame_id_);
+          frame_buffer_size_ >= SKYLINE_FRAME_HEADER_BYTES + frame_size) {
+        auto* data = static_cast<uint8_t*>(frame_buffer_);
+        embedder::CopyFrame(allocation, row_bytes, width, height,
+                            data + SKYLINE_FRAME_HEADER_BYTES);
+        embedder::WriteFrameHeader(data, ++frame_id_,
+                                   static_cast<uint32_t>(frame_size));
         wrote = true;
         if (frame_id_ == 1) {
           std::fprintf(stderr,
@@ -595,7 +388,7 @@ class WindowHost {
                      "[skyline-engine] window %g: frame buffer missing or too "
                      "small (%zu < %zu); frames are dropped\n",
                      args_.window_id, frame_buffer_size_,
-                     kFrameHeaderBytes + frame_size);
+                     SKYLINE_FRAME_HEADER_BYTES + frame_size);
       }
       callback = callback_;
     }
@@ -608,39 +401,26 @@ class WindowHost {
   std::string aot_library_;
   std::string icu_;
   bool use_aot_ = false;
-  FlutterEngineAOTData aot_data_ = nullptr;
-  uint32_t physical_width_ = 0;
-  uint32_t physical_height_ = 0;
+  // Written before the platform thread starts; read-only afterwards.
   double pixel_ratio_ = 1.0;
 
   std::thread thread_;
-  FlutterEngine engine_ = nullptr;
-
-  std::mutex mutex_;
-  std::condition_variable cv_;
-  std::condition_variable ready_cv_;
-  std::deque<intptr_t> batons_;
-  std::deque<std::function<void()>> platform_tasks_;
-  // D10: accessibility requests from the embedded runtime.  Applied on the
-  // platform thread inside the vsync loop.
-  std::deque<std::pair<int32_t, int32_t>> accessibility_requests_;
-  static std::mutex accessibility_mutex_;
-  static WindowHost* accessibility_host_;
+  embedder::PlatformLoop loop_;
+  // Created, used and destroyed on the platform thread.
+  std::unique_ptr<embedder::RunningEngine> engine_;
   // Platform-thread-only single-touch state (see SendPointer).
   bool touch_down_ = false;
+
+  std::mutex mutex_;
+  std::condition_variable ready_cv_;
   bool ready_ = false;
-  bool stop_ = false;
   std::string init_error_;
   WindowBackend::RasterizedCallback callback_;
-
   void* frame_buffer_ = nullptr;
   size_t frame_buffer_size_ = 0;
   uint32_t frame_id_ = 0;
   bool warned_no_buffer_ = false;
 };
-
-std::mutex WindowHost::accessibility_mutex_;
-WindowHost* WindowHost::accessibility_host_ = nullptr;
 
 class FlutterWindowBackend final : public WindowBackend {
  public:
