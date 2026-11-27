@@ -110,8 +110,9 @@ done
 log "dart:ui compat layer installed in $ui_dir"
 
 if [ ! -d "$out_dir" ]; then
-  warn "engine build directory missing: $out_dir (run npm run engine:build first)"
-  exit 0
+  # Exiting 0 here would leave a previously staged patched SDK in place, and
+  # kernel:skyline would silently compile against the old dart:ui.
+  die "engine build directory missing: $out_dir; the compat sources are patched but the patched SDK was not rebuilt. Run npm run engine:build, then npm run ui:patch again"
 fi
 
 require_cmd ninja

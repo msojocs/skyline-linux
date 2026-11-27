@@ -72,15 +72,13 @@ dartaotruntime="$ENGINE_TOOLCHAIN/dart-sdk/bin/dartaotruntime"
 frontend="$ENGINE_TOOLCHAIN/engine-artifacts/frontend_server_aot.dart.snapshot"
 gen_snapshot="${SKYLINE_GEN_SNAPSHOT:-}"
 if [ -z "$gen_snapshot" ]; then
-  # Prefer the gen_snapshot built with the pinned release engine: the
-  # downloaded toolchain binary is a JIT-release build and produces snapshots
-  # whose VM configuration does not match a product engine.
-  engine_gen_snapshot="$ENGINE_CHECKOUT/engine/src/out/host_release/gen_snapshot"
-  if [ -x "$engine_gen_snapshot" ]; then
-    gen_snapshot="$engine_gen_snapshot"
-  else
-    gen_snapshot="$ENGINE_TOOLCHAIN/engine-artifacts/gen_snapshot"
-  fi
+  # Use the gen_snapshot built with the pinned release engine: the downloaded
+  # toolchain binary is a JIT-release build and produces snapshots whose VM
+  # configuration does not match a product engine.  Set SKYLINE_GEN_SNAPSHOT
+  # to use another binary explicitly.
+  gen_snapshot="$ENGINE_CHECKOUT/engine/src/out/host_release/gen_snapshot"
+  [ -x "$gen_snapshot" ] \
+    || die "release gen_snapshot missing at $gen_snapshot; run: npm run engine:build -- --runtime-mode release (or set SKYLINE_GEN_SNAPSHOT)"
 fi
 package_config="$app_dir/package_config.json"
 assets="$app_dir/build/flutter_assets"
