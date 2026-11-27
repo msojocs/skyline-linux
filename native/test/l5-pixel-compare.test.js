@@ -33,6 +33,28 @@ function windowsBaselinePath() {
   return fs.existsSync(candidate) ? candidate : null;
 }
 
+function fixturePath(name) {
+  const fixture = path.join(l5.fixturesDir, `${name}.ops.json`);
+  assert.ok(fs.existsSync(fixture), `${name}: fixture missing (${fixture})`);
+  return fixture;
+}
+
+// Engine-free: a fixture that is added without a baseline entry (or a stale
+// baseline entry) must fail here instead of being skipped by the frame tests.
+test('L5: fixture lists and baselines cover the same fixtures', () => {
+  assert.ok(fs.existsSync(l5.baselinePath), `missing ${l5.baselinePath}; run npm run l5:baseline`);
+  const baselines = {
+    'spec/l5-baseline.json': JSON.parse(fs.readFileSync(l5.baselinePath, 'utf8')),
+  };
+  const winPath = windowsBaselinePath();
+  if (winPath) baselines[path.relative(repoRoot, winPath)] = JSON.parse(fs.readFileSync(winPath, 'utf8'));
+  const problems = l5.fixtureSetProblems(baselines);
+  assert.deepEqual(problems, [],
+    `L5 fixture sets disagree:\n  ${problems.join('\n  ')}\n` +
+    'List new fixtures in FIXTURES or EXCLUDED_FIXTURES (tools/l5-baseline.js), then run ' +
+    'npm run l5:baseline and npm run l5:windows -- --only <name> --write.');
+});
+
 test('L5: Linux frame baseline is deterministic', {
   skip: skipReason(),
   timeout: 120000,
@@ -43,9 +65,7 @@ test('L5: Linux frame baseline is deterministic', {
   const entries = Object.entries(baseline.fixtures || {});
   assert.ok(entries.length > 0, 'baseline has no fixtures');
   for (const [name, expected] of entries) {
-    const fixture = path.join(repoRoot, 'test', 'fixtures', `${name}.ops.json`);
-    if (!fs.existsSync(fixture)) continue;
-    const pixels = l5.render(fixture);
+    const pixels = l5.render(fixturePath(name));
     assert.equal(sha256(pixels), expected.sha256,
       `${name} frame hash changed; regenerate the baseline if the change is intended`);
   }
@@ -72,8 +92,7 @@ test('L5: Windows baseline comparison uses a channel tolerance', {
   let compared = 0;
   let skipped = 0;
   for (const [name, expected] of Object.entries(fixtures)) {
-    const fixture = path.join(repoRoot, 'test', 'fixtures', `${name}.ops.json`);
-    if (!fs.existsSync(fixture)) continue;
+    const fixture = fixturePath(name);
     if (expected.compare === false) {
       skipped++;
       continue;

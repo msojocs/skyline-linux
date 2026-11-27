@@ -328,9 +328,13 @@ function compareBaseline() {
   let failures = 0;
   let compared = 0;
   let skipped = 0;
+  for (const problem of l5.fixtureSetProblems({ 'spec/l5-baseline.win32.json': baseline })) {
+    console.error(`FAIL ${problem}`);
+    failures++;
+  }
   for (const [name, expected] of Object.entries(baseline.fixtures || {})) {
     const fixture = path.join(repoRoot, 'test', 'fixtures', `${name}.ops.json`);
-    if (!fs.existsSync(fixture)) { console.error(`skip ${name}: fixture missing`); continue; }
+    if (!fs.existsSync(fixture)) continue;  // reported by fixtureSetProblems()
     if (expected.compare === false) {
       skipped++;
       console.log(`skip ${name}: ${expected.note || 'not comparable'}`);

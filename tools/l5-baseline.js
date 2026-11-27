@@ -86,6 +86,77 @@ const FIXTURES = [
   'appservice-inline-bold-price.ops.json',
 ];
 
+// Fixtures in test/fixtures that are deliberately not part of L5.  Every
+// fixture must be in exactly one of FIXTURES and EXCLUDED_FIXTURES, and both
+// baselines must cover FIXTURES exactly (see fixtureSetProblems()).
+const EXCLUDED_FIXTURES = {
+  // Static pages that could join L5 once a Windows frame is captured
+  // (npm run l5:windows -- --only <name> --write).
+  'appservice-inline-text-wrap.ops.json': 'static page; no Windows frame captured yet',
+  'appservice-scroll-static.ops.json': 'static page; no Windows frame captured yet',
+  'appservice-transform.ops.json': 'static page; no Windows frame captured yet',
+  // Timed `updates` batches or animations: the final frame depends on the
+  // replay clock rather than the page content.
+  'appservice-animated-style.ops.json': 'addAnimatedStyle timeline; frame depends on the replay clock',
+  'appservice-builder-update.ops.json': 'timed updates batches',
+  'appservice-native-view-release.ops.json': 'timed updates batches (texture dispose)',
+  'appservice-route.ops.json': 'timed updates batches (route push/pop)',
+  'appservice-scroll.ops.json': 'timed updates batches (programmatic scroll)',
+  'appservice-swiper.ops.json': 'timed updates batches (swiper page animation)',
+  'appservice-text-update.ops.json': 'timed updates batches',
+  'appservice-transition.ops.json': 'CSS transition; frame depends on the replay clock',
+  'appservice-update.ops.json': 'timed updates batches',
+  // Input-driven behaviour probes (pointer scripts).
+  'appservice-fixed-overlay-scroll.ops.json': 'touch hit-test probe driven by a pointer script',
+  'appservice-pointer-events.ops.json': 'touch hit-test probe driven by a pointer script',
+  'appservice-pointer-events-control.ops.json': 'touch hit-test probe driven by a pointer script',
+  'appservice-swiper-scroll-yield.ops.json': 'gesture arbitration probe driven by a pointer script',
+  // Builder callbacks / external resources / native content.
+  'appservice-builder.ops.json': 'builder callbacks; synthetic ops do not drive the official builder (as gridview/listview)',
+  'appservice-font.ops.json': 'needs @font-face files from SKYLINE_RESOURCE_ROOT',
+  'appservice-image.ops.json': 'needs a generated bitmap from SKYLINE_RESOURCE_ROOT',
+  'appservice-native-view.ops.json': 'native view texture; Linux paints a placeholder slot',
+};
+
+const fixturesDir = path.join(repoRoot, 'test', 'fixtures');
+
+function fixtureKey(name) {
+  return name.replace(/\.ops\.json$/, '');
+}
+
+// Returns human-readable problems; empty when the fixture directory, the
+// FIXTURES/EXCLUDED_FIXTURES lists and the given baselines agree.  Pass
+// `baselines` as `{ label: parsedBaselineJson }`.
+function fixtureSetProblems(baselines = {}) {
+  const problems = [];
+  const onDisk = new Set(fs.readdirSync(fixturesDir).filter(name => name.endsWith('.ops.json')));
+  const listed = new Set();
+  for (const name of FIXTURES) {
+    if (listed.has(name)) problems.push(`${name} is listed twice in FIXTURES`);
+    listed.add(name);
+    if (name in EXCLUDED_FIXTURES) problems.push(`${name} is both in FIXTURES and EXCLUDED_FIXTURES`);
+  }
+  for (const name of [...FIXTURES, ...Object.keys(EXCLUDED_FIXTURES)]) {
+    if (!onDisk.has(name)) problems.push(`${name} does not exist in test/fixtures`);
+  }
+  for (const name of onDisk) {
+    if (!listed.has(name) && !(name in EXCLUDED_FIXTURES)) {
+      problems.push(`${name} is in neither FIXTURES nor EXCLUDED_FIXTURES (tools/l5-baseline.js)`);
+    }
+  }
+  const expected = new Set(FIXTURES.map(fixtureKey));
+  for (const [label, baseline] of Object.entries(baselines)) {
+    const keys = new Set(Object.keys((baseline && baseline.fixtures) || {}));
+    for (const key of expected) {
+      if (!keys.has(key)) problems.push(`${label} has no entry for ${key}`);
+    }
+    for (const key of keys) {
+      if (!expected.has(key)) problems.push(`${label} has an entry for ${key}, which is not in FIXTURES`);
+    }
+  }
+  return problems;
+}
+
 function prerequisites() {
   const missing = [];
   if (!fs.existsSync(host)) missing.push('native/build/skyline_host');
@@ -161,16 +232,14 @@ function samples(pixels) {
 function record() {
   const fixtures = {};
   for (const name of FIXTURES) {
-    const fixturePath = path.join(repoRoot, 'test', 'fixtures', name);
-    if (!fs.existsSync(fixturePath)) continue;
-    const pixels = render(fixturePath);
-    fixtures[name.replace(/\.ops\.json$/, '')] = {
+    const pixels = render(path.join(fixturesDir, name));
+    fixtures[fixtureKey(name)] = {
       width,
       height,
       sha256: crypto.createHash('sha256').update(pixels).digest('hex'),
       samples: samples(pixels),
     };
-    console.error(`recorded ${name} -> ${fixtures[name.replace(/\.ops\.json$/, '')].sha256}`);
+    console.error(`recorded ${name} -> ${fixtures[fixtureKey(name)].sha256}`);
   }
   return {
     comment:
@@ -182,12 +251,7 @@ function record() {
 function compare(baseline) {
   let failed = 0;
   for (const [name, expected] of Object.entries(baseline.fixtures || {})) {
-    const fixturePath = path.join(repoRoot, 'test', 'fixtures', `${name}.ops.json`);
-    if (!fs.existsSync(fixturePath)) {
-      console.error(`skip ${name}: fixture missing`);
-      continue;
-    }
-    const pixels = render(fixturePath);
+    const pixels = render(path.join(fixturesDir, `${name}.ops.json`));
     const hash = crypto.createHash('sha256').update(pixels).digest('hex');
     if (hash === expected.sha256) {
       console.log(`ok ${name} ${hash}`);
@@ -217,6 +281,11 @@ function main() {
     console.error(`missing prerequisites: ${missing.join(', ')}`);
     process.exit(77);
   }
+  const listProblems = fixtureSetProblems();
+  if (listProblems.length > 0) {
+    console.error(`fixture lists are inconsistent:\n  ${listProblems.join('\n  ')}`);
+    process.exit(1);
+  }
   if (process.argv.includes('--write')) {
     const baseline = record();
     fs.writeFileSync(baselinePath, JSON.stringify(baseline, null, 1) + '\n');
@@ -228,14 +297,23 @@ function main() {
     process.exit(1);
   }
   const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+  const baselineProblems = fixtureSetProblems({ 'spec/l5-baseline.json': baseline });
+  if (baselineProblems.length > 0) {
+    console.error(`baseline does not match FIXTURES (run with --write):\n  ${baselineProblems.join('\n  ')}`);
+    process.exit(1);
+  }
   process.exit(compare(baseline) ? 0 : 1);
 }
 
 if (require.main === module) main();
 
 module.exports = {
+  EXCLUDED_FIXTURES,
   FIXTURES,
   baselinePath,
+  fixtureKey,
+  fixtureSetProblems,
+  fixturesDir,
   frameSize,
   height,
   prerequisites,
