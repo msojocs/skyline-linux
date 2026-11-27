@@ -1,0 +1,12 @@
+{
+  "fixture": "appservice-display-flex",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"wx-x","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"view","name":"view","class":"bar","rect":[0,0,320,50],"style":{"display":"flex-column","background":"#ffffffff"},"widgets":["box"]},
+      {"id":4,"parent":3,"tag":"view","name":"view","class":"a","rect":[0,0,100,25],"style":{"background":"#ffff0000"},"widgets":["box"]},
+      {"id":5,"parent":3,"tag":"view","name":"view","class":"b","rect":[0,25,100,25],"style":{"background":"#ff0000ff"},"widgets":["box"]}
+    ]
+  ]
+}

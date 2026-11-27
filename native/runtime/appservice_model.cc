@@ -202,6 +202,133 @@ void ScrollAncestorOffset(const AppNode* node, float* dx, float* dy) {
   }
 }
 
+namespace {
+
+// Compact, stable number formatting for layout snapshots ("12.5", "3").
+std::string SnapshotNumber(double value) {
+  if (!std::isfinite(value)) return "null";
+  char buffer[32];
+  std::snprintf(buffer, sizeof(buffer), "%.2f", value);
+  std::string text(buffer);
+  while (text.back() == '0') text.pop_back();
+  if (text.back() == '.') text.pop_back();
+  if (text == "-0") text = "0";
+  return text;
+}
+
+std::string SnapshotColor(uint32_t argb) {
+  char buffer[16];
+  std::snprintf(buffer, sizeof(buffer), "\"#%08x\"", argb);
+  return buffer;
+}
+
+// One node of a layout snapshot: identity, laid-out border box (content
+// coordinates, before transforms and scrolling), a summary of the resolved
+// style (defaults omitted) and the widgets BuildWidget materialized for it.
+void AppendSnapshotNode(std::string& out, const AppNode* node) {
+  const AppStyle& s = node->style;
+  out += "{\"id\":" + std::to_string(node->id);
+  out += ",\"parent\":" + std::to_string(node->parent ? node->parent->id : 0);
+  out += ",\"tag\":\"" + JsonEscapeString(node->tag) + "\"";
+  if (!node->name.empty()) out += ",\"name\":\"" + JsonEscapeString(node->name) + "\"";
+  if (!node->classes.empty()) {
+    std::string classes;
+    for (const std::string& name : node->classes) {
+      if (!classes.empty()) classes += ' ';
+      classes += name;
+    }
+    out += ",\"class\":\"" + JsonEscapeString(classes) + "\"";
+  }
+  if (!node->text.empty()) out += ",\"text\":\"" + JsonEscapeString(node->text) + "\"";
+  out += ",\"rect\":[" + SnapshotNumber(node->abs_x) + "," + SnapshotNumber(node->abs_y) +
+         "," + SnapshotNumber(node->measured_w) + "," + SnapshotNumber(node->measured_h) + "]";
+
+  std::string style;
+  auto add = [&style](const char* key, const std::string& value) {
+    if (!style.empty()) style += ',';
+    style += '"';
+    style += key;
+    style += "\":";
+    style += value;
+  };
+  const char* display = s.display_none ? "none"
+                        : s.inline_block ? "inline-block"
+                        : s.inline_level ? "inline"
+                        : s.flex_container ? (s.row ? "flex-row" : "flex-column")
+                        : nullptr;
+  if (display != nullptr) add("display", std::string("\"") + display + "\"");
+  if (s.position != 0) add("position", std::to_string(s.position));
+  if (s.z_index != 0) add("z", std::to_string(s.z_index));
+  if (s.has_background) add("background", SnapshotColor(s.background));
+  if (s.color != 0xFF000000u) add("color", SnapshotColor(s.color));
+  if (s.font_size != 16.0) add("fontSize", SnapshotNumber(s.font_size));
+  if (s.font_weight != 3) add("fontWeight", std::to_string(s.font_weight));
+  if (s.opacity != 1.0) add("opacity", SnapshotNumber(s.opacity));
+  if (s.border_width > 0.0f) {
+    add("border", "[" + SnapshotNumber(s.border_width) + "," + SnapshotColor(s.border_color) + "]");
+  }
+  if (s.radius > 0.0f) add("radius", SnapshotNumber(s.radius));
+  if (s.clip) add("clip", "true");
+  if (s.has_transform) add("transform", "true");
+  if (s.has_shadow) add("shadow", "true");
+  if (s.has_gradient) add("gradient", std::to_string(s.gradient_kind));
+  if (!style.empty()) out += ",\"style\":{" + style + "}";
+
+  std::string widgets;
+  auto widget = [&widgets](bool present, const char* name) {
+    if (!present) return;
+    widgets += widgets.empty() ? "\"" : ",\"";
+    widgets += name;
+    widgets += '"';
+  };
+  widget(node->decorated_box_p != nullptr, "box");
+  widget(node->opacity_widget_p != nullptr, "opacity");
+  widget(node->clip_widget_p != nullptr, "clip");
+  widget(node->text_span_p != nullptr, "text");
+  widget(node->image_widget_p != nullptr, "image");
+  widget(node->texture_widget_p != nullptr, "texture");
+  widget(node->scroll_view_p != nullptr, "scroll");
+  widget(node->swiper_p != nullptr, "swiper");
+  widget(node->picker_column_p != nullptr, "picker");
+  widget(node->selection_p != nullptr, "selection");
+  widget(node->input_widget_p != nullptr, "input");
+  widget(node->builder_p != nullptr, "builder");
+  widget(node->semantics_p != nullptr, "semantics");
+  widget(node->hero_p != nullptr, "hero");
+  if (!widgets.empty()) out += ",\"widgets\":[" + widgets + "]";
+  out += '}';
+}
+
+}  // namespace
+
+// Test hook: SKYLINE_LAYOUT_DUMP=<file> appends one JSON line per distinct
+// layout state of the page (test/golden/layout compares them), so refactors
+// can be checked structurally instead of through pixels.  Called whenever node
+// rects are published and at the end of every applied op batch.
+void DumpLayoutSnapshot() {
+  static const char* path = std::getenv("SKYLINE_LAYOUT_DUMP");
+  if (path == nullptr || *path == '\0' || g_page == nullptr) return;
+  std::vector<const AppNode*> nodes;
+  for (const auto& entry : g_page->nodes) {
+    if (entry.second != nullptr && !entry.second->released) nodes.push_back(entry.second);
+  }
+  std::sort(nodes.begin(), nodes.end(),
+            [](const AppNode* a, const AppNode* b) { return a->id < b->id; });
+  std::string body;
+  for (const AppNode* node : nodes) {
+    if (!body.empty()) body += ',';
+    AppendSnapshotNode(body, node);
+  }
+  static std::string last;
+  if (body == last) return;
+  last = body;
+  static int sequence = 0;
+  FILE* file = std::fopen(path, "a");
+  if (file == nullptr) return;
+  std::fprintf(file, "{\"seq\":%d,\"nodes\":[%s]}\n", sequence++, body.c_str());
+  std::fclose(file);
+}
+
 void PublishNodeRects() {
   std::lock_guard<std::mutex> lock(g_rect_mutex);
   g_rect_snapshot.clear();
@@ -242,6 +369,7 @@ void PublishNodeRects() {
                    static_cast<double>(node->measured_h));
     }
   }
+  DumpLayoutSnapshot();
 }
 // Captured on the UI thread; the host keyboard channel is called from the
 // embedder thread and must marshal work back onto the UI runner.

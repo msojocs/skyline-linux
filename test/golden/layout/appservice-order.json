@@ -1,0 +1,13 @@
+{
+  "fixture": "appservice-order",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"row","rect":[0,0,300,60],"style":{"position":1}},
+      {"id":4,"parent":3,"tag":"empty","name":"view","class":"item a","rect":[100,0,50,50],"style":{"background":"#ffff0000"},"widgets":["box"]},
+      {"id":5,"parent":3,"tag":"empty","name":"view","class":"item b","rect":[0,0,50,50],"style":{"background":"#ff00aa00"},"widgets":["box"]},
+      {"id":6,"parent":3,"tag":"empty","name":"view","class":"item c","rect":[50,0,50,50],"style":{"background":"#ff0000ff"},"widgets":["box"]}
+    ]
+  ]
+}

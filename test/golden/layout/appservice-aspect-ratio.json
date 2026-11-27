@@ -1,0 +1,12 @@
+{
+  "fixture": "appservice-aspect-ratio",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,80]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"row","rect":[0,0,200,80],"style":{"display":"flex-row"}},
+      {"id":4,"parent":3,"tag":"empty","name":"view","class":"ratio","rect":[0,0,100,50],"style":{"background":"#ffff3366"},"widgets":["box"]},
+      {"id":5,"parent":3,"tag":"empty","name":"view","class":"fixed","rect":[100,0,60,50],"style":{"background":"#ff33cc66"},"widgets":["box"]}
+    ]
+  ]
+}

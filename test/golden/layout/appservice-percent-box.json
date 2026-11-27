@@ -1,0 +1,13 @@
+{
+  "fixture": "appservice-percent-box",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,0]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"pbox","rect":[0,0,200,100],"style":{"position":1,"background":"#ffff0000"},"widgets":["box"]},
+      {"id":4,"parent":3,"tag":"empty","name":"view","class":"pchild","rect":[32,32,20,20],"style":{"background":"#ff0000ff"},"widgets":["box"]},
+      {"id":5,"parent":2,"tag":"empty","name":"view","class":"mbox","rect":[0,120,200,80],"style":{"position":1,"background":"#ff00aa00"},"widgets":["box"]},
+      {"id":6,"parent":5,"tag":"empty","name":"view","class":"mchild","rect":[50,140,20,20],"style":{"background":"#ffffff00"},"widgets":["box"]}
+    ]
+  ]
+}

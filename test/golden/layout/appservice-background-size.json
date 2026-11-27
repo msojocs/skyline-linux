@@ -1,0 +1,13 @@
+{
+  "fixture": "appservice-background-size",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,0]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"fixed","rect":[10,10,100,100],"style":{"position":1,"gradient":1},"widgets":["box"]},
+      {"id":4,"parent":2,"tag":"empty","name":"view","class":"percent","rect":[130,10,100,100],"style":{"position":1,"gradient":1},"widgets":["box"]},
+      {"id":5,"parent":2,"tag":"empty","name":"view","class":"tiled","rect":[10,130,100,100],"style":{"position":1,"gradient":1},"widgets":["box"]},
+      {"id":6,"parent":2,"tag":"empty","name":"view","class":"shorthand","rect":[130,130,100,100],"style":{"position":1,"gradient":1},"widgets":["box"]}
+    ]
+  ]
+}

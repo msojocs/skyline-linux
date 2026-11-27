@@ -1,0 +1,13 @@
+{
+  "fixture": "appservice-content-box",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"wx-x","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"view","name":"view","class":"nav","rect":[0,0,320,89],"style":{"background":"#ffff0000"},"widgets":["box"]},
+      {"id":4,"parent":3,"tag":"text","name":"text","class":"title","rect":[0,47,320,24],"style":{"display":"inline","color":"#ffffffff","fontSize":20},"widgets":["text"]},
+      {"id":5,"parent":4,"tag":"text","text":"微信学堂","rect":[0,47,320,24],"style":{"color":"#ffffffff","fontSize":20}},
+      {"id":6,"parent":2,"tag":"view","name":"view","rect":[0,89,320,100],"style":{"background":"#ff0000ff"},"widgets":["box"]}
+    ]
+  ]
+}

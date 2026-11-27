@@ -1,0 +1,17 @@
+{
+  "fixture": "appservice-inline-text-wrap",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ff00ff00"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"card","rect":[10,10,120,63],"style":{"position":1,"background":"#ffffffff","clip":true},"widgets":["box","clip"]},
+      {"id":4,"parent":3,"tag":"empty","name":"view","class":"title","rect":[10,10,120,63],"style":{"fontSize":14}},
+      {"id":5,"parent":4,"tag":"text","name":"text","rect":[15,10,110,63],"style":{"display":"inline","fontSize":14},"widgets":["text"]},
+      {"id":6,"parent":5,"tag":"text","text":"小程序性能优化课程基于实际开发场景","rect":[15,10,110,63],"style":{"fontSize":14}},
+      {"id":7,"parent":2,"tag":"empty","name":"view","class":"card","rect":[150,10,120,21],"style":{"position":1,"background":"#ffffffff","clip":true},"widgets":["box","clip"]},
+      {"id":8,"parent":7,"tag":"empty","name":"view","class":"title","rect":[150,10,120,21],"style":{"fontSize":14}},
+      {"id":9,"parent":8,"tag":"text","name":"text","rect":[155,10,110,21],"style":{"display":"inline","fontSize":14},"widgets":["text"]},
+      {"id":10,"parent":9,"tag":"text","text":"短标题","rect":[155,10,110,21],"style":{"fontSize":14}}
+    ]
+  ]
+}

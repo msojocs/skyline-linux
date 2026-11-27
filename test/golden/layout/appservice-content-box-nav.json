@@ -1,0 +1,13 @@
+{
+  "fixture": "appservice-content-box-nav",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"wx-x","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"view","name":"view","class":"nav","rect":[0,0,320,89],"style":{"display":"flex-column","background":"#ffffffff","clip":true},"widgets":["box","clip"]},
+      {"id":4,"parent":3,"tag":"view","name":"view","class":"inner","rect":[0,0,320,89],"style":{"display":"flex-row","position":4,"background":"#ffffffff"},"widgets":["box"]},
+      {"id":5,"parent":4,"tag":"view","name":"view","class":"left","rect":[0,47,96,42],"style":{"display":"flex-row","position":4}},
+      {"id":6,"parent":4,"tag":"view","name":"view","class":"center","rect":[96,47,144,42],"style":{"display":"flex-column","position":4,"background":"#ffff0000"},"widgets":["box"]}
+    ]
+  ]
+}

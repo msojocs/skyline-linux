@@ -588,6 +588,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
                 FlushAppServicePage(holder, structural);
               }
             }
+            DumpLayoutSnapshot();
           },
           fml::TimeDelta::FromMilliseconds(delay_ms));
       std::fprintf(stderr,
@@ -780,6 +781,7 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
     SchedulePendingAnimatedStyles(holder);
     FlushAppServicePage(holder, structural);
   }
+  DumpLayoutSnapshot();
   std::fprintf(stderr,
                "[skyline-runtime] live ops: %u ops (first=%d structural=%d "
                "flush=%d route=%d pages=%d ctx=%llu appbar_ctx=%llu\n",

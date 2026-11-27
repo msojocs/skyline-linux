@@ -1,0 +1,14 @@
+{
+  "fixture": "appservice-pointer-events",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":5,"tag":"view","name":"view","rect":[0,0,320,100],"style":{"background":"#ffff0000"},"widgets":["box"]},
+      {"id":4,"parent":5,"tag":"view","name":"view","rect":[0,100,320,300],"style":{"background":"#ff00ff00"},"widgets":["box"]},
+      {"id":5,"parent":10,"tag":"view","name":"view","rect":[0,0,320,400]},
+      {"id":10,"parent":2,"tag":"empty","name":"scrollview","rect":[0,0,320,240],"widgets":["scroll"]},
+      {"id":20,"parent":2,"tag":"view","name":"view","rect":[0,0,20,120],"style":{"position":2,"background":"#ff0000ff"},"widgets":["box"]}
+    ]
+  ]
+}

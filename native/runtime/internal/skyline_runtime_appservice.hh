@@ -596,6 +596,7 @@ std::vector<std::string> SplitWhitespace(const std::string& value);
 void CacheImage(const std::string& key, const sk_sp<flutter::DlImage>& image);
 void EmitJsonEvent(const std::string& json);
 void PublishNodeRects();
+void DumpLayoutSnapshot();
 void ResetDeferredFixedNodes();
 
 }  // namespace appservice

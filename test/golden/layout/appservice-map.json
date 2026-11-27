@@ -1,0 +1,11 @@
+{
+  "fixture": "appservice-map",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,160]},
+      {"id":3,"parent":2,"tag":"empty","name":"map","class":"map","rect":[0,0,200,120]},
+      {"id":4,"parent":2,"tag":"empty","name":"view","class":"marker","rect":[0,120,40,40],"style":{"background":"#ffff3366"},"widgets":["box"]}
+    ]
+  ]
+}

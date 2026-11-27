@@ -1,0 +1,30 @@
+{
+  "fixture": "appservice-scroll-horizontal",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"scrollview","rect":[0,0,320,100],"widgets":["scroll"]},
+      {"id":4,"parent":3,"tag":"empty","name":"view","class":"item","rect":[0,0,70,90]},
+      {"id":5,"parent":4,"tag":"empty","name":"view","class":"swatch i0","rect":[10,0,50,70],"style":{"background":"#ffff0000"},"widgets":["box"]},
+      {"id":6,"parent":3,"tag":"empty","name":"view","class":"item","rect":[70,0,70,90]},
+      {"id":7,"parent":6,"tag":"empty","name":"view","class":"swatch i1","rect":[80,0,50,70],"style":{"background":"#ff00ff00"},"widgets":["box"]},
+      {"id":8,"parent":3,"tag":"empty","name":"view","class":"item","rect":[140,0,70,90]},
+      {"id":9,"parent":8,"tag":"empty","name":"view","class":"swatch i2","rect":[150,0,50,70],"style":{"background":"#ff0000ff"},"widgets":["box"]},
+      {"id":10,"parent":3,"tag":"empty","name":"view","class":"item","rect":[210,0,70,90]},
+      {"id":11,"parent":10,"tag":"empty","name":"view","class":"swatch i3","rect":[220,0,50,70],"style":{"background":"#ffffff00"},"widgets":["box"]},
+      {"id":12,"parent":3,"tag":"empty","name":"view","class":"item","rect":[280,0,70,90]},
+      {"id":13,"parent":12,"tag":"empty","name":"view","class":"swatch i4","rect":[290,0,50,70],"style":{"background":"#ffff00ff"},"widgets":["box"]},
+      {"id":14,"parent":3,"tag":"empty","name":"view","class":"item","rect":[350,0,70,90]},
+      {"id":15,"parent":14,"tag":"empty","name":"view","class":"swatch i5","rect":[360,0,50,70],"style":{"background":"#ff00ffff"},"widgets":["box"]},
+      {"id":16,"parent":3,"tag":"empty","name":"view","class":"item","rect":[420,0,70,90]},
+      {"id":17,"parent":16,"tag":"empty","name":"view","class":"swatch i6","rect":[430,0,50,70],"style":{"background":"#ff808080"},"widgets":["box"]},
+      {"id":18,"parent":3,"tag":"empty","name":"view","class":"item","rect":[490,0,70,90]},
+      {"id":19,"parent":18,"tag":"empty","name":"view","class":"swatch i7","rect":[500,0,50,70],"style":{"background":"#ff800000"},"widgets":["box"]},
+      {"id":20,"parent":3,"tag":"empty","name":"view","class":"item","rect":[560,0,70,90]},
+      {"id":21,"parent":20,"tag":"empty","name":"view","class":"swatch i8","rect":[570,0,50,70],"style":{"background":"#ff008000"},"widgets":["box"]},
+      {"id":22,"parent":3,"tag":"empty","name":"view","class":"item","rect":[630,0,70,90]},
+      {"id":23,"parent":22,"tag":"empty","name":"view","class":"swatch i9","rect":[640,0,50,70],"style":{"background":"#ff000080"},"widgets":["box"]}
+    ]
+  ]
+}

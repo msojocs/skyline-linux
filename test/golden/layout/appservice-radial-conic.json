@@ -1,0 +1,13 @@
+{
+  "fixture": "appservice-radial-conic",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,0]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"radial1","rect":[10,10,100,100],"style":{"position":1,"gradient":2},"widgets":["box"]},
+      {"id":4,"parent":2,"tag":"empty","name":"view","class":"radial2","rect":[130,10,100,100],"style":{"position":1,"gradient":2},"widgets":["box"]},
+      {"id":5,"parent":2,"tag":"empty","name":"view","class":"conic1","rect":[10,130,100,100],"style":{"position":1,"gradient":3},"widgets":["box"]},
+      {"id":6,"parent":2,"tag":"empty","name":"view","class":"conic2","rect":[130,130,100,100],"style":{"position":1,"gradient":3},"widgets":["box"]}
+    ]
+  ]
+}

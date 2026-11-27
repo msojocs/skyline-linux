@@ -1,0 +1,14 @@
+{
+  "fixture": "appservice-text-padding",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"tabs","rect":[0,0,320,40],"style":{"display":"flex-row","background":"#ffffffff"},"widgets":["box"]},
+      {"id":4,"parent":3,"tag":"text","name":"text","class":"tab","rect":[0,0,62,40],"style":{"display":"inline","background":"#ffeeeeee"},"widgets":["box","text"]},
+      {"id":5,"parent":4,"tag":"text","text":"课程","rect":[15,10,32,19.2]},
+      {"id":6,"parent":3,"tag":"text","name":"text","class":"tab","rect":[62,0,62,40],"style":{"display":"inline","background":"#ffeeeeee"},"widgets":["box","text"]},
+      {"id":7,"parent":6,"tag":"text","text":"评价","rect":[77,10,32,19.2]}
+    ]
+  ]
+}

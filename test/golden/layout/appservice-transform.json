@@ -1,0 +1,11 @@
+{
+  "fixture": "appservice-transform",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"tr","rect":[0,0,100,100],"style":{"background":"#ff00aa00","transform":true},"widgets":["box"]},
+      {"id":4,"parent":2,"tag":"empty","name":"view","class":"sc","rect":[0,100,100,100],"style":{"background":"#ff0000ff","transform":true},"widgets":["box"]}
+    ]
+  ]
+}

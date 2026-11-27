@@ -1,0 +1,23 @@
+{
+  "fixture": "appservice-text-update",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,24]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"label","rect":[0,0,320,24],"style":{"color":"#ffff0000","fontSize":20}},
+      {"id":4,"parent":3,"tag":"text","text":"Hello","rect":[0,0,320,24],"style":{"color":"#ffff0000","fontSize":20},"widgets":["text"]}
+    ],
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,24]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"label","rect":[0,0,320,24],"style":{"color":"#ffff0000","fontSize":20}},
+      {"id":4,"parent":3,"tag":"text","text":"Updated text","rect":[0,0,320,24],"style":{"color":"#ffff0000","fontSize":20},"widgets":["text"]}
+    ],
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,36]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"label","rect":[0,0,320,36],"style":{"color":"#ffff0000","fontSize":20}},
+      {"id":4,"parent":3,"tag":"text","text":"Updated text","rect":[0,0,320,36],"style":{"color":"#ff0000ff","fontSize":30},"widgets":["text"]}
+    ]
+  ]
+}

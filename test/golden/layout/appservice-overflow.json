@@ -1,0 +1,13 @@
+{
+  "fixture": "appservice-overflow",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"box","rect":[100,100,100,100],"style":{"position":1,"background":"#ff00aa00","clip":true},"widgets":["box","clip"]},
+      {"id":4,"parent":3,"tag":"empty","name":"view","class":"child","rect":[150,150,200,200],"style":{"position":1,"background":"#ffff0000"},"widgets":["box"]},
+      {"id":5,"parent":2,"tag":"empty","name":"view","class":"rounded","rect":[220,100,100,100],"style":{"position":1,"background":"#ff00aa00","clip":true},"widgets":["box","clip"]},
+      {"id":6,"parent":5,"tag":"empty","name":"view","class":"child2","rect":[200,80,140,140],"style":{"position":1,"background":"#ffff0000"},"widgets":["box"]}
+    ]
+  ]
+}

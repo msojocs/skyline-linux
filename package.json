@@ -25,6 +25,8 @@
     "test:page": "node --test native/test/skyline-page-smoke.test.js",
     "test:ops": "node tools/run-tests.js native/test/ops/*.test.js",
     "test:l5": "node --test native/test/l5-pixel-compare.test.js",
+    "test:golden": "node --test native/test/layout-golden.test.js",
+    "golden:update": "node tools/layout-golden.js --write",
     "l5:baseline": "node tools/l5-baseline.js --write",
     "l5:windows": "node tools/l5-windows.js --write",
     "l5:windows:reuse": "node tools/l5-windows.js --reuse --write",

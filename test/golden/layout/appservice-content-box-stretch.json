@@ -1,0 +1,13 @@
+{
+  "fixture": "appservice-content-box-stretch",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"wx-x","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"view","name":"view","class":"bar","rect":[0,0,320,40],"style":{"display":"flex-column"}},
+      {"id":4,"parent":3,"tag":"view","name":"view","class":"ic","rect":[0,0,180,40],"style":{"display":"flex-row"}},
+      {"id":5,"parent":4,"tag":"view","name":"view","class":"left","rect":[0,0,40,40],"style":{"background":"#ff000000"},"widgets":["box"]},
+      {"id":6,"parent":4,"tag":"view","name":"view","class":"c","rect":[40,0,60,40],"style":{"background":"#ffff0000"},"widgets":["box"]}
+    ]
+  ]
+}

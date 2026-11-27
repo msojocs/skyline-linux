@@ -1,0 +1,13 @@
+{
+  "fixture": "appservice-text-overflow",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,60]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"box","rect":[0,0,120,24],"style":{"background":"#ffffffff","clip":true},"widgets":["box","clip"]},
+      {"id":4,"parent":3,"tag":"text","text":"AAAA BBBB CCCC DDDD EEEE FFFF","rect":[0,0,120,19.2],"widgets":["text"]},
+      {"id":5,"parent":2,"tag":"empty","name":"view","class":"box clip","rect":[0,30,120,24],"style":{"background":"#ffffffff","clip":true},"widgets":["box","clip"]},
+      {"id":6,"parent":5,"tag":"text","text":"AAAA BBBB CCCC DDDD EEEE FFFF","rect":[0,30,120,19.2],"widgets":["text"]}
+    ]
+  ]
+}

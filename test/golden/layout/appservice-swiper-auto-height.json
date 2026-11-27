@@ -1,0 +1,15 @@
+{
+  "fixture": "appservice-swiper-auto-height",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"display":"flex-column","background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"main","rect":[0,0,320,240],"style":{"display":"flex-row","background":"#ff00ff00"},"widgets":["box"]},
+      {"id":4,"parent":3,"tag":"empty","name":"swiper","class":"sw","rect":[0,0,320,240],"style":{"background":"#ffff0000","clip":true},"widgets":["box","clip","swiper"]},
+      {"id":5,"parent":4,"tag":"empty","name":"swiper-item","rect":[0,0,320,240]},
+      {"id":6,"parent":5,"tag":"empty","name":"view","class":"cell","rect":[0,0,320,60],"style":{"background":"#ff0000ff"},"widgets":["box"]},
+      {"id":7,"parent":4,"tag":"empty","name":"swiper-item","rect":[320,0,320,240]},
+      {"id":8,"parent":7,"tag":"empty","name":"view","class":"cell","rect":[320,0,320,60],"style":{"background":"#ff0000ff"},"widgets":["box"]}
+    ]
+  ]
+}

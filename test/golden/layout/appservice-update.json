@@ -1,0 +1,31 @@
+{
+  "fixture": "appservice-update",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,160]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"s red","rect":[0,0,320,80],"style":{"background":"#ffff3366"},"widgets":["box"]},
+      {"id":4,"parent":2,"tag":"empty","name":"view","class":"s green","rect":[0,80,320,80],"style":{"background":"#ff33cc66"},"widgets":["box"]}
+    ],
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,160]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"s red","rect":[0,0,320,80],"style":{"background":"#ff000000"},"widgets":["box"]},
+      {"id":4,"parent":2,"tag":"empty","name":"view","class":"s green","rect":[0,80,320,80],"style":{"background":"#ff33cc66"},"widgets":["box"]}
+    ],
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,240]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"s red","rect":[0,0,320,80],"style":{"background":"#ff000000"},"widgets":["box"]},
+      {"id":4,"parent":2,"tag":"empty","name":"view","class":"s green","rect":[0,80,320,80],"style":{"background":"#ff33cc66"},"widgets":["box"]},
+      {"id":6,"parent":2,"tag":"empty","name":"view","rect":[0,160,320,80],"style":{"background":"#ff3366ff"},"widgets":["box"]}
+    ],
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,160]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"s red","rect":[0,0,320,80],"style":{"background":"#ff000000"},"widgets":["box"]},
+      {"id":4,"parent":0,"tag":"empty","name":"view","class":"s green","rect":[0,80,320,80],"style":{"background":"#ff33cc66"}},
+      {"id":6,"parent":2,"tag":"empty","name":"view","rect":[0,80,320,80],"style":{"background":"#ff3366ff"},"widgets":["box"]}
+    ]
+  ]
+}

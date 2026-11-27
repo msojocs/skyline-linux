@@ -1,0 +1,16 @@
+{
+  "fixture": "appservice-align-gap",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"row","rect":[0,0,320,100],"style":{"position":1}},
+      {"id":4,"parent":3,"tag":"empty","name":"view","class":"a","rect":[0,0,50,50],"style":{"background":"#ffff0000"},"widgets":["box"]},
+      {"id":5,"parent":3,"tag":"empty","name":"view","class":"b","rect":[70,25,50,50],"style":{"background":"#ff00aa00"},"widgets":["box"]},
+      {"id":6,"parent":3,"tag":"empty","name":"view","class":"c","rect":[140,50,50,50],"style":{"background":"#ff0000ff"},"widgets":["box"]},
+      {"id":7,"parent":2,"tag":"empty","name":"view","class":"col","rect":[0,120,80,110],"style":{"position":1}},
+      {"id":8,"parent":7,"tag":"empty","name":"view","class":"d","rect":[0,120,40,30],"style":{"background":"#ffffff00"},"widgets":["box"]},
+      {"id":9,"parent":7,"tag":"empty","name":"view","class":"e","rect":[0,180,40,30],"style":{"background":"#ff00ffff"},"widgets":["box"]}
+    ]
+  ]
+}

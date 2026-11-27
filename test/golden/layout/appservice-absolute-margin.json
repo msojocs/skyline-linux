@@ -1,0 +1,15 @@
+{
+  "fixture": "appservice-absolute-margin",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"tabs","rect":[0,0,320,200],"style":{"position":4,"background":"#ffffffff"},"widgets":["box"]},
+      {"id":4,"parent":3,"tag":"empty","name":"view","class":"indicator","rect":[21,198,20,2],"style":{"position":1,"background":"#ffffa500"},"widgets":["box"]},
+      {"id":5,"parent":3,"tag":"empty","name":"view","class":"right-box","rect":[300,100,30,8],"style":{"position":1,"background":"#ff0000ff"},"widgets":["box"]},
+      {"id":6,"parent":3,"tag":"empty","name":"view","class":"stretch-box","rect":[15,120,290,8],"style":{"position":1,"background":"#ff00aa00"},"widgets":["box"]},
+      {"id":7,"parent":3,"tag":"empty","name":"view","class":"static-box","rect":[40,30,12,12],"style":{"position":1,"background":"#ffff00ff"},"widgets":["box"]},
+      {"id":8,"parent":3,"tag":"empty","name":"view","class":"bottom-box","rect":[120,190,20,20],"style":{"position":1,"background":"#ff00ffff"},"widgets":["box"]}
+    ]
+  ]
+}

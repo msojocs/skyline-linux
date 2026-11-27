@@ -1,0 +1,10 @@
+{
+  "fixture": "appservice-transition",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"box","rect":[0,0,160,160],"style":{"position":1,"background":"#ffff0000"},"widgets":["box","opacity"]}
+    ]
+  ]
+}

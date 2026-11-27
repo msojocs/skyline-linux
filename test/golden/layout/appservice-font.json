@@ -1,0 +1,11 @@
+{
+  "fixture": "appservice-font",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,24]},
+      {"id":3,"parent":2,"tag":"empty","name":"view","class":"t","rect":[0,0,320,24],"style":{"fontSize":20}},
+      {"id":4,"parent":3,"tag":"text","text":"Font channel","rect":[0,0,320,24],"style":{"fontSize":20},"widgets":["text"]}
+    ]
+  ]
+}

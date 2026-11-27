@@ -1,0 +1,16 @@
+{
+  "fixture": "appservice-style-scope",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"wx-x","name":"page","class":"page","rect":[0,0,320,240],"style":{"background":"#ffffffff"},"widgets":["box"]},
+      {"id":3,"parent":2,"tag":"view","name":"view","class":"title","rect":[0,16,320,24],"style":{"fontSize":20,"fontWeight":5}},
+      {"id":4,"parent":3,"tag":"text","text":"课程","rect":[0,16,320,24],"style":{"fontSize":20,"fontWeight":5},"widgets":["text"]},
+      {"id":5,"parent":2,"tag":"view","name":"view","class":"box","rect":[0,40,320,50],"style":{"background":"#ffff0000"},"widgets":["box"]},
+      {"id":6,"parent":8,"tag":"view","name":"view","class":"title","rect":[10,90,260,40]},
+      {"id":7,"parent":6,"tag":"text","text":"A","rect":[10,90,260,19.2],"widgets":["text"]},
+      {"id":8,"parent":2,"tag":"view","name":"view","class":"row","rect":[0,90,320,40],"style":{"display":"flex-row","background":"#ffffffff"},"widgets":["box"]},
+      {"id":9,"parent":8,"tag":"view","name":"view","class":"side","rect":[270,90,50,40],"style":{"background":"#ff00aa00"},"widgets":["box"]}
+    ]
+  ]
+}

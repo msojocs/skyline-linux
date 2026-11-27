@@ -1,0 +1,15 @@
+{
+  "fixture": "appservice-scroll",
+  "snapshots": [
+    [
+      {"id":1,"parent":0,"tag":"empty","name":"body","rect":[0,0,320,240]},
+      {"id":2,"parent":1,"tag":"empty","name":"page","rect":[0,0,320,120]},
+      {"id":3,"parent":2,"tag":"empty","name":"scrollview","rect":[0,0,320,120],"widgets":["scroll"]},
+      {"id":4,"parent":3,"tag":"empty","name":"view","class":"content","rect":[0,0,320,400]},
+      {"id":5,"parent":4,"tag":"empty","name":"view","class":"stripe s0","rect":[0,0,320,100],"style":{"background":"#ffff0000"},"widgets":["box"]},
+      {"id":6,"parent":4,"tag":"empty","name":"view","class":"stripe s1","rect":[0,100,320,100],"style":{"background":"#ff00ff00"},"widgets":["box"]},
+      {"id":7,"parent":4,"tag":"empty","name":"view","class":"stripe s2","rect":[0,200,320,100],"style":{"background":"#ff0000ff"},"widgets":["box"]},
+      {"id":8,"parent":4,"tag":"empty","name":"view","class":"stripe s3","rect":[0,300,320,100],"style":{"background":"#ffffff00"},"widgets":["box"]}
+    ]
+  ]
+}
