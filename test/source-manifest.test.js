@@ -41,3 +41,12 @@ test('bootstrap manifest: concatenation keeps the single-IIFE invariants', () =>
   assert.equal(source.includes('module.exports'), false,
     'the bootstrap still has no module references');
 });
+
+test('bootstrap manifest: the concatenated script compiles', () => {
+  // A syntax error would otherwise only show up when skyline.node is loaded
+  // (napi_run_script); compiling does not run the script.
+  const vm = require('node:vm');
+  assert.doesNotThrow(
+    () => new vm.Script(loadBootstrapSource(), { filename: 'skyline-bootstrap.js' }),
+    'native/src/bootstrap parts do not compile as one script');
+});
