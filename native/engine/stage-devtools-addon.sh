@@ -205,7 +205,7 @@ cp -a "$assets" "$bundle_dir/flutter_assets"
 cp -f "$engine_icu" "$bundle_dir/icudtl.dat"
 if [ "$engine_mode" = release ]; then
   # A release engine cannot read a JIT kernel.  Its presence would also make
-  # host_engine.cc pick the kernel path, so keep only the AOT snapshot.
+  # flutter_window_backend.cc pick the kernel path, so keep only the AOT snapshot.
   rm -f "$bundle_dir/flutter_assets/kernel_blob.bin"
   cp -f "$aot_library" "$bundle_dir/libapp.so"
 else

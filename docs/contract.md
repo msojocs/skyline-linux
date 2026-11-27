@@ -95,7 +95,7 @@ shell.onWindowRasterized(windowId, cb);         // 必须在 createWindow 之后
 `flutter_assets/kernel_blob.bin`；release 引擎使用 `bundle/libapp.so`，通过
 `FlutterEngineCreateAOTData` + `FlutterProjectArgs.aot_data` 加载。
 
-阶段 2 的 Linux 引擎后端（`native/host/host_engine.cc`）接受两种帧目标：
+阶段 2 的 Linux 引擎后端（`native/host/flutter_window_backend.cc`）接受两种帧目标：
 
 - 6 号参数为 `ArrayBuffer` / typed array：其内存直接作为数据区
   （`frameId/frameSize/RGBA8`），适合 Linux `setMemory` 返回的数据视图；

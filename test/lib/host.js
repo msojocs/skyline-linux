@@ -27,6 +27,7 @@ const paths = {
   },
   // Standalone libskyline.so (Dart API DL only), built by CMake.
   stubRuntime: path.join(repoRoot, 'native', 'build', 'libskyline.so'),
+  addon: mode => path.join(repoRoot, 'native', mode === 'release' ? 'build-release' : 'build', 'skyline.node'),
   skylineAssets: path.join(skylineBuild, 'flutter_assets'),
   skylineKernel: path.join(skylineBuild, 'flutter_assets', 'kernel_blob.bin'),
   skylineAot: path.join(skylineBuild, 'libapp.so'),
@@ -48,6 +49,7 @@ const PREREQUISITES = {
   'skyline-kernel': () => [paths.skylineKernel, 'npm run kernel:skyline'],
   'skyline-aot': () => [paths.skylineAot, 'npm run devtools:aot'],
   'stub-runtime': () => [paths.stubRuntime, 'npm run native:build'],
+  'addon-debug': () => [paths.addon('debug'), 'npm run native:build'],
   'empty-page-kernel': () => [paths.appKernel('empty-page'), 'npm run app:build'],
   'empty-page-aot': () => [paths.appAot('empty-page'), 'npm run app:aot'],
   'ui-compat-kernel': () => [paths.appKernel('dart-ui-compat-smoke'), 'npm run smoke:build'],

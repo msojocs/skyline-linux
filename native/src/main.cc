@@ -1,10 +1,15 @@
+// skyline.node: the N-API module the WeChat DevTools loads as the Skyline
+// addon.  Loading it runs the bootstrap (src/bootstrap, which defines
+// SkylineShell and friends) against the `native.*` bindings below; window
+// lifecycle, input and frames go through the WindowBackend, everything else
+// calls the embedded runtime (skyline/runtime_api.h) directly.
+
 #include <node_api.h>
 
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -14,79 +19,39 @@
 #include <unistd.h>
 
 #include "bootstrap_js.h"
-#include "engine.hh"
+#include "napi_binding.hh"
+#include "window_backend.hh"
 #ifdef SKYLINE_HAVE_ENGINE
-#include "host_engine.hh"
+#include "flutter_window_backend.hh"
+#else
+// No engine and therefore no runtime is linked: the calls below stay
+// type-checked but are never made, and the weak references stay null.
+#define SKYLINE_RUNTIME_API_WEAK
+#endif
 #include "skyline/runtime_api.h"
+
+// RUNTIME(call) calls into the embedded runtime; RUNTIME_OR(call, fallback)
+// yields `fallback` when skyline.node is built without an engine.
+#ifdef SKYLINE_HAVE_ENGINE
+#define RUNTIME(call) (call)
+#define RUNTIME_OR(call, fallback) (call)
+#else
+#define RUNTIME(call) (false ? (call) : void())
+#define RUNTIME_OR(call, fallback) (false ? (call) : (fallback))
 #endif
 
 namespace {
 
+using skyline::napi::Args;
+using skyline::napi::Binding;
+using skyline::napi::Error;
+using skyline::napi::NewObject;
+using skyline::napi::SetNumber;
+using skyline::napi::ThreadsafeSink;
+
 void AddonLog(const char* format, ...);
 
-napi_value Undefined(napi_env env) {
-  napi_value value = nullptr;
-  napi_get_undefined(env, &value);
-  return value;
-}
-
-napi_value Throw(napi_env env, napi_status status, const char* message) {
-  (void)status;
-  napi_throw_error(env, nullptr, message);
-  return nullptr;
-}
-
-std::string ReadString(napi_env env, napi_value value) {
-  size_t length = 0;
-  if (napi_get_value_string_utf8(env, value, nullptr, 0, &length) != napi_ok) {
-    return {};
-  }
-  std::string result(length, '\0');
-  size_t copied = 0;
-  napi_get_value_string_utf8(env, value, result.data(), length + 1, &copied);
-  result.resize(copied);
-  return result;
-}
-
-double ReadNumber(napi_env env, napi_value value, double fallback = 0.0) {
-  double number = fallback;
-  if (napi_get_value_double(env, value, &number) != napi_ok) return fallback;
-  return number;
-}
-
-bool ReadBool(napi_env env, napi_value value, bool fallback = false) {
-  bool result = fallback;
-  if (napi_get_value_bool(env, value, &result) != napi_ok) return fallback;
-  return result;
-}
-
-bool IsType(napi_env env, napi_value value, napi_valuetype expected) {
-  napi_valuetype actual = napi_undefined;
-  if (napi_typeof(env, value, &actual) != napi_ok) return false;
-  return actual == expected;
-}
-
-struct AddonState {
-  napi_env env = nullptr;
-  std::map<std::string, napi_ref> callbacks;
-  std::map<double, napi_threadsafe_function> frame_tsfns;
-  std::unique_ptr<skyline::Engine> engine;
-};
-
-// The runtime reports scroll events from the engine UI thread; hand them to
-// the appservice JS thread through a threadsafe function installed by the
-// bootstrap (`native.setScrollSink`).
-std::atomic<napi_threadsafe_function> g_scroll_tsfn{nullptr};
-std::atomic<napi_threadsafe_function> g_widget_tsfn{nullptr};
-std::atomic<napi_threadsafe_function> g_json_tsfn{nullptr};
-std::atomic<napi_threadsafe_function> g_http_request_tsfn{nullptr};
-// Set when the DevTools pageframe registers SkylineShell.setHttpRequestCallback.
-std::atomic<bool> g_http_request_callback_registered{false};
-
-struct HttpRequestEvent {
-  uint32_t request_id = 0;
-  std::string url;
-};
+// -- Events delivered to the bootstrap ------------------------------------------
 
 struct ScrollEvent {
   uint32_t node_id = 0;
@@ -113,145 +78,182 @@ struct JsonEvent {
   std::string json;
 };
 
-AddonState* State(napi_env env) {
-  void* data = nullptr;
-  if (napi_get_instance_data(env, &data) != napi_ok) return nullptr;
-  return static_cast<AddonState*>(data);
+struct HttpRequestEvent {
+  uint32_t request_id = 0;
+  std::string url;
+};
+
+struct FrameEvent {
+  double window_id = 0.0;
+};
+
+// The event object the bootstrap turns into `bindscroll` / worklet callbacks.
+napi_value ScrollEventToJs(napi_env env, const ScrollEvent& event) {
+  napi_value object = NewObject(env);
+  SetNumber(env, object, "nodeId", static_cast<double>(event.node_id));
+  SetNumber(env, object, "phase", static_cast<double>(event.phase));
+  SetNumber(env, object, "scrollTop", event.scroll_top);
+  SetNumber(env, object, "scrollLeft", event.scroll_left);
+  SetNumber(env, object, "scrollWidth", event.scroll_width);
+  SetNumber(env, object, "scrollHeight", event.scroll_height);
+  SetNumber(env, object, "deltaX", event.delta_x);
+  SetNumber(env, object, "deltaY", event.delta_y);
+  SetNumber(env, object, "boundaryVelocity", event.boundary_velocity);
+  skyline::napi::SetBool(env, object, "isDrag", event.is_drag);
+  const char* kind = event.phase == SKYLINE_SCROLL_PHASE_START ? "scrollStart"
+                     : event.phase == SKYLINE_SCROLL_PHASE_END ? "scrollEnd"
+                                                               : "scroll";
+  skyline::napi::SetString(env, object, "kind", kind);
+  return object;
 }
 
+// Routed by the bootstrap to the builtin swiper / picker-view mirror.
+napi_value WidgetEventToJs(napi_env env, const WidgetEvent& event) {
+  napi_value object = NewObject(env);
+  SetNumber(env, object, "nodeId", static_cast<double>(event.node_id));
+  SetNumber(env, object, "kind", static_cast<double>(event.kind));
+  SetNumber(env, object, "value", event.value);
+  SetNumber(env, object, "extra", event.extra);
+  SetNumber(env, object, "flag", static_cast<double>(event.flag));
+  return object;
+}
+
+napi_value JsonEventToJs(napi_env env, const JsonEvent& event) {
+  napi_value json = nullptr;
+  skyline::napi::Check(napi_create_string_utf8(env, event.json.c_str(),
+                                               NAPI_AUTO_LENGTH, &json),
+                       "napi_create_string_utf8");
+  return json;
+}
+
+napi_value HttpRequestToJs(napi_env env, const HttpRequestEvent& event) {
+  napi_value object = NewObject(env);
+  napi_value request_id = nullptr;
+  skyline::napi::Check(napi_create_uint32(env, event.request_id, &request_id),
+                       "napi_create_uint32");
+  skyline::napi::Check(
+      napi_set_named_property(env, object, "requestId", request_id),
+      "napi_set_named_property");
+  skyline::napi::SetString(env, object, "url", event.url.c_str());
+  return object;
+}
+
+// The DevTools waits for `{window_id}` to forward SKYLINE_WINDOW_RASTERIZED to
+// the pageframe; a bare invocation makes `e.window_id` throw and the
+// pageframe never pulls the new frame.
+napi_value FrameEventToJs(napi_env env, const FrameEvent& event) {
+  napi_value object = NewObject(env);
+  SetNumber(env, object, "window_id", event.window_id);
+  return object;
+}
+
+using ScrollSink = ThreadsafeSink<ScrollEvent, &ScrollEventToJs>;
+using WidgetSink = ThreadsafeSink<WidgetEvent, &WidgetEventToJs>;
+using JsonSink = ThreadsafeSink<JsonEvent, &JsonEventToJs>;
+using HttpRequestSink = ThreadsafeSink<HttpRequestEvent, &HttpRequestToJs>;
+using FrameSink = ThreadsafeSink<FrameEvent, &FrameEventToJs>;
+
+// The runtime's sinks are plain function pointers, so their JS ends are
+// process-wide.  They never keep the Node loop alive: tests load the addon,
+// create a window and expect the loop to drain.  Never destroyed, so engine
+// threads cannot outlive them.
+ScrollSink& ScrollEvents() {
+  static auto* sink = new ScrollSink("skyline_scroll", "scroll event", 32, false);
+  return *sink;
+}
+WidgetSink& WidgetEvents() {
+  static auto* sink = new WidgetSink("skyline_widget", "widget event", 32, false);
+  return *sink;
+}
+JsonSink& JsonEvents() {
+  static auto* sink = new JsonSink("skyline_json_event", "JSON event", 64, false);
+  return *sink;
+}
+HttpRequestSink& HttpRequests() {
+  static auto* sink =
+      new HttpRequestSink("skyline_http_request", "HTTP request", 32, false);
+  return *sink;
+}
+
+// Set when the DevTools pageframe registers SkylineShell.setHttpRequestCallback.
+std::atomic<bool> g_http_request_callback_registered{false};
+
+// Engine UI thread: only queue; the JS thread builds the event objects.
+void OnScrollEvent(uint32_t node_id, int32_t phase, double scroll_top,
+                   double scroll_left, double scroll_width,
+                   double scroll_height, double delta_x, double delta_y,
+                   uint8_t is_drag, double boundary_velocity) {
+  ScrollEvents().Post(ScrollEvent{node_id, phase, scroll_top, scroll_left,
+                                  scroll_width, scroll_height, delta_x,
+                                  delta_y, is_drag != 0, boundary_velocity});
+}
+
+void OnWidgetEvent(uint32_t node_id, int32_t kind, double value, double extra,
+                   uint8_t flag) {
+  WidgetEvents().Post(WidgetEvent{node_id, kind, value, extra, flag});
+}
+
+void OnJsonEvent(const char* json) {
+  if (json != nullptr) JsonEvents().Post(JsonEvent{json});
+}
+
+void OnHttpRequest(uint32_t request_id, const char* url) {
+  HttpRequests().Post(HttpRequestEvent{request_id, url != nullptr ? url : ""});
+}
+
+int32_t HasHttpRequestCallback() {
+  return g_http_request_callback_registered.load() ? 1 : 0;
+}
+
+// -- Module state ------------------------------------------------------------------
+
+struct AddonState {
+  std::unique_ptr<skyline::WindowBackend> backend;
+  // One rasterized-callback sink per window.  A present that started before
+  // a replacement may still post to the old sink, so the backend callback
+  // holds its own reference and a replaced sink is closed, not just dropped.
+  std::map<double, std::shared_ptr<FrameSink>> frame_sinks;
+};
+
+AddonState& State(napi_env env) {
+  void* data = nullptr;
+  if (napi_get_instance_data(env, &data) != napi_ok || data == nullptr) {
+    throw Error("Addon state is unavailable");
+  }
+  return *static_cast<AddonState*>(data);
+}
+
+// Environment teardown: no event may reach the JS thread afterwards.
 void CleanupCallbacks(void* argument) {
   auto* state = static_cast<AddonState*>(argument);
-  if (!state) return;
+  if (state == nullptr) return;
   // Stop engine threads before the environment and shared-memory views go
   // away; DestroyWindow joins each window's platform thread.
-  state->engine.reset();
-  // No scroll events may reach the JS thread while the environment is torn
-  // down.  Clear the runtime sink first, then release the queue.
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSetScrollEventSink(nullptr);
-  SkylineSetWidgetEventSink(nullptr);
-  SkylineSetJsonEventSink(nullptr);
-#endif
-  napi_threadsafe_function scroll_tsfn = g_scroll_tsfn.exchange(nullptr);
-  if (scroll_tsfn != nullptr) {
-    napi_release_threadsafe_function(scroll_tsfn, napi_tsfn_abort);
-  }
-  napi_threadsafe_function widget_tsfn = g_widget_tsfn.exchange(nullptr);
-  if (widget_tsfn != nullptr) {
-    napi_release_threadsafe_function(widget_tsfn, napi_tsfn_abort);
-  }
-  napi_threadsafe_function json_tsfn = g_json_tsfn.exchange(nullptr);
-  if (json_tsfn != nullptr) {
-    napi_release_threadsafe_function(json_tsfn, napi_tsfn_abort);
-  }
-  for (auto& [window_id, tsfn] : state->frame_tsfns) {
+  state->backend.reset();
+  RUNTIME(SkylineSetScrollEventSink(nullptr));
+  RUNTIME(SkylineSetWidgetEventSink(nullptr));
+  RUNTIME(SkylineSetJsonEventSink(nullptr));
+  RUNTIME(SkylineSetHttpRequestSink(nullptr, nullptr));
+  ScrollEvents().Close(napi_tsfn_abort);
+  WidgetEvents().Close(napi_tsfn_abort);
+  JsonEvents().Close(napi_tsfn_abort);
+  HttpRequests().Close(napi_tsfn_abort);
+  for (auto& [window_id, sink] : state->frame_sinks) {
     (void)window_id;
-    if (tsfn) napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
+    sink->Close(napi_tsfn_abort);
   }
-  state->frame_tsfns.clear();
-  for (auto& [name, reference] : state->callbacks) {
-    (void)name;
-    if (reference) napi_delete_reference(state->env, reference);
-  }
-  state->callbacks.clear();
+  state->frame_sinks.clear();
 }
 
-void FinalizeState(napi_env env, void* data, void* hint) {
-  (void)env;
-  (void)hint;
+void FinalizeState(napi_env /*env*/, void* data, void* /*hint*/) {
   auto* state = static_cast<AddonState*>(data);
-  if (!state) return;
+  if (state == nullptr) return;
   // Window threads must be joined before the module state disappears.
-  state->engine.reset();
+  state->backend.reset();
   delete state;
 }
 
-napi_value SetCallback(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2) return Throw(env, napi_invalid_arg, "Missing callback arguments");
-  if (!IsType(env, argv[1], napi_function)) {
-    return Throw(env, napi_invalid_arg, "Callback must be a function");
-  }
-  const std::string name = ReadString(env, argv[0]);
-  auto* state = State(env);
-  if (!state) return Throw(env, napi_generic_failure, "Addon state is unavailable");
-  auto existing = state->callbacks.find(name);
-  if (existing != state->callbacks.end()) {
-    napi_delete_reference(env, existing->second);
-    state->callbacks.erase(existing);
-  }
-  napi_ref reference = nullptr;
-  if (napi_create_reference(env, argv[1], 1, &reference) != napi_ok) {
-    return Throw(env, napi_generic_failure, "Unable to retain callback");
-  }
-  state->callbacks[name] = reference;
-  if (name == "setHttpRequestCallback") {
-    g_http_request_callback_registered.store(true);
-  }
-  return Undefined(env);
-}
-
-size_t TypedArrayElementSize(napi_typedarray_type type) {
-  switch (type) {
-    case napi_int8_array:
-    case napi_uint8_array:
-    case napi_uint8_clamped_array:
-      return 1;
-    case napi_int16_array:
-    case napi_uint16_array:
-      return 2;
-    case napi_int32_array:
-    case napi_uint32_array:
-    case napi_float32_array:
-      return 4;
-    case napi_float64_array:
-    case napi_bigint64_array:
-    case napi_biguint64_array:
-      return 8;
-    default:
-      return 1;
-  }
-}
-
-// Returns the backing memory of an ArrayBuffer or typed-array view.  The
-// pointer stays valid while the caller keeps the JS object alive.
-bool ReadBufferView(napi_env env, napi_value value, void** data,
-                    size_t* byte_length) {
-  bool is_typed_array = false;
-  if (napi_is_typedarray(env, value, &is_typed_array) == napi_ok &&
-      is_typed_array) {
-    napi_typedarray_type type = napi_uint8_array;
-    size_t length = 0;
-    void* elements = nullptr;
-    napi_value array_buffer = nullptr;
-    size_t byte_offset = 0;
-    if (napi_get_typedarray_info(env, value, &type, &length, &elements,
-                                 &array_buffer, &byte_offset) != napi_ok ||
-        elements == nullptr) {
-      return false;
-    }
-    *data = elements;
-    *byte_length = length * TypedArrayElementSize(type);
-    return true;
-  }
-  bool is_array_buffer = false;
-  if (napi_is_arraybuffer(env, value, &is_array_buffer) == napi_ok &&
-      is_array_buffer) {
-    void* buffer_data = nullptr;
-    size_t length = 0;
-    if (napi_get_arraybuffer_info(env, value, &buffer_data, &length) !=
-            napi_ok ||
-        buffer_data == nullptr) {
-      return false;
-    }
-    *data = buffer_data;
-    *byte_length = length;
-    return true;
-  }
-  return false;
-}
+// -- Windows -----------------------------------------------------------------------
 
 // The official Windows ABI passes a 16-byte handle (LE64 pointer, LE64 size)
 // for Boost shared memory.  On Linux the same field is accepted when it points
@@ -263,22 +265,18 @@ bool ReadSharedMemoryHandle(napi_env env, napi_value value, void** data,
       !is_typed_array) {
     return false;
   }
-  napi_typedarray_type type = napi_uint8_array;
+  void* bytes = nullptr;
   size_t length = 0;
-  void* elements = nullptr;
-  napi_value array_buffer = nullptr;
-  size_t byte_offset = 0;
-  if (napi_get_typedarray_info(env, value, &type, &length, &elements,
-                               &array_buffer, &byte_offset) != napi_ok ||
-      elements == nullptr || length * TypedArrayElementSize(type) != 16) {
+  if (!skyline::napi::ReadBufferView(env, value, &bytes, &length) ||
+      length != 16) {
     return false;
   }
-  const auto* bytes = static_cast<const uint8_t*>(elements);
+  const auto* raw = static_cast<const uint8_t*>(bytes);
   uint64_t pointer = 0;
   uint64_t size = 0;
   for (int i = 0; i < 8; ++i) {
-    pointer |= static_cast<uint64_t>(bytes[i]) << (i * 8);
-    size |= static_cast<uint64_t>(bytes[8 + i]) << (i * 8);
+    pointer |= static_cast<uint64_t>(raw[i]) << (i * 8);
+    size |= static_cast<uint64_t>(raw[8 + i]) << (i * 8);
   }
   if (pointer == 0 || size < 8) return false;
   *data = reinterpret_cast<void*>(static_cast<uintptr_t>(pointer));
@@ -286,51 +284,58 @@ bool ReadSharedMemoryHandle(napi_env env, napi_value value, void** data,
   return true;
 }
 
+// The bootstrap passes the SkylineShell.createWindow arguments as one array.
 skyline::CreateWindowArgs ParseCreateWindow(napi_env env, napi_value array) {
-  skyline::CreateWindowArgs args;
-  napi_value value = nullptr;
-  if (napi_get_element(env, array, 0, &value) == napi_ok && IsType(env, value, napi_number)) {
-    args.window_id = ReadNumber(env, value);
-  }
-  if (napi_get_element(env, array, 1, &value) == napi_ok && IsType(env, value, napi_string)) {
-    args.bundle_path = ReadString(env, value);
-  }
-  if (napi_get_element(env, array, 2, &value) == napi_ok && IsType(env, value, napi_number)) {
-    args.width = ReadNumber(env, value);
-  }
-  if (napi_get_element(env, array, 3, &value) == napi_ok && IsType(env, value, napi_number)) {
-    args.height = ReadNumber(env, value);
-  }
-  if (napi_get_element(env, array, 4, &value) == napi_ok && IsType(env, value, napi_number)) {
-    args.device_pixel_ratio = ReadNumber(env, value);
-  }
-  if (napi_get_element(env, array, 5, &value) == napi_ok && IsType(env, value, napi_boolean)) {
-    args.hide_window = ReadBool(env, value);
-  }
-  if (napi_get_element(env, array, 7, &value) == napi_ok && IsType(env, value, napi_string)) {
-    args.skyline_addon_path = ReadString(env, value);
-  }
-  // 6th argument: Linux shared-memory data area (ArrayBuffer / typed array).
-  if (napi_get_element(env, array, 6, &value) == napi_ok && value != nullptr) {
-    void* data = nullptr;
-    size_t length = 0;
-    if (ReadBufferView(env, value, &data, &length)) {
-      args.frame_buffer = data;
-      args.frame_buffer_size = length;
+  napi_value items[9] = {};
+  for (uint32_t i = 0; i < 9; ++i) {
+    if (napi_get_element(env, array, i, &items[i]) != napi_ok) {
+      items[i] = nullptr;
     }
+  }
+  auto is = [env](napi_value value, napi_valuetype type) {
+    napi_valuetype actual = napi_undefined;
+    return value != nullptr && napi_typeof(env, value, &actual) == napi_ok &&
+           actual == type;
+  };
+  auto number = [env](napi_value value) {
+    double result = 0.0;
+    napi_get_value_double(env, value, &result);
+    return result;
+  };
+  skyline::CreateWindowArgs args;
+  if (is(items[0], napi_number)) args.window_id = number(items[0]);
+  if (is(items[1], napi_string)) {
+    args.bundle_path = skyline::napi::ToString(env, items[1]);
+  }
+  if (is(items[2], napi_number)) args.width = number(items[2]);
+  if (is(items[3], napi_number)) args.height = number(items[3]);
+  if (is(items[4], napi_number)) args.device_pixel_ratio = number(items[4]);
+  if (is(items[5], napi_boolean)) {
+    bool hide = false;
+    napi_get_value_bool(env, items[5], &hide);
+    args.hide_window = hide;
+  }
+  if (is(items[7], napi_string)) {
+    args.skyline_addon_path = skyline::napi::ToString(env, items[7]);
+  }
+  void* data = nullptr;
+  size_t length = 0;
+  // 6th argument: Linux shared-memory data area (ArrayBuffer / typed array).
+  if (items[6] != nullptr &&
+      skyline::napi::ReadBufferView(env, items[6], &data, &length)) {
+    args.frame_buffer = data;
+    args.frame_buffer_size = length;
   }
   // 9th argument: Windows 16-byte descriptor, or the live Linux ArrayBuffer
   // that the DevTools' sharedMemory.setMemory() returns.  A descriptor that
   // does not decode is ignored; a live view is only used when the 6th argument
   // did not already provide the frame buffer.
-  if (napi_get_element(env, array, 8, &value) == napi_ok && value != nullptr) {
-    void* data = nullptr;
-    size_t length = 0;
-    if (ReadSharedMemoryHandle(env, value, &data, &length)) {
+  if (items[8] != nullptr) {
+    if (ReadSharedMemoryHandle(env, items[8], &data, &length)) {
       args.frame_buffer = data;
       args.frame_buffer_size = length;
     } else if (args.frame_buffer == nullptr &&
-               ReadBufferView(env, value, &data, &length)) {
+               skyline::napi::ReadBufferView(env, items[8], &data, &length)) {
       args.frame_buffer = data;
       args.frame_buffer_size = length;
     }
@@ -338,1074 +343,499 @@ skyline::CreateWindowArgs ParseCreateWindow(napi_env env, napi_value array) {
   return args;
 }
 
-napi_value CreateWindow(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 1 || !IsType(env, argv[0], napi_object)) {
-    return Throw(env, napi_invalid_arg, "createWindow expects an arguments array");
+napi_value CreateWindow(const Args& args) {
+  if (!args.Is(0, napi_object)) {
+    throw Error("createWindow expects an arguments array");
   }
-  auto* state = State(env);
-  if (!state || !state->engine) {
-    return Throw(env, napi_generic_failure, "Skyline engine is unavailable");
-  }
-  try {
-    const skyline::CreateWindowArgs args = ParseCreateWindow(env, argv[0]);
-    AddonLog("createWindow id=%g bundle=%s addon=%s buffer=%p size=%zu",
-             args.window_id, args.bundle_path.c_str(),
-             args.skyline_addon_path.c_str(), args.frame_buffer,
-             args.frame_buffer_size);
-    state->engine->CreateWindow(args);
-#ifdef SKYLINE_HAVE_ENGINE
-    // DevTools integration demo: render a static page while the private
-    // appservice JS bridge is unavailable.  The page ops use the same schema as
-    // the recorded fixtures.
-    if (const char* demo = std::getenv("SKYLINE_DEVTOOLS_DEMO_OPS")) {
-      if (demo[0] != '\0') {
-        std::ifstream file(demo);
-        if (file) {
-          const std::string json(
-              (std::istreambuf_iterator<char>(file)),
-              std::istreambuf_iterator<char>());
-          if (!json.empty()) {
-            SkylineApplyLiveOps(json.c_str(), args.window_id);
-          }
+  AddonState& state = State(args.env());
+  if (!state.backend) throw Error("Skyline engine is unavailable");
+  const skyline::CreateWindowArgs window =
+      ParseCreateWindow(args.env(), args[0]);
+  AddonLog("createWindow id=%g bundle=%s addon=%s buffer=%p size=%zu",
+           window.window_id, window.bundle_path.c_str(),
+           window.skyline_addon_path.c_str(), window.frame_buffer,
+           window.frame_buffer_size);
+  state.backend->CreateWindow(window);
+  // DevTools integration demo: render a static page while the private
+  // appservice JS bridge is unavailable.  The page ops use the same schema as
+  // the recorded fixtures.
+  if (const char* demo = std::getenv("SKYLINE_DEVTOOLS_DEMO_OPS")) {
+    if (demo[0] != '\0') {
+      std::ifstream file(demo);
+      if (file) {
+        const std::string json((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+        if (!json.empty()) {
+          RUNTIME(SkylineApplyLiveOps(json.c_str(), window.window_id));
         }
       }
     }
-#endif
-  } catch (const std::exception& error) {
-    return Throw(env, napi_generic_failure, error.what());
   }
-  return Undefined(env);
+  return nullptr;
 }
 
-napi_value LogFromJs(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  const std::string message = argc >= 1 ? ReadString(env, argv[0]) : std::string();
-  AddonLog("js: %s", message.c_str());
-  return Undefined(env);
-}
-
-napi_value ApplyPageOps(napi_env env, napi_callback_info info) {  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2 || !IsType(env, argv[1], napi_string)) {
-    return Throw(env, napi_invalid_arg, "applyPageOps expects (windowId, json)");
+napi_value DestroyWindow(const Args& args) {
+  AddonState& state = State(args.env());
+  if (!state.backend) return nullptr;
+  const double window_id = args.Number(0);
+  state.backend->DestroyWindow(window_id);
+  // The engine threads are joined, so no present can post any more.
+  auto sink = state.frame_sinks.find(window_id);
+  if (sink != state.frame_sinks.end()) {
+    sink->second->Close();
+    state.frame_sinks.erase(sink);
   }
-  const double window_id = ReadNumber(env, argv[0]);
-  const std::string json = ReadString(env, argv[1]);
-  AddonLog("applyPageOps window=%g bytes=%zu", window_id, json.size());
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineApplyLiveOps(json.c_str(), window_id);
-#else
-  (void)window_id;
-  (void)json;
-#endif
-  return Undefined(env);
+  return nullptr;
 }
 
-// Geometry for the appservice selector-query APIs.  The runtime keeps a
-// mutex-protected snapshot published by the UI thread, so this synchronous
-// NAPI call is safe from the JS thread.
-napi_value GetNodeRect(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2) return Undefined(env);
-  const double node_id = ReadNumber(env, argv[1]);
-  float rect[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-#ifdef SKYLINE_HAVE_ENGINE
-  if (!SkylineGetNodeRect(static_cast<uint32_t>(node_id), rect)) {
-    return Undefined(env);
+napi_value OnWindowRasterized(const Args& args) {
+  AddonState& state = State(args.env());
+  if (!state.backend) throw Error("Skyline engine is unavailable");
+  const double window_id = args.Number(0);
+  if (!state.backend->HasWindow(window_id)) {
+    throw Error("window_id: " +
+                std::to_string(static_cast<long long>(window_id)) +
+                " not found");
   }
-#else
-  (void)node_id;
-  return Undefined(env);
-#endif
-  napi_value object = nullptr;
-  napi_create_object(env, &object);
-  const double values[8] = {rect[0], rect[1], rect[0] + rect[2],
-                            rect[1] + rect[3], rect[2], rect[3], rect[4],
-                            rect[5]};
-  static const char* const keys[8] = {"left",  "top",   "right",
-                                      "bottom", "width", "height",
-                                      "zIndex", "pointerEvents"};
-  for (int i = 0; i < 8; i++) {
-    napi_value value = nullptr;
-    napi_create_double(env, values[i], &value);
-    napi_set_named_property(env, object, keys[i], value);
-  }
-  return object;
+  if (!args.Is(1, napi_function)) throw Error("Callback must be a function");
+  // Frame callbacks are wake-ups, not data: a queue of one coalesces bursts
+  // while the Node event loop is busy.  The sink keeps the loop alive until
+  // the window is destroyed.
+  auto sink = std::make_shared<FrameSink>("skyline_frame", "frame", 1, true);
+  sink->Install(args.env(), args[1]);
+  // Swap the engine callback before closing the previous sink, so a present
+  // never posts to a released function.  If the swap throws, `sink` releases
+  // its function on destruction.
+  state.backend->SetRasterizedCallback(
+      window_id, [sink, window_id]() { sink->Post(FrameEvent{window_id}); });
+  auto existing = state.frame_sinks.find(window_id);
+  if (existing != state.frame_sinks.end()) existing->second->Close();
+  state.frame_sinks[window_id] = std::move(sink);
+  return nullptr;
 }
 
-// scroll-into-view bridge: the appservice scroll-view component keeps the
-// target id; the runtime scrolls the materialized Flutter widget.
-napi_value ScrollNodeTo(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3] = {nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 3) return Undefined(env);
-  const double node_id = ReadNumber(env, argv[1]);
-  const double top = ReadNumber(env, argv[2]);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineScrollNodeTo(static_cast<uint32_t>(node_id), top);
-#else
-  (void)node_id;
-  (void)top;
-#endif
-  return Undefined(env);
-}
-
-// The base library's scroll-view `scroll-into-view` property resolves the
-// target element and calls `node.scrollIntoView(target, options)`.  Forward it
-// to the owning native scroll view so horizontal/vertical scrolling and the
-// center/start/end alignment policy are handled by the Dart widget.
-napi_value ScrollIntoView(napi_env env, napi_callback_info info) {
-  size_t argc = 7;
-  napi_value argv[7] = {nullptr, nullptr, nullptr, nullptr,
-                        nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 7) return Undefined(env);
-  const double scroll_node_id = ReadNumber(env, argv[1]);
-  const double target_node_id = ReadNumber(env, argv[2]);
-  const bool within_extent = ReadNumber(env, argv[3]) != 0.0;
-  const bool animated = ReadNumber(env, argv[4]) != 0.0;
-  const double offset = ReadNumber(env, argv[5]);
-  const double alignment = ReadNumber(env, argv[6]);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineScrollIntoView(static_cast<uint32_t>(scroll_node_id),
-                        static_cast<uint32_t>(target_node_id),
-                        within_extent ? 1 : 0, animated ? 1 : 0, offset,
-                        static_cast<uint8_t>(alignment));
-#else
-  (void)scroll_node_id;
-  (void)target_node_id;
-  (void)within_extent;
-  (void)animated;
-  (void)offset;
-  (void)alignment;
-#endif
-  return Undefined(env);
-}
-
-napi_value DispatchTouch(napi_env env, napi_callback_info info) {
-  size_t argc = 4;
-  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  auto* state = State(env);
-  if (!state || !state->engine || argc < 4) return Undefined(env);
-  const std::string kind = ReadString(env, argv[0]);
-  const double window_id = ReadNumber(env, argv[1]);
-  const double x = ReadNumber(env, argv[2]);
-  const double y = ReadNumber(env, argv[3]);
-  skyline::Engine::PointerPhase phase = skyline::Engine::PointerPhase::kHover;
+napi_value DispatchTouch(const Args& args) {
+  AddonState& state = State(args.env());
+  if (!state.backend) return nullptr;
+  using Phase = skyline::WindowBackend::PointerPhase;
+  const std::string kind = args.String(0);
+  const double window_id = args.Number(1);
+  const double x = args.Number(2);
+  const double y = args.Number(3);
+  Phase phase = Phase::kHover;
   if (kind == "start" || kind == "down") {
-    phase = skyline::Engine::PointerPhase::kDown;
+    phase = Phase::kDown;
   } else if (kind == "move") {
-    phase = skyline::Engine::PointerPhase::kMove;
+    phase = Phase::kMove;
   } else if (kind == "end" || kind == "up") {
-    phase = skyline::Engine::PointerPhase::kUp;
+    phase = Phase::kUp;
   } else if (kind == "cancel") {
-    phase = skyline::Engine::PointerPhase::kCancel;
+    phase = Phase::kCancel;
   }
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
     AddonLog("dispatchTouch kind=%s window=%g x=%g y=%g", kind.c_str(),
              window_id, x, y);
   }
-  state->engine->DispatchPointer(window_id, phase, x, y);
-  return Undefined(env);
+  state.backend->DispatchPointer(window_id, phase, x, y);
+  return nullptr;
 }
 
-napi_value DispatchWheel(napi_env env, napi_callback_info info) {
-  size_t argc = 5;
-  napi_value argv[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  auto* state = State(env);
-  if (!state || !state->engine || argc < 5) return Undefined(env);
-  const double window_id = ReadNumber(env, argv[0]);
-  const double x = ReadNumber(env, argv[1]);
-  const double y = ReadNumber(env, argv[2]);
-  const double delta_x = ReadNumber(env, argv[3]);
-  const double delta_y = ReadNumber(env, argv[4]);
+napi_value DispatchWheel(const Args& args) {
+  AddonState& state = State(args.env());
+  if (!state.backend) return nullptr;
+  const double window_id = args.Number(0);
+  const double x = args.Number(1);
+  const double y = args.Number(2);
+  const double delta_x = args.Number(3);
+  const double delta_y = args.Number(4);
   if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
     AddonLog("dispatchWheel window=%g x=%g y=%g dx=%g dy=%g", window_id, x, y,
              delta_x, delta_y);
   }
-  state->engine->DispatchWheel(window_id, x, y, delta_x, delta_y);
-  return Undefined(env);
+  state.backend->DispatchWheel(window_id, x, y, delta_x, delta_y);
+  return nullptr;
 }
 
-napi_value DestroyWindow(napi_env env, napi_callback_info info) {  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  auto* state = State(env);
-  if (state && state->engine) {
-    const double window_id = argc > 0 ? ReadNumber(env, argv[0]) : 0.0;
-    state->engine->DestroyWindow(window_id);
-    auto tsfn = state->frame_tsfns.find(window_id);
-    if (tsfn != state->frame_tsfns.end()) {
-      if (tsfn->second) {
-        napi_release_threadsafe_function(tsfn->second, napi_tsfn_release);
-      }
-      state->frame_tsfns.erase(tsfn);
-    }
+// -- Event sinks and callbacks ------------------------------------------------------
+
+napi_value SetScrollSink(const Args& args) {
+  if (!args.Is(0, napi_function)) {
+    throw Error("setScrollSink expects a function");
   }
-  return Undefined(env);
+  ScrollEvents().Install(args.env(), args[0]);
+  RUNTIME(SkylineSetScrollEventSink(&OnScrollEvent));
+  return nullptr;
 }
 
-struct FrameCallbackContext {
-  double window_id = 0.0;
-};
-
-void FinalizeFrameCallbackContext(napi_env /*env*/, void* data,
-                                  void* /*hint*/) {
-  delete static_cast<FrameCallbackContext*>(data);
+napi_value SetWidgetEventSink(const Args& args) {
+  if (!args.Is(0, napi_function)) {
+    throw Error("setWidgetEventSink expects a function");
+  }
+  WidgetEvents().Install(args.env(), args[0]);
+  RUNTIME(SkylineSetWidgetEventSink(&OnWidgetEvent));
+  return nullptr;
 }
 
-void CallFrameCallback(napi_env env, napi_value js_callback, void* context,
-                       void* /*data*/) {
-  if (env == nullptr || js_callback == nullptr) return;
-  auto* callback_context = static_cast<FrameCallbackContext*>(context);
-  // The DevTools waits for `{window_id}` to forward
-  // SKYLINE_WINDOW_RASTERIZED to the pageframe; a bare callback invocation
-  // makes `e.window_id` throw and the pageframe never pulls the new frame.
-  napi_value event = nullptr;
-  napi_create_object(env, &event);
-  napi_value window_id = nullptr;
-  napi_create_double(
-      env, callback_context != nullptr ? callback_context->window_id : 0.0,
-      &window_id);
-  napi_set_named_property(env, event, "window_id", window_id);
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  napi_value result = nullptr;
-  napi_call_function(env, undefined, js_callback, 1, &event, &result);
-}
-
-napi_value OnWindowRasterized(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  auto* state = State(env);
-  if (!state || !state->engine) {
-    return Throw(env, napi_generic_failure, "Skyline engine is unavailable");
+napi_value SetJsonEventSink(const Args& args) {
+  if (!args.Is(0, napi_function)) {
+    throw Error("setJsonEventSink expects a function");
   }
-  const double window_id = ReadNumber(env, argv[0]);
-  if (!state->engine->HasWindow(window_id)) {
-    return Throw(env, napi_generic_failure,
-                 ("window_id: " + std::to_string(
-                      static_cast<long long>(window_id)) + " not found")
-                     .c_str());
-  }
-  if (argc < 2 || !IsType(env, argv[1], napi_function)) {
-    return Throw(env, napi_invalid_arg, "Callback must be a function");
-  }
-  try {
-    napi_threadsafe_function tsfn = nullptr;
-    napi_value resource_name = nullptr;
-    napi_create_string_utf8(env, "skyline_frame", NAPI_AUTO_LENGTH,
-                            &resource_name);
-    // max_queue_size=1: frame callbacks are wake-ups, not data; coalesce
-    // bursts while the Node event loop is busy.
-    auto* callback_context = new FrameCallbackContext{window_id};
-    if (napi_create_threadsafe_function(
-            env, argv[1], nullptr, resource_name, 1, 1, callback_context,
-            &FinalizeFrameCallbackContext, callback_context,
-            &CallFrameCallback, &tsfn) != napi_ok) {
-      delete callback_context;
-      return Throw(env, napi_generic_failure,
-                   "Unable to create frame callback");
-    }
-    auto existing = state->frame_tsfns.find(window_id);
-    if (existing != state->frame_tsfns.end()) {
-      if (existing->second) {
-        napi_release_threadsafe_function(existing->second, napi_tsfn_release);
-      }
-      state->frame_tsfns.erase(existing);
-    }
-    state->frame_tsfns[window_id] = tsfn;
-    state->engine->SetRasterizedCallback(
-        window_id, [tsfn]() {
-          napi_call_threadsafe_function(tsfn, nullptr, napi_tsfn_nonblocking);
-        });
-  } catch (const std::exception& error) {
-    return Throw(env, napi_generic_failure, error.what());
-  }
-  return Undefined(env);
-}
-
-// Runs on the appservice JS thread.  Builds the event object the bootstrap
-// turns into `bindscroll` / worklet callbacks.
-void CallScrollEvent(napi_env env, napi_value js_callback, void* /*context*/,
-                     void* data) {
-  auto* event = static_cast<ScrollEvent*>(data);
-  if (env == nullptr || js_callback == nullptr || event == nullptr) {
-    delete event;
-    return;
-  }
-  napi_value object = nullptr;
-  napi_create_object(env, &object);
-  auto set_number = [&](const char* key, double value) {
-    napi_value number = nullptr;
-    napi_create_double(env, value, &number);
-    napi_set_named_property(env, object, key, number);
-  };
-  set_number("nodeId", static_cast<double>(event->node_id));
-  set_number("phase", static_cast<double>(event->phase));
-  set_number("scrollTop", event->scroll_top);
-  set_number("scrollLeft", event->scroll_left);
-  set_number("scrollWidth", event->scroll_width);
-  set_number("scrollHeight", event->scroll_height);
-  set_number("deltaX", event->delta_x);
-  set_number("deltaY", event->delta_y);
-  set_number("boundaryVelocity", event->boundary_velocity);
-  napi_value drag = nullptr;
-  napi_get_boolean(env, event->is_drag, &drag);
-  napi_set_named_property(env, object, "isDrag", drag);
-  const char* kind = event->phase == 0
-                         ? "scrollStart"
-                         : (event->phase == 2 ? "scrollEnd" : "scroll");
-  napi_value kind_value = nullptr;
-  napi_create_string_utf8(env, kind, NAPI_AUTO_LENGTH, &kind_value);
-  napi_set_named_property(env, object, "kind", kind_value);
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  napi_value result = nullptr;
-  napi_call_function(env, undefined, js_callback, 1, &object, &result);
-  delete event;
-}
-
-// Engine UI thread: only queue; JS renders the event on its own thread.
-void AddonScrollEventSink(uint32_t node_id, int32_t phase, double scroll_top,
-                          double scroll_left, double scroll_width,
-                          double scroll_height, double delta_x, double delta_y,
-                          uint8_t is_drag, double boundary_velocity) {
-  napi_threadsafe_function tsfn = g_scroll_tsfn.load();
-  if (tsfn == nullptr) return;
-  auto* event = new ScrollEvent();
-  event->node_id = node_id;
-  event->phase = phase;
-  event->scroll_top = scroll_top;
-  event->scroll_left = scroll_left;
-  event->scroll_width = scroll_width;
-  event->scroll_height = scroll_height;
-  event->delta_x = delta_x;
-  event->delta_y = delta_y;
-  event->is_drag = is_drag != 0;
-  event->boundary_velocity = boundary_velocity;
-  if (napi_call_threadsafe_function(tsfn, event, napi_tsfn_nonblocking) !=
-      napi_ok) {
-    delete event;
-  }
-}
-
-napi_value SetScrollSink(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 1 || !IsType(env, argv[0], napi_function)) {
-    return Throw(env, napi_invalid_arg, "setScrollSink expects a function");
-  }
-  napi_value resource_name = nullptr;
-  napi_create_string_utf8(env, "skyline_scroll", NAPI_AUTO_LENGTH,
-                          &resource_name);
-  napi_threadsafe_function tsfn = nullptr;
-  if (napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 32,
-                                      1, nullptr, nullptr, nullptr,
-                                      CallScrollEvent, &tsfn) != napi_ok) {
-    return Throw(env, napi_generic_failure,
-                 "Unable to create scroll event callback");
-  }
-  // Tests load the addon, create a window and expect the Node event loop to
-  // drain; an unref'd TSFN still receives calls but does not hold the loop.
-  napi_unref_threadsafe_function(env, tsfn);
-  napi_threadsafe_function previous = g_scroll_tsfn.exchange(tsfn);
-  if (previous != nullptr) {
-    napi_release_threadsafe_function(previous, napi_tsfn_release);
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSetScrollEventSink(&AddonScrollEventSink);
-#endif
-  return Undefined(env);
-}
-
-// Runs on the appservice JS thread.  Builds the widget event object the
-// bootstrap routes to the builtin swiper / picker-view mirror.
-void CallWidgetEvent(napi_env env, napi_value js_callback, void* /*context*/,
-                     void* data) {
-  auto* event = static_cast<WidgetEvent*>(data);
-  if (env == nullptr || js_callback == nullptr || event == nullptr) {
-    delete event;
-    return;
-  }
-  napi_value object = nullptr;
-  napi_create_object(env, &object);
-  auto set_number = [&](const char* key, double value) {
-    napi_value number = nullptr;
-    napi_create_double(env, value, &number);
-    napi_set_named_property(env, object, key, number);
-  };
-  set_number("nodeId", static_cast<double>(event->node_id));
-  set_number("kind", static_cast<double>(event->kind));
-  set_number("value", event->value);
-  set_number("extra", event->extra);
-  set_number("flag", static_cast<double>(event->flag));
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  napi_value result = nullptr;
-  napi_call_function(env, undefined, js_callback, 1, &object, &result);
-  delete event;
-}
-
-void AddonWidgetEventSink(uint32_t node_id, int32_t kind, double value,
-                          double extra, uint8_t flag) {
-  napi_threadsafe_function tsfn = g_widget_tsfn.load();
-  if (tsfn == nullptr) return;
-  auto* event = new WidgetEvent();
-  event->node_id = node_id;
-  event->kind = kind;
-  event->value = value;
-  event->extra = extra;
-  event->flag = flag;
-  if (napi_call_threadsafe_function(tsfn, event, napi_tsfn_nonblocking) !=
-      napi_ok) {
-    delete event;
-  }
-}
-
-napi_value SetWidgetEventSink(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 1 || !IsType(env, argv[0], napi_function)) {
-    return Throw(env, napi_invalid_arg,
-                 "setWidgetEventSink expects a function");
-  }
-  napi_value resource_name = nullptr;
-  napi_create_string_utf8(env, "skyline_widget", NAPI_AUTO_LENGTH,
-                          &resource_name);
-  napi_threadsafe_function tsfn = nullptr;
-  if (napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 32,
-                                      1, nullptr, nullptr, nullptr,
-                                      CallWidgetEvent, &tsfn) != napi_ok) {
-    return Throw(env, napi_generic_failure,
-                 "Unable to create widget event callback");
-  }
-  napi_unref_threadsafe_function(env, tsfn);
-  napi_threadsafe_function previous = g_widget_tsfn.exchange(tsfn);
-  if (previous != nullptr) {
-    napi_release_threadsafe_function(previous, napi_tsfn_release);
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSetWidgetEventSink(&AddonWidgetEventSink);
-#endif
-  return Undefined(env);
-}
-
-// `swiperTo(windowId, nodeId, page, animated)` — programmatic swiper paging.
-void CallJsonEvent(napi_env env, napi_value js_callback, void* /*context*/,
-                   void* data) {
-  auto* event = static_cast<JsonEvent*>(data);
-  if (env == nullptr || js_callback == nullptr || event == nullptr) {
-    delete event;
-    return;
-  }
-  napi_value json = nullptr;
-  napi_create_string_utf8(env, event->json.c_str(), NAPI_AUTO_LENGTH, &json);
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  napi_value result = nullptr;
-  napi_call_function(env, undefined, js_callback, 1, &json, &result);
-  delete event;
-}
-
-void AddonJsonEventSink(const char* json) {
-  napi_threadsafe_function tsfn = g_json_tsfn.load();
-  if (tsfn == nullptr || json == nullptr) return;
-  auto* event = new JsonEvent();
-  event->json = json;
-  if (napi_call_threadsafe_function(tsfn, event, napi_tsfn_nonblocking) !=
-      napi_ok) {
-    delete event;
-  }
-}
-
-napi_value SetJsonEventSink(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 1 || !IsType(env, argv[0], napi_function)) {
-    return Throw(env, napi_invalid_arg, "setJsonEventSink expects a function");
-  }
-  napi_value resource_name = nullptr;
-  napi_create_string_utf8(env, "skyline_json_event", NAPI_AUTO_LENGTH,
-                          &resource_name);
-  napi_threadsafe_function tsfn = nullptr;
-  if (napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 64,
-                                      1, nullptr, nullptr, nullptr,
-                                      CallJsonEvent, &tsfn) != napi_ok) {
-    return Throw(env, napi_generic_failure,
-                 "Unable to create JSON event callback");
-  }
-  napi_unref_threadsafe_function(env, tsfn);
-  napi_threadsafe_function previous = g_json_tsfn.exchange(tsfn);
-  if (previous != nullptr) {
-    napi_release_threadsafe_function(previous, napi_tsfn_release);
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSetJsonEventSink(&AddonJsonEventSink);
-#endif
-  return Undefined(env);
+  JsonEvents().Install(args.env(), args[0]);
+  RUNTIME(SkylineSetJsonEventSink(&OnJsonEvent));
+  return nullptr;
 }
 
 // DevTools Network bridge.  Runtime image/font loads arrive on the engine UI
 // thread; the pageframe JS callback registered through
 // `SkylineShell.setHttpRequestCallback` performs the fetch (window.fetch) and
 // calls `native.httpRequestComplete` with the bytes.
-void CallHttpRequest(napi_env env, napi_value js_callback, void* /*context*/,
-                     void* data) {
-  auto* event = static_cast<HttpRequestEvent*>(data);
-  if (env == nullptr || js_callback == nullptr || event == nullptr) {
-    delete event;
-    return;
+napi_value SetHttpRequestSink(const Args& args) {
+  if (!args.Is(0, napi_function)) {
+    throw Error("setHttpRequestSink expects a function");
   }
-  napi_value object = nullptr;
-  napi_create_object(env, &object);
-  napi_value request_id = nullptr;
-  napi_create_uint32(env, event->request_id, &request_id);
-  napi_set_named_property(env, object, "requestId", request_id);
-  napi_value url = nullptr;
-  napi_create_string_utf8(env, event->url.c_str(), NAPI_AUTO_LENGTH, &url);
-  napi_set_named_property(env, object, "url", url);
-  napi_value undefined = nullptr;
-  napi_get_undefined(env, &undefined);
-  napi_value result = nullptr;
-  napi_call_function(env, undefined, js_callback, 1, &object, &result);
-  delete event;
-}
-
-void AddonHttpRequestSink(uint32_t request_id, const char* url) {
-  napi_threadsafe_function tsfn = g_http_request_tsfn.load();
-  if (tsfn == nullptr) return;
-  auto* event = new HttpRequestEvent();
-  event->request_id = request_id;
-  event->url = url != nullptr ? url : "";
-  if (napi_call_threadsafe_function(tsfn, event, napi_tsfn_nonblocking) !=
-      napi_ok) {
-    delete event;
-  }
-}
-
-int32_t AddonHasHttpRequestCallback() {
-  return g_http_request_callback_registered.load() ? 1 : 0;
-}
-
-napi_value SetHttpRequestSink(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 1 || !IsType(env, argv[0], napi_function)) {
-    return Throw(env, napi_invalid_arg,
-                 "setHttpRequestSink expects a function");
-  }
-  napi_value resource_name = nullptr;
-  napi_create_string_utf8(env, "skyline_http_request", NAPI_AUTO_LENGTH,
-                          &resource_name);
-  napi_threadsafe_function tsfn = nullptr;
-  if (napi_create_threadsafe_function(env, argv[0], nullptr, resource_name, 32,
-                                      1, nullptr, nullptr, nullptr,
-                                      CallHttpRequest, &tsfn) != napi_ok) {
-    return Throw(env, napi_generic_failure,
-                 "Unable to create HTTP request callback");
-  }
-  napi_unref_threadsafe_function(env, tsfn);
-  napi_threadsafe_function previous = g_http_request_tsfn.exchange(tsfn);
-  if (previous != nullptr) {
-    napi_release_threadsafe_function(previous, napi_tsfn_release);
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSetHttpRequestSink(&AddonHttpRequestSink, &AddonHasHttpRequestCallback);
-#endif
-  return Undefined(env);
+  HttpRequests().Install(args.env(), args[0]);
+  RUNTIME(SkylineSetHttpRequestSink(&OnHttpRequest, &HasHttpRequestCallback));
+  return nullptr;
 }
 
 // `httpRequestComplete(requestId, bytes)` from the pageframe fetch callback.
-napi_value HttpRequestComplete(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2) {
-    return Throw(env, napi_invalid_arg,
-                 "httpRequestComplete expects (requestId, bytes)");
-  }
-  const uint32_t request_id =
-      static_cast<uint32_t>(ReadNumber(env, argv[0]));
+napi_value HttpRequestComplete(const Args& args) {
   void* data = nullptr;
   size_t length = 0;
-  bool is_typed = false;
-  if (napi_is_typedarray(env, argv[1], &is_typed) == napi_ok && is_typed) {
-    ReadBufferView(env, argv[1], &data, &length);
-  } else if (IsType(env, argv[1], napi_object)) {
-    // ArrayBuffer (or an empty Buffer).
-    ReadBufferView(env, argv[1], &data, &length);
+  if (!args.Buffer(1, &data, &length)) {
+    data = nullptr;
+    length = 0;
   }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineNotifyHttpRequestComplete(
-      request_id, static_cast<const uint8_t*>(data),
-      static_cast<int32_t>(length), 0);
-#endif
-  return Undefined(env);
+  RUNTIME(SkylineNotifyHttpRequestComplete(
+      args.U32(0), static_cast<const uint8_t*>(data),
+      static_cast<int32_t>(length), 0));
+  return nullptr;
 }
 
-// `addIntersectionObserver(windowId, nodeId, rootId, top, right, bottom,
-// left, thresholds[])`.
-napi_value AddIntersectionObserver(napi_env env, napi_callback_info info) {
-  size_t argc = 8;
-  napi_value argv[8] = {nullptr, nullptr, nullptr, nullptr,
-                        nullptr, nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 8) {
-    return Throw(env, napi_invalid_arg,
-                 "addIntersectionObserver expects 8 arguments");
+// SkylineShell's `set*Callback` setters.  The bootstrap keeps the callbacks;
+// the addon only needs to know whether the pageframe can fetch for it.
+napi_value SetCallback(const Args& args) {
+  if (!args.Is(1, napi_function)) throw Error("Callback must be a function");
+  if (args.String(0) == "setHttpRequestCallback") {
+    g_http_request_callback_registered.store(true);
   }
-  const double node_id = ReadNumber(env, argv[1]);
-  const double unique_id = ReadNumber(env, argv[2]);
-  const double root_id = ReadNumber(env, argv[3]);
-  const double top = ReadNumber(env, argv[4]);
-  const double right = ReadNumber(env, argv[5]);
-  const double bottom = ReadNumber(env, argv[6]);
-  const double left = ReadNumber(env, argv[7]);
+  return nullptr;
+}
+
+// -- Page operations and queries ------------------------------------------------------
+
+napi_value ApplyPageOps(const Args& args) {
+  if (!args.Is(1, napi_string)) {
+    throw Error("applyPageOps expects (windowId, json)");
+  }
+  const double window_id = args.Number(0);
+  const std::string json = args.String(1);
+  AddonLog("applyPageOps window=%g bytes=%zu", window_id, json.size());
+  RUNTIME(SkylineApplyLiveOps(json.c_str(), window_id));
+  return nullptr;
+}
+
+// Geometry for the appservice selector-query APIs.  The runtime keeps a
+// mutex-protected snapshot published by the UI thread, so this synchronous
+// call is safe from the JS thread.
+napi_value GetNodeRect(const Args& args) {
+  float rect[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+  if (!RUNTIME_OR(SkylineGetNodeRect(args.U32(1), rect), 0)) return nullptr;
+  napi_env env = args.env();
+  napi_value object = NewObject(env);
+  SetNumber(env, object, "left", rect[0]);
+  SetNumber(env, object, "top", rect[1]);
+  SetNumber(env, object, "right", rect[0] + rect[2]);
+  SetNumber(env, object, "bottom", rect[1] + rect[3]);
+  SetNumber(env, object, "width", rect[2]);
+  SetNumber(env, object, "height", rect[3]);
+  SetNumber(env, object, "zIndex", rect[4]);
+  SetNumber(env, object, "pointerEvents", rect[5]);
+  return object;
+}
+
+// scroll-into-view bridge: the appservice scroll-view component keeps the
+// target id; the runtime scrolls the materialized Flutter widget.
+napi_value ScrollNodeTo(const Args& args) {
+  RUNTIME(SkylineScrollNodeTo(args.U32(1), args.Number(2)));
+  return nullptr;
+}
+
+// The base library's scroll-view `scroll-into-view` property resolves the
+// target element and calls `node.scrollIntoView(target, options)`.  Forward it
+// to the owning native scroll view so horizontal/vertical scrolling and the
+// center/start/end alignment policy are handled by the Dart widget.
+napi_value ScrollIntoView(const Args& args) {
+  RUNTIME(SkylineScrollIntoView(args.U32(1), args.U32(2),
+                                args.Number(3) != 0.0 ? 1 : 0,
+                                args.Number(4) != 0.0 ? 1 : 0, args.Number(5),
+                                static_cast<uint8_t>(args.Number(6))));
+  return nullptr;
+}
+
+// `swiperTo(windowId, nodeId, page[, animated])` — programmatic paging.
+napi_value SwiperTo(const Args& args) {
+  const double page = args.Number(2);
+  RUNTIME(SkylineSwiperTo(args.U32(1),
+                          static_cast<uint32_t>(page < 0 ? 0 : page),
+                          args.Bool(3, true) ? 1 : 0));
+  return nullptr;
+}
+
+// `pickerColumnSetCurrent(windowId, nodeId, current)`.
+napi_value PickerColumnSetCurrent(const Args& args) {
+  const double current = args.Number(2);
+  RUNTIME(SkylinePickerColumnSetCurrent(
+      args.U32(1), static_cast<uint32_t>(current < 0 ? 0 : current)));
+  return nullptr;
+}
+
+// `inputFocus(windowId, nodeId, focus)` — programmatic focus/blur.
+napi_value InputFocus(const Args& args) {
+  RUNTIME(SkylineSetInputFocus(args.U32(1), args.Bool(2) ? 1 : 0));
+  return nullptr;
+}
+
+// `addIntersectionObserver(windowId, nodeId, uniqueId, rootId, top, right,
+// bottom, left[, thresholds])`.
+napi_value AddIntersectionObserver(const Args& args) {
+  napi_env env = args.env();
   std::vector<double> thresholds;
-  // The ninth argument (thresholds) is optional and arrives through `argc`
-  // only when the caller passes it; read it separately.
-  napi_value threshold_value = nullptr;
-  size_t full_argc = 9;
-  napi_value full_argv[9] = {nullptr};
-  napi_get_cb_info(env, info, &full_argc, full_argv, nullptr, nullptr);
-  if (full_argc >= 9) threshold_value = full_argv[8];
+  napi_value list = args[8];
   bool is_array = false;
-  if (threshold_value != nullptr &&
-      napi_is_array(env, threshold_value, &is_array) == napi_ok && is_array) {
+  if (list != nullptr && napi_is_array(env, list, &is_array) == napi_ok &&
+      is_array) {
     uint32_t length = 0;
-    napi_get_array_length(env, threshold_value, &length);
+    napi_get_array_length(env, list, &length);
     for (uint32_t i = 0; i < length; i++) {
       napi_value item = nullptr;
       double value = 0.0;
-      if (napi_get_element(env, threshold_value, i, &item) == napi_ok &&
+      if (napi_get_element(env, list, i, &item) == napi_ok &&
           napi_get_value_double(env, item, &value) == napi_ok) {
         thresholds.push_back(value);
       }
     }
   }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineAddIntersectionObserver(
-      static_cast<uint32_t>(node_id), static_cast<uint32_t>(unique_id),
-      static_cast<uint32_t>(root_id), top, right, bottom, left,
+  RUNTIME(SkylineAddIntersectionObserver(
+      args.U32(1), args.U32(2), args.U32(3), args.Number(4), args.Number(5),
+      args.Number(6), args.Number(7),
       thresholds.empty() ? nullptr : thresholds.data(),
-      static_cast<int32_t>(thresholds.size()));
-#else
-  (void)node_id;
-  (void)unique_id;
-  (void)root_id;
-  (void)top;
-  (void)right;
-  (void)bottom;
-  (void)left;
-#endif
-  return Undefined(env);
+      static_cast<int32_t>(thresholds.size())));
+  return nullptr;
 }
 
-napi_value RemoveIntersectionObserver(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3] = {nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 3) {
-    return Throw(env, napi_invalid_arg,
-                 "removeIntersectionObserver expects (windowId, nodeId, id)");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineRemoveIntersectionObserver(
-      static_cast<uint32_t>(ReadNumber(env, argv[1])),
-      static_cast<uint32_t>(ReadNumber(env, argv[2])));
-#endif
-  return Undefined(env);
+napi_value RemoveIntersectionObserver(const Args& args) {
+  RUNTIME(SkylineRemoveIntersectionObserver(args.U32(1), args.U32(2)));
+  return nullptr;
 }
 
 // `selectionSetRange(windowId, selectionId, startId, startOffset, endId,
 // endOffset)`.
-napi_value SelectionSetRange(napi_env env, napi_callback_info info) {
-  size_t argc = 6;
-  napi_value argv[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 6) {
-    return Throw(env, napi_invalid_arg,
-                 "selectionSetRange expects 6 arguments");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSelectionSetRange(
-      static_cast<uint32_t>(ReadNumber(env, argv[1])),
-      static_cast<uint32_t>(ReadNumber(env, argv[2])),
-      static_cast<int32_t>(ReadNumber(env, argv[3])),
-      static_cast<uint32_t>(ReadNumber(env, argv[4])),
-      static_cast<int32_t>(ReadNumber(env, argv[5])));
-#endif
-  return Undefined(env);
+napi_value SelectionSetRange(const Args& args) {
+  RUNTIME(SkylineSelectionSetRange(args.U32(1), args.U32(2), args.I32(3),
+                                   args.U32(4), args.I32(5)));
+  return nullptr;
 }
 
 // `refresherTriggered(windowId, nodeId, open[, twoLevel])`.
-napi_value RefresherTriggered(napi_env env, napi_callback_info info) {
-  size_t argc = 4;
-  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 3) {
-    return Throw(env, napi_invalid_arg,
-                 "refresherTriggered expects (windowId, nodeId, open)");
-  }
-  const bool open = ReadBool(env, argv[2], false);
-  const bool two_level = argc > 3 && ReadBool(env, argv[3], false);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineRefresherTriggered(static_cast<uint32_t>(ReadNumber(env, argv[1])),
-                            open ? 1 : 0, two_level ? 1 : 0);
-#else
-  (void)open;
-  (void)two_level;
-#endif
-  return Undefined(env);
+napi_value RefresherTriggered(const Args& args) {
+  RUNTIME(SkylineRefresherTriggered(args.U32(1), args.Bool(2) ? 1 : 0,
+                                    args.Bool(3) ? 1 : 0));
+  return nullptr;
 }
 
 // `setNavigateBackInterception(windowId, pageId, enabled)`.
-napi_value SetNavigateBackInterception(napi_env env,
-                                       napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3] = {nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 3) {
-    return Throw(env, napi_invalid_arg,
-                 "setNavigateBackInterception expects (windowId, pageId, enabled)");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSetNavigateBackInterception(
-      static_cast<int32_t>(ReadNumber(env, argv[1])),
-      ReadBool(env, argv[2], false) ? 1 : 0);
-#endif
-  return Undefined(env);
+napi_value SetNavigateBackInterception(const Args& args) {
+  RUNTIME(SkylineSetNavigateBackInterception(args.I32(1),
+                                             args.Bool(2) ? 1 : 0));
+  return nullptr;
 }
+
+// `setSafeArea(top, right, bottom, left)`; missing insets are 0.
+napi_value SetSafeArea(const Args& args) {
+  RUNTIME(SkylineSetSafeAreaInsets(args.Number(0), args.Number(1),
+                                   args.Number(2), args.Number(3)));
+  return nullptr;
+}
+
+// -- Accessibility and DevTools automation ----------------------------------------------
 
 // D10: `setAccessibility(windowId, enabled)` toggles the appservice's
 // accessibility mode programmatically (DevTools automation).
-napi_value SetAccessibility(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2) {
-    return Throw(env, napi_invalid_arg,
-                 "setAccessibility expects (windowId, enabled)");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineRequestAccessibility(ReadBool(env, argv[1], false) ? 1 : 0);
-#endif
-  return Undefined(env);
+napi_value SetAccessibility(const Args& args) {
+  RUNTIME(SkylineRequestAccessibility(args.Bool(1) ? 1 : 0));
+  return nullptr;
 }
 
-napi_value AccessibilityState(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  uint32_t state = 0;
-#ifdef SKYLINE_HAVE_ENGINE
-  state = static_cast<uint32_t>(SkylineGetAccessibilityState());
-#endif
+napi_value AccessibilityState(const Args& args) {
+  const auto state =
+      static_cast<uint32_t>(RUNTIME_OR(SkylineGetAccessibilityState(), 0));
   napi_value result = nullptr;
-  napi_create_uint32(env, state, &result);
+  skyline::napi::Check(napi_create_uint32(args.env(), state, &result),
+                       "napi_create_uint32");
   return result;
 }
 
-napi_value SetSafeArea(napi_env env, napi_callback_info info) {
-  size_t argc = 4;
-  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  double insets[4] = {0.0, 0.0, 0.0, 0.0};
-  for (size_t i = 0; i < argc && i < 4; i++) {
-    if (argv[i] != nullptr) napi_get_value_double(env, argv[i], &insets[i]);
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSetSafeAreaInsets(insets[0], insets[1], insets[2], insets[3]);
-#endif
-  return Undefined(env);
+napi_value DumpElementTree(const Args&) {
+  RUNTIME(SkylineDumpElementTree());
+  return nullptr;
 }
 
-napi_value DumpElementTree(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineDumpElementTree();
-#endif
-  return Undefined(env);
+napi_value DumpRenderTree(const Args&) {
+  RUNTIME(SkylineDumpRenderTree());
+  return nullptr;
 }
 
-napi_value DumpRenderTree(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineDumpRenderTree();
-#endif
-  return Undefined(env);
+napi_value CollectGarbage(const Args&) {
+  RUNTIME(SkylineCollectGarbage());
+  return nullptr;
 }
 
-napi_value CollectGarbage(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineCollectGarbage();
-#endif
-  return Undefined(env);
+napi_value SendMessageToRunner(const Args& args) {
+  RUNTIME(SkylineSendMessageToRunner(args.String(1).c_str()));
+  return nullptr;
 }
 
-napi_value SendMessageToRunner(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2) {
-    return Throw(env, napi_invalid_arg,
-                 "sendMessageToRunner expects (windowId, message)");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  const std::string message = ReadString(env, argv[1]);
-  SkylineSendMessageToRunner(message.c_str());
-#endif
-  return Undefined(env);
-}
-
-// `takeAppSnapshot(windowId, requestId, scale, compressed)`.
-napi_value TakeAppSnapshot(napi_env env, napi_callback_info info) {
-  size_t argc = 4;
-  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2) {
-    return Throw(env, napi_invalid_arg,
-                 "takeAppSnapshot expects (windowId, requestId[, scale[, compressed]])");
-  }
-  const uint32_t request_id = static_cast<uint32_t>(ReadNumber(env, argv[1]));
-  const double scale = argc > 2 ? ReadNumber(env, argv[2], 1.0) : 1.0;
-  const bool compressed = argc > 3 ? ReadBool(env, argv[3], true) : true;
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineTakeAppSnapshot(request_id, scale, compressed ? 1 : 0);
-#else
-  (void)request_id;
-  (void)scale;
-  (void)compressed;
-#endif
-  return Undefined(env);
+// `takeAppSnapshot(windowId, requestId[, scale[, compressed]])`.
+napi_value TakeAppSnapshot(const Args& args) {
+  RUNTIME(SkylineTakeAppSnapshot(args.U32(1), args.Number(2, 1.0),
+                                 args.Bool(3, true) ? 1 : 0));
+  return nullptr;
 }
 
 // `snapshotNode(windowId, nodeId, format, requestId)`.
-napi_value SnapshotNode(napi_env env, napi_callback_info info) {
-  size_t argc = 4;
-  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 4) {
-    return Throw(env, napi_invalid_arg,
-                 "snapshotNode expects (windowId, nodeId, format, requestId)");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSnapshotNode(
-      static_cast<uint32_t>(ReadNumber(env, argv[1])),
-      static_cast<uint8_t>(ReadNumber(env, argv[2], 4.0)),
-      static_cast<uint32_t>(ReadNumber(env, argv[3])));
-#endif
-  return Undefined(env);
+napi_value SnapshotNode(const Args& args) {
+  RUNTIME(SkylineSnapshotNode(args.U32(1),
+                              static_cast<uint8_t>(args.Number(2, 4.0)),
+                              args.U32(3)));
+  return nullptr;
 }
 
-napi_value SetUserGesture(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2) {
-    return Throw(env, napi_invalid_arg,
-                 "setUserGesture expects (windowId, active)");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSetUserGesture(ReadBool(env, argv[1], false) ? 1 : 0);
-#endif
-  return Undefined(env);
+napi_value SetUserGesture(const Args& args) {
+  RUNTIME(SkylineSetUserGesture(args.Bool(1) ? 1 : 0));
+  return nullptr;
 }
 
-// Route gesture bridge used by the appservice `workletUIModule` stub.  Custom
-// route worklets run in the appservice realm, so `didPop`/`startUserGesture`
-// can only pop the Flutter route through these N-API calls.
-napi_value NavigatorPop(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2) {
-    return Throw(env, napi_invalid_arg,
-                 "navigatorPop expects (windowId, pageId)");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineNavigatorPop(static_cast<int32_t>(ReadNumber(env, argv[1])));
-#endif
-  return Undefined(env);
+napi_value RelaunchApp(const Args& args) {
+  RUNTIME(SkylineRelaunchApp(static_cast<uint8_t>(args.Number(1))));
+  return nullptr;
 }
 
-napi_value StartUserGesture(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineStartUserGesture();
-#endif
-  return Undefined(env);
+napi_value ShutdownApplication(const Args&) {
+  RUNTIME(SkylineShutdownApplication());
+  return nullptr;
 }
 
-napi_value StopUserGesture(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineStopUserGesture();
-#endif
-  return Undefined(env);
+// -- Custom-route gesture worklets -----------------------------------------------------
+//
+// Custom route worklets run in the appservice realm (`workletUIModule`), so
+// `didPop` / `startUserGesture` can only drive the Flutter route through these
+// calls.
+
+napi_value NavigatorPop(const Args& args) {
+  RUNTIME(SkylineNavigatorPop(args.I32(1)));
+  return nullptr;
 }
 
-napi_value UpdateAnimationController(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3] = {nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 3) {
-    return Throw(env, napi_invalid_arg,
-                 "updateAnimationController expects (windowId, pageId, value)");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineUpdateAnimationController(
-      static_cast<int32_t>(ReadNumber(env, argv[1])),
-      ReadNumber(env, argv[2]));
-#endif
-  return Undefined(env);
+napi_value StartUserGesture(const Args&) {
+  RUNTIME(SkylineStartUserGesture());
+  return nullptr;
 }
 
-napi_value RelaunchApp(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2] = {nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 2) {
-    return Throw(env, napi_invalid_arg,
-                 "relaunchApp expects (windowId, openType)");
-  }
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineRelaunchApp(
-      static_cast<uint8_t>(ReadNumber(env, argv[1], 0.0)));
-#endif
-  return Undefined(env);
+napi_value StopUserGesture(const Args&) {
+  RUNTIME(SkylineStopUserGesture());
+  return nullptr;
 }
 
-napi_value ShutdownApplication(napi_env env, napi_callback_info info) {
-  size_t argc = 1;
-  napi_value argv[1] = {nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineShutdownApplication();
-#endif
-  return Undefined(env);
+napi_value UpdateAnimationController(const Args& args) {
+  RUNTIME(SkylineUpdateAnimationController(args.I32(1), args.Number(2)));
+  return nullptr;
 }
 
-napi_value SwiperTo(napi_env env, napi_callback_info info) {
-  size_t argc = 4;
-  napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 3) {
-    return Throw(env, napi_invalid_arg,
-                 "swiperTo expects (windowId, nodeId, page[, animated])");
-  }
-  const double node_id = ReadNumber(env, argv[1]);
-  const double page = ReadNumber(env, argv[2]);
-  const bool animated = argc > 3 ? ReadBool(env, argv[3], true) : true;
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSwiperTo(static_cast<uint32_t>(node_id),
-                  static_cast<uint32_t>(page < 0 ? 0 : page),
-                  animated ? 1 : 0);
-#else
-  (void)node_id;
-  (void)page;
-  (void)animated;
-#endif
-  return Undefined(env);
-}
+// -- Misc ------------------------------------------------------------------------------
 
-// `pickerColumnSetCurrent(windowId, nodeId, current)`.
-napi_value PickerColumnSetCurrent(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3] = {nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 3) {
-    return Throw(env, napi_invalid_arg,
-                 "pickerColumnSetCurrent expects (windowId, nodeId, current)");
-  }
-  const double node_id = ReadNumber(env, argv[1]);
-  const double current = ReadNumber(env, argv[2]);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylinePickerColumnSetCurrent(static_cast<uint32_t>(node_id),
-                                static_cast<uint32_t>(current < 0 ? 0 : current));
-#else
-  (void)node_id;
-  (void)current;
-#endif
-  return Undefined(env);
-}
+napi_value Noop(const Args&) { return nullptr; }
 
-// `inputFocus(windowId, nodeId, focus)` — programmatic focus/blur.
-napi_value InputFocus(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value argv[3] = {nullptr, nullptr, nullptr};
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 3) {
-    return Throw(env, napi_invalid_arg,
-                 "inputFocus expects (windowId, nodeId, focus)");
-  }
-  const double node_id = ReadNumber(env, argv[1]);
-  const bool focus = ReadBool(env, argv[2], false);
-#ifdef SKYLINE_HAVE_ENGINE
-  SkylineSetInputFocus(static_cast<uint32_t>(node_id), focus ? 1 : 0);
-#else
-  (void)node_id;
-  (void)focus;
-#endif
-  return Undefined(env);
-}
-
-napi_value Noop(napi_env env, napi_callback_info info) {
-  (void)info;
-  return Undefined(env);
-}
-
-napi_value DebugInfo(napi_env env, napi_callback_info info) {
-  (void)info;
-  napi_value object = nullptr;
-  napi_create_object(env, &object);
-  struct Entry { const char* key; const char* value; };
-  const Entry entries[] = {
-      {"skyline_git_rev", "ef3edf6c94265dfe314f9197ff4e100f99aac070"},
-      {"flutter_engine_git_rev", "6b917cf86ebe1b9ff148310504a736d667527e8b"},
-      {"skyline_version", "1.4.21"},
-  };
-  for (const auto& entry : entries) {
-    napi_value value = nullptr;
-    napi_create_string_utf8(env, entry.value, NAPI_AUTO_LENGTH, &value);
-    napi_set_named_property(env, object, entry.key, value);
-  }
+napi_value DebugInfo(const Args& args) {
+  napi_env env = args.env();
+  napi_value object = NewObject(env);
+  skyline::napi::SetString(env, object, "skyline_git_rev",
+                           "ef3edf6c94265dfe314f9197ff4e100f99aac070");
+  skyline::napi::SetString(env, object, "flutter_engine_git_rev",
+                           "6b917cf86ebe1b9ff148310504a736d667527e8b");
+  skyline::napi::SetString(env, object, "skyline_version", "1.4.21");
   return object;
 }
 
-void Define(napi_env env, napi_value target, const char* name, napi_callback callback) {
-  napi_value function = nullptr;
-  napi_create_function(env, name, NAPI_AUTO_LENGTH, callback, nullptr, &function);
-  napi_set_named_property(env, target, name, function);
+napi_value LogFromJs(const Args& args) {
+  AddonLog("js: %s", args.String(0).c_str());
+  return nullptr;
 }
+
+// The `native` object handed to the bootstrap: name, handler, minimum
+// argument count and the error thrown below it (null: return undefined).
+const Binding kBindings[] = {
+    {"setCallback", SetCallback, 2, "Missing callback arguments"},
+    {"createWindow", CreateWindow, 1, "createWindow expects an arguments array"},
+    {"destroyWindow", DestroyWindow},
+    {"applyPageOps", ApplyPageOps, 2, "applyPageOps expects (windowId, json)"},
+    {"getNodeRect", GetNodeRect, 2},
+    {"scrollNodeTo", ScrollNodeTo, 3},
+    {"scrollIntoView", ScrollIntoView, 7},
+    {"dispatchTouch", DispatchTouch, 4},
+    {"dispatchWheel", DispatchWheel, 5},
+    {"onWindowRasterized", OnWindowRasterized},
+    {"setScrollSink", SetScrollSink},
+    {"setWidgetEventSink", SetWidgetEventSink},
+    {"swiperTo", SwiperTo, 3,
+     "swiperTo expects (windowId, nodeId, page[, animated])"},
+    {"pickerColumnSetCurrent", PickerColumnSetCurrent, 3,
+     "pickerColumnSetCurrent expects (windowId, nodeId, current)"},
+    {"inputFocus", InputFocus, 3,
+     "inputFocus expects (windowId, nodeId, focus)"},
+    {"setJsonEventSink", SetJsonEventSink},
+    {"setHttpRequestSink", SetHttpRequestSink},
+    {"httpRequestComplete", HttpRequestComplete, 2,
+     "httpRequestComplete expects (requestId, bytes)"},
+    {"addIntersectionObserver", AddIntersectionObserver, 8,
+     "addIntersectionObserver expects 8 arguments"},
+    {"removeIntersectionObserver", RemoveIntersectionObserver, 3,
+     "removeIntersectionObserver expects (windowId, nodeId, id)"},
+    {"selectionSetRange", SelectionSetRange, 6,
+     "selectionSetRange expects 6 arguments"},
+    {"refresherTriggered", RefresherTriggered, 3,
+     "refresherTriggered expects (windowId, nodeId, open)"},
+    {"setNavigateBackInterception", SetNavigateBackInterception, 3,
+     "setNavigateBackInterception expects (windowId, pageId, enabled)"},
+    {"setAccessibility", SetAccessibility, 2,
+     "setAccessibility expects (windowId, enabled)"},
+    {"accessibilityState", AccessibilityState},
+    {"dumpElementTree", DumpElementTree},
+    {"dumpRenderTree", DumpRenderTree},
+    {"collectGarbage", CollectGarbage},
+    {"sendMessageToRunner", SendMessageToRunner, 2,
+     "sendMessageToRunner expects (windowId, message)"},
+    {"takeAppSnapshot", TakeAppSnapshot, 2,
+     "takeAppSnapshot expects (windowId, requestId[, scale[, compressed]])"},
+    {"snapshotNode", SnapshotNode, 4,
+     "snapshotNode expects (windowId, nodeId, format, requestId)"},
+    {"setUserGesture", SetUserGesture, 2,
+     "setUserGesture expects (windowId, active)"},
+    {"navigatorPop", NavigatorPop, 2,
+     "navigatorPop expects (windowId, pageId)"},
+    {"startUserGesture", StartUserGesture},
+    {"stopUserGesture", StopUserGesture},
+    {"updateAnimationController", UpdateAnimationController, 3,
+     "updateAnimationController expects (windowId, pageId, value)"},
+    {"relaunchApp", RelaunchApp, 2, "relaunchApp expects (windowId, openType)"},
+    {"shutdownApplication", ShutdownApplication},
+    {"setSafeArea", SetSafeArea},
+    {"dispatch", Noop},
+    {"notify", Noop},
+    {"brightness", Noop},
+    {"debugInfo", DebugInfo},
+    {"log", LogFromJs},
+};
 
 // Module lifecycle diagnostics.  The DevTools' appservice renderer has no
 // accessible console, so a small append-only file makes it possible to tell a
@@ -1430,116 +860,76 @@ void AddonLog(const char* format, ...) {
   std::fflush(stderr);
 }
 
-std::string NapiValueToString(napi_env env, napi_value value) {
-  napi_value string_value = nullptr;
-  if (napi_coerce_to_string(env, value, &string_value) != napi_ok ||
-      string_value == nullptr) {
-    return {};
+napi_value Init(napi_env env) {
+  AddonLog("init begin");
+  auto* state = new AddonState();
+#ifdef SKYLINE_HAVE_ENGINE
+  state->backend = skyline::CreateFlutterWindowBackend();
+#else
+  state->backend = std::make_unique<skyline::StubWindowBackend>();
+#endif
+  if (napi_set_instance_data(env, state, FinalizeState, nullptr) != napi_ok) {
+    delete state;
+    throw Error("napi_set_instance_data failed");
   }
-  size_t length = 0;
-  if (napi_get_value_string_utf8(env, string_value, nullptr, 0, &length) !=
-      napi_ok) {
-    return {};
+  skyline::napi::Check(napi_add_env_cleanup_hook(env, CleanupCallbacks, state),
+                       "napi_add_env_cleanup_hook");
+
+  napi_value bridge = NewObject(env);
+  skyline::napi::DefineBindings(env, bridge, kBindings,
+                                sizeof(kBindings) / sizeof(kBindings[0]));
+  napi_value global = nullptr;
+  skyline::napi::Check(napi_get_global(env, &global), "napi_get_global");
+  skyline::napi::Check(
+      napi_set_named_property(env, global, "__skylineNative", bridge),
+      "napi_set_named_property");
+
+  // The bootstrap captures `__skylineNative` and installs SkylineShell and
+  // friends on the global object.
+  napi_value script = nullptr;
+  skyline::napi::Check(napi_create_string_utf8(env, kSkylineBootstrapJs,
+                                               NAPI_AUTO_LENGTH, &script),
+                       "napi_create_string_utf8");
+  napi_value ignored = nullptr;
+  const napi_status status = napi_run_script(env, script, &ignored);
+
+  napi_value key = nullptr;
+  bool deleted = false;
+  if (napi_create_string_utf8(env, "__skylineNative", NAPI_AUTO_LENGTH,
+                              &key) == napi_ok) {
+    napi_delete_property(env, global, key, &deleted);
   }
-  std::vector<char> buffer(length + 1, '\0');
-  size_t copied = 0;
-  napi_get_value_string_utf8(env, string_value, buffer.data(), buffer.size(),
-                             &copied);
-  return std::string(buffer.data(), copied);
+
+  if (status != napi_ok) {
+    napi_value exception = nullptr;
+    std::string message;
+    if (napi_get_and_clear_last_exception(env, &exception) == napi_ok &&
+        exception != nullptr) {
+      message = skyline::napi::ToString(env, exception);
+    }
+    if (message.empty()) {
+      message = "status " + std::to_string(static_cast<int>(status));
+    }
+    // Surface the cause to require() instead of an empty module.
+    throw Error("skyline.node bootstrap failed: " + message);
+  }
+  AddonLog("init ok");
+
+  // The official module has no named exports.
+  return NewObject(env);
 }
 
 }  // namespace
 
 NAPI_MODULE_INIT() {
-  AddonLog("init begin");
-  auto* state = new AddonState();
-  state->env = env;
-#ifdef SKYLINE_HAVE_ENGINE
-  state->engine = skyline::CreateHostEngine();
-#else
-  state->engine = std::make_unique<skyline::StubEngine>();
-#endif
-  napi_set_instance_data(env, state, FinalizeState, nullptr);
-  napi_add_env_cleanup_hook(env, CleanupCallbacks, state);
-
-  napi_value bridge = nullptr;
-  napi_create_object(env, &bridge);
-  Define(env, bridge, "setCallback", SetCallback);
-  Define(env, bridge, "createWindow", CreateWindow);
-  Define(env, bridge, "destroyWindow", DestroyWindow);
-  Define(env, bridge, "applyPageOps", ApplyPageOps);
-  Define(env, bridge, "getNodeRect", GetNodeRect);
-  Define(env, bridge, "scrollNodeTo", ScrollNodeTo);
-  Define(env, bridge, "scrollIntoView", ScrollIntoView);
-  Define(env, bridge, "dispatchTouch", DispatchTouch);
-  Define(env, bridge, "dispatchWheel", DispatchWheel);
-  Define(env, bridge, "onWindowRasterized", OnWindowRasterized);
-  Define(env, bridge, "setScrollSink", SetScrollSink);
-  Define(env, bridge, "setWidgetEventSink", SetWidgetEventSink);
-  Define(env, bridge, "swiperTo", SwiperTo);
-  Define(env, bridge, "pickerColumnSetCurrent", PickerColumnSetCurrent);
-  Define(env, bridge, "inputFocus", InputFocus);
-  Define(env, bridge, "setJsonEventSink", SetJsonEventSink);
-  Define(env, bridge, "setHttpRequestSink", SetHttpRequestSink);
-  Define(env, bridge, "httpRequestComplete", HttpRequestComplete);
-  Define(env, bridge, "addIntersectionObserver", AddIntersectionObserver);
-  Define(env, bridge, "removeIntersectionObserver", RemoveIntersectionObserver);
-  Define(env, bridge, "selectionSetRange", SelectionSetRange);
-  Define(env, bridge, "refresherTriggered", RefresherTriggered);
-  Define(env, bridge, "setNavigateBackInterception",
-         SetNavigateBackInterception);
-  Define(env, bridge, "setAccessibility", SetAccessibility);
-  Define(env, bridge, "accessibilityState", AccessibilityState);
-  Define(env, bridge, "dumpElementTree", DumpElementTree);
-  Define(env, bridge, "dumpRenderTree", DumpRenderTree);
-  Define(env, bridge, "collectGarbage", CollectGarbage);
-  Define(env, bridge, "sendMessageToRunner", SendMessageToRunner);
-  Define(env, bridge, "takeAppSnapshot", TakeAppSnapshot);
-  Define(env, bridge, "snapshotNode", SnapshotNode);
-  Define(env, bridge, "setUserGesture", SetUserGesture);
-  Define(env, bridge, "navigatorPop", NavigatorPop);
-  Define(env, bridge, "startUserGesture", StartUserGesture);
-  Define(env, bridge, "stopUserGesture", StopUserGesture);
-  Define(env, bridge, "updateAnimationController", UpdateAnimationController);
-  Define(env, bridge, "relaunchApp", RelaunchApp);
-  Define(env, bridge, "shutdownApplication", ShutdownApplication);
-  Define(env, bridge, "setSafeArea", SetSafeArea);
-  Define(env, bridge, "dispatch", Noop);
-  Define(env, bridge, "notify", Noop);
-  Define(env, bridge, "brightness", Noop);
-  Define(env, bridge, "debugInfo", DebugInfo);
-  Define(env, bridge, "log", LogFromJs);
-
-  napi_value global = nullptr;
-  napi_get_global(env, &global);
-  napi_set_named_property(env, global, "__skylineNative", bridge);
-
-  napi_value script = nullptr;
-  napi_create_string_utf8(env, kSkylineBootstrapJs, NAPI_AUTO_LENGTH, &script);
-  napi_value ignored = nullptr;
-  const napi_status status = napi_run_script(env, script, &ignored);
-
-  napi_value key = nullptr;
-  napi_create_string_utf8(env, "__skylineNative", NAPI_AUTO_LENGTH, &key);
-  bool deleted = false;
-  napi_delete_property(env, global, key, &deleted);
-
-  if (status != napi_ok) {
-    napi_value exception = nullptr;
-    const napi_status exception_status =
-        napi_get_and_clear_last_exception(env, &exception);
-    std::string message;
-    if (exception_status == napi_ok && exception != nullptr) {
-      message = NapiValueToString(env, exception);
+  try {
+    return Init(env);
+  } catch (const std::exception& error) {
+    AddonLog("init failed: %s", error.what());
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) {
+      napi_throw_error(env, nullptr, error.what());
     }
-    AddonLog("bootstrap failed: status=%d exception=%s", static_cast<int>(status),
-             message.empty() ? "(none)" : message.c_str());
     return nullptr;
   }
-  AddonLog("init ok");
-
-  // The official module has no named exports.
-  napi_value exports_object = nullptr;
-  napi_create_object(env, &exports_object);
-  return exports_object;
 }

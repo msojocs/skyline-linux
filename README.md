@@ -253,8 +253,8 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
 ```
 
 模块加载时通过内嵌 bootstrap 注册全局 `SkylineShell`/`SkylineDebugInfo`，原生侧
-负责回调引用与引擎边界（`native/include/engine.hh`）。当前 `StubEngine` 不含渲染；
-下一阶段用 Linux Flutter Engine 后端替换。
+通过 `native/include/window_backend.hh` 接入窗口后端；未构建引擎时使用不含渲染的
+`StubWindowBackend`。
 
 ### 阶段 2：Engine 版本固定、符号清单与 headless host
 
@@ -269,12 +269,12 @@ SKYLINE_LINUX_SKYLINE_ADDON=native/build/skyline.node npm run test:contract
   `dart:ui` 的 `Application` / `createNativeParagraph` / `warmUpFont`。
 - `native/host/`：不依赖 GTK/EGL 的软件渲染 host，启动 engine → 发送 implicit view
   metrics → 处理 vsync → 取一帧 RGBA → 写入 `/dev/shm/skyline_<key>.dat`。
-- `native/host/host_engine.cc`：把同一引擎接入 `skyline.node`。`createWindow`
+- `native/host/flutter_window_backend.cc`：把同一引擎接入 `skyline.node`。`createWindow`
   为每个 window 启动独立 platform thread（`FlutterEngineRun` + vsync baton），
   出帧后 BGRA→RGBA 写入调用方传入的共享内存数据区（6 号参数 ArrayBuffer，或
   9 号参数 16 字节 ptr+size 描述符），再经 N-API threadsafe function 调用
   `onWindowRasterized`。支持多窗口、destroy/重建；未构建引擎时 CMake 仍回退到
-  `StubEngine`。
+  `StubWindowBackend`。
 - 本机已于 2026-11-19 完成固定 revision 的 debug engine 构建（357 MB
   `libflutter_engine.so`），`npm run test:engine` 校验一帧 128×96 RGBA、首像素
   `[255,0,0,255]`、`vsyncCount=1`、`presentCount=1`；

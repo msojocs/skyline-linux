@@ -4,14 +4,19 @@
 
 - 在模块加载时注册全局 `SkylineShell` / `SkylineDebugInfo`，方法顺序、属性描述符、
   参数校验与错误消息与官方 Windows 模块一致；
-- 通过 `__skylineNative` 原生对象预留引擎边界（回调注册、窗口生命周期、事件分发）；
+- bootstrap 通过 `__skylineNative` 原生对象调用原生侧：`src/main.cc` 的
+  `kBindings` 表登记每个方法的名字、最少参数个数与缺参时的错误消息，参数解码、
+  错误转换和 threadsafe function 的生命周期由 `src/napi_binding.hh` 统一处理；
+- 窗口生命周期、输入与出帧经 `skyline::WindowBackend`（`include/window_backend.hh`），
+  页面操作、查询、sink 与自动化直接调用嵌入式运行时的 C ABI
+  （`include/skyline/runtime_api.h`）；
 - 引擎后端：`native/build/skyline.node` 在固定引擎已构建时链接
   `libflutter_engine.so`（`SKYLINE_HAVE_ENGINE`），`createWindow` 为每个窗口启动
-  独立 platform thread；未构建引擎时回退到 `StubEngine`，契约测试不受影响。
+  独立 platform thread；未构建引擎时回退到 `StubWindowBackend`，契约测试不受影响。
 
 ## 引擎后端（阶段 2）
 
-`native/host/host_engine.cc` 实现 `skyline::Engine`：
+`native/host/flutter_window_backend.cc` 实现 `skyline::WindowBackend`：
 
 - `createWindow` 解析 `bundle_path`（`flutter_assets/kernel_blob.bin` 或直接指向
   assets 目录）与 `icudtl.dat`（bundle、`SKYLINE_ICU`、引擎 stage 默认路径），
@@ -31,7 +36,7 @@
   `window <id> stopped` 输出到 stderr；宽度/高度/dpr 非法或 bundle 缺 kernel
   时 `createWindow` 同步抛错；引擎启动有 15 s 超时。
 - CMake 会自动设置 `rpath` 指向 `native/engine/out/linux-x64-debug`；引擎缺失时
-  仍生成 StubEngine 版本。
+  仍生成 StubWindowBackend 版本。
 - `createWindow` 运行 bundle 的默认 `main`（官方契约没有 entrypoint 参数）；需要
   `--entrypoint-arg` 的 appservice 调试路径仍使用独立 `skyline_host`。
 

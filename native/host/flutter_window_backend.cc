@@ -7,7 +7,7 @@
 // frames are copied (BGRA -> RGBA) into the caller-supplied shared-memory data
 // area and the Node callback is dispatched through a threadsafe function.
 
-#include "host_engine.hh"
+#include "flutter_window_backend.hh"
 
 #include <flutter_embedder.h>
 
@@ -199,8 +199,8 @@ class WindowHost {
     if (thread_.joinable()) thread_.join();
   }
 
-  void SetRasterizedCallback(Engine::RasterizedCallback callback) {
-    Engine::RasterizedCallback notify_now;
+  void SetRasterizedCallback(WindowBackend::RasterizedCallback callback) {
+    WindowBackend::RasterizedCallback notify_now;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       callback_ = std::move(callback);
@@ -236,7 +236,7 @@ class WindowHost {
   // deadlocks the appservice webview on touch and trips the engine's
   // weak_ptr thread check.  Marshal the event onto the platform thread and
   // keep the mailbox FIFO so down/move/up stay ordered.
-  void SendPointer(Engine::PointerPhase phase, double x, double y) {
+  void SendPointer(WindowBackend::PointerPhase phase, double x, double y) {
     double dpr = 1.0;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -250,28 +250,28 @@ class WindowHost {
     // Touch and mouse need distinct device ids: the engine keeps one pointer
     // state per device, so hovering with a "touch" device while it is down
     // trips the converter's !is_down checks.
-    event.device = phase == Engine::PointerPhase::kHover ? kMouseDevice
+    event.device = phase == WindowBackend::PointerPhase::kHover ? kMouseDevice
                                                         : kTouchDevice;
     event.view_id = 0;
     event.signal_kind = kFlutterPointerSignalKindNone;
     switch (phase) {
-      case Engine::PointerPhase::kDown:
+      case WindowBackend::PointerPhase::kDown:
         event.phase = kDown;
         event.device_kind = kFlutterPointerDeviceKindTouch;
         break;
-      case Engine::PointerPhase::kMove:
+      case WindowBackend::PointerPhase::kMove:
         event.phase = kMove;
         event.device_kind = kFlutterPointerDeviceKindTouch;
         break;
-      case Engine::PointerPhase::kUp:
+      case WindowBackend::PointerPhase::kUp:
         event.phase = kUp;
         event.device_kind = kFlutterPointerDeviceKindTouch;
         break;
-      case Engine::PointerPhase::kCancel:
+      case WindowBackend::PointerPhase::kCancel:
         event.phase = kCancel;
         event.device_kind = kFlutterPointerDeviceKindTouch;
         break;
-      case Engine::PointerPhase::kHover:
+      case WindowBackend::PointerPhase::kHover:
         event.phase = kHover;
         event.device_kind = kFlutterPointerDeviceKindMouse;
         break;
@@ -283,14 +283,14 @@ class WindowHost {
       // aborts the whole process on a duplicate down / orphan move / up, so
       // keep the single-touch state machine coherent here.
       if (event.device_kind == kFlutterPointerDeviceKindTouch) {
-        if (phase == Engine::PointerPhase::kDown) {
+        if (phase == WindowBackend::PointerPhase::kDown) {
           if (touch_down_) return;
           touch_down_ = true;
-        } else if (phase == Engine::PointerPhase::kUp ||
-                   phase == Engine::PointerPhase::kCancel) {
+        } else if (phase == WindowBackend::PointerPhase::kUp ||
+                   phase == WindowBackend::PointerPhase::kCancel) {
           if (!touch_down_) return;
           touch_down_ = false;
-        } else if (phase == Engine::PointerPhase::kMove) {
+        } else if (phase == WindowBackend::PointerPhase::kMove) {
           if (!touch_down_) return;
         }
       }
@@ -557,7 +557,7 @@ class WindowHost {
     const uint32_t width = static_cast<uint32_t>(row_bytes / 4);
     const size_t frame_size = static_cast<size_t>(width) * height * 4;
 
-    Engine::RasterizedCallback callback;
+    WindowBackend::RasterizedCallback callback;
     bool wrote = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -631,7 +631,7 @@ class WindowHost {
   bool ready_ = false;
   bool stop_ = false;
   std::string init_error_;
-  Engine::RasterizedCallback callback_;
+  WindowBackend::RasterizedCallback callback_;
 
   void* frame_buffer_ = nullptr;
   size_t frame_buffer_size_ = 0;
@@ -642,7 +642,7 @@ class WindowHost {
 std::mutex WindowHost::accessibility_mutex_;
 WindowHost* WindowHost::accessibility_host_ = nullptr;
 
-class HostEngine final : public Engine {
+class FlutterWindowBackend final : public WindowBackend {
  public:
   void CreateWindow(const CreateWindowArgs& args) override {
     if (args.bundle_path.empty()) {
@@ -716,8 +716,8 @@ class HostEngine final : public Engine {
 
 }  // namespace
 
-std::unique_ptr<Engine> CreateHostEngine() {
-  return std::make_unique<HostEngine>();
+std::unique_ptr<WindowBackend> CreateFlutterWindowBackend() {
+  return std::make_unique<FlutterWindowBackend>();
 }
 
 }  // namespace skyline

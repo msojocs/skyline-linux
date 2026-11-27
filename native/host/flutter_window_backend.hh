@@ -2,7 +2,7 @@
 
 #include <memory>
 
-#include "engine.hh"
+#include "window_backend.hh"
 
 namespace skyline {
 
@@ -10,6 +10,6 @@ namespace skyline {
 // platform thread running FlutterEngineRun; presented frames are copied into
 // the shared-memory data area supplied to createWindow and reported through the
 // window's rasterized callback.
-std::unique_ptr<Engine> CreateHostEngine();
+std::unique_ptr<WindowBackend> CreateFlutterWindowBackend();
 
 }  // namespace skyline

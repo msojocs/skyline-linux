@@ -23,10 +23,10 @@ struct CreateWindowArgs {
   size_t frame_buffer_size = 0;
 };
 
-// Backend boundary for the native API layer.  The stub implementation reports
-// that no engine is attached; the Linux Flutter Engine backend replaces it in
-// phase 2 without changing the JS-visible surface.
-class Engine {
+// What skyline.node needs from the engine host: window lifecycle, simulator
+// input and presented frames.  Page operations, queries, scrolling, sinks and
+// automation go straight to the embedded runtime (skyline/runtime_api.h).
+class WindowBackend {
  public:
   enum class PointerPhase : uint8_t {
     kDown = 0,
@@ -39,12 +39,14 @@ class Engine {
   // Invoked once per presented frame; called from the engine's raster thread.
   using RasterizedCallback = std::function<void()>;
 
-  virtual ~Engine() = default;
+  virtual ~WindowBackend() = default;
   virtual void CreateWindow(const CreateWindowArgs& args) = 0;
   virtual void DestroyWindow(double window_id) = 0;
   // Returns false for unknown window ids; used for `onWindowRasterized`
   // validation before the callback is registered.
   virtual bool HasWindow(double window_id) const = 0;
+  // Replaces the window's callback.  A present that started before the call
+  // may still invoke the previous callback once.
   virtual void SetRasterizedCallback(double window_id,
                                      RasterizedCallback callback) = 0;
   // DevTools simulator input.  Coordinates are logical (CSS) pixels; the host
@@ -67,7 +69,9 @@ class Engine {
   }
 };
 
-class StubEngine final : public Engine {
+// Used when skyline.node is built without an engine: every window operation
+// reports that no backend is attached.
+class StubWindowBackend final : public WindowBackend {
  public:
   void CreateWindow(const CreateWindowArgs& args) override;
   void DestroyWindow(double window_id) override;

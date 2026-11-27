@@ -47,7 +47,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 # ---------------------------------------------------------------------------
 # Linux Flutter Engine (phase 2).  When the pinned engine has been built, the
 # N-API module links it and hosts windows in-process; otherwise it falls back
-# to StubEngine so contract tests still build on a source-only machine.
+# to StubWindowBackend so contract tests still build on a source-only machine.
 # ---------------------------------------------------------------------------
 set(SKYLINE_ENGINE_ROOT
   "${CMAKE_CURRENT_SOURCE_DIR}/engine/out/linux-x64-debug"
@@ -58,7 +58,8 @@ find_package(Threads REQUIRED)
 
 add_library(skyline_node MODULE
   src/main.cc
-  src/engine_stub.cc
+  src/napi_binding.cc
+  src/window_backend_stub.cc
 )
 target_include_directories(skyline_node PRIVATE
   "${NODE_INCLUDE_DIR}"
@@ -66,7 +67,7 @@ target_include_directories(skyline_node PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 if(EXISTS "${SKYLINE_ENGINE_LIB}" AND EXISTS "${SKYLINE_ENGINE_HEADER}")
-  target_sources(skyline_node PRIVATE host/host_engine.cc)
+  target_sources(skyline_node PRIVATE host/flutter_window_backend.cc)
   target_include_directories(skyline_node PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/host"
     "${SKYLINE_ENGINE_ROOT}"
@@ -86,7 +87,7 @@ if(EXISTS "${SKYLINE_ENGINE_LIB}" AND EXISTS "${SKYLINE_ENGINE_HEADER}")
   message(STATUS "skyline_node: Linux Flutter Engine backend at ${SKYLINE_ENGINE_ROOT}")
 else()
   message(STATUS
-    "skyline_node: engine not built (${SKYLINE_ENGINE_ROOT}); using StubEngine. "
+    "skyline_node: engine not built (${SKYLINE_ENGINE_ROOT}); using StubWindowBackend. "
     "Run native/engine/fetch-engine.sh && native/engine/build-engine.sh.")
 endif()
 set_target_properties(skyline_node PROPERTIES

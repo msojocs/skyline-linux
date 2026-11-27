@@ -20,6 +20,7 @@
     "test:shared-memory": "node --test native/test/shared-memory-addon.test.js",
     "test:host-engine": "node --test native/test/host-engine-smoke.test.js",
     "test:host-engine:aot": "node --test native/test/host-engine-aot.test.js",
+    "test:addon": "node --test native/test/addon-lifecycle.test.js",
     "test:ui-compat": "node --test native/test/dart-ui-compat-smoke.test.js",
     "test:appservice": "node --test native/test/skyline-appservice-smoke.test.js",
     "test:page": "node --test native/test/skyline-page-smoke.test.js",
