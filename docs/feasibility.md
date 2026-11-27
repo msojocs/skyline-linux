@@ -209,8 +209,8 @@ C1 原先按“需要完整官方 DevTools 环境”阻塞。实际验证表明�
 6. 从共享内存读取 `frameId + frameSize + RGBA`。**Windows 原始帧是 BGRA**（官方
    pageframe 的 WebGL shader 在 win32 下使用 `.bgra`），需交换 R/B 后再比较。
 
-`tools/l5-windows.js` 与 `tools/l5-win-app/` 实现了上述流程；`npm run l5:windows`
-采集并将结果写入 `spec/l5-baseline.win32.json`。官方引擎限制 dpr=2，因此帧为
+`tools/l5-windows.js` 与 `tools/win-host/`（`l5` 场景）实现了上述流程；`npm run l5:windows`
+采集并将结果写入 `spec/l5-baseline.win32.json`（帧保存为 `spec/l5/win32/<夹具>.png`）。官方引擎限制 dpr=2，因此帧为
 640x480 设备像素；Linux 侧用同一夹具在 `--dpr 2` 下重放，比较时仅排除 Linux debug
 构建右上角的 “DEBUG” 横幅（`ignoreRects`，release Windows 引擎没有该横幅）。
 
@@ -245,7 +245,7 @@ D6 后 `aspect-ratio`、`display:inline-block` 行盒、`white-space` 模式和
 会命中 `NodePlatform::ForIsolate` 断言，因此 24 个 engine-context 用例只能标为
 `skip`。现在复用 §3.1 的渲染进程宿主：
 
-1. `tools/win-oracle-app/` 在官方 Windows Electron 渲染进程中加载官方
+1. `tools/win-host/`（`oracle` 场景）在官方 Windows Electron 渲染进程中加载官方
    `skyline.node`；`test/lib/win-shim.js` 把 `resources/app` 指向该宿主（官方
    Electron 是打包应用，会忽略 CLI 传入的 app 路径）。
 2. 对 brightness/destroy/notify 这类不建窗口的用例，先用

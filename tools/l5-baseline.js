@@ -13,26 +13,16 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { devtoolsEntrypointArgs } = require('../test/lib/host');
-const { buildProblems } = require('./build-status');
+const {
+  SKYLINE_DEBUG,
+  missingPrerequisites,
+  runHost,
+} = require('../test/lib/host');
+const { buildProblems, fingerprints } = require('./build-status');
+const { stringifyBaseline } = require('../test/lib/l5');
 
 const repoRoot = path.resolve(__dirname, '..');
-const host = path.join(repoRoot, 'native', 'build', 'skyline_host');
-const engineDir = path.join(repoRoot, 'native', 'engine', 'out', 'linux-x64-debug');
-const engineLib = path.join(engineDir, 'libflutter_engine.so');
-const engineRuntime = path.join(engineDir, 'libskyline.so');
-const engineIcu = path.join(engineDir, 'icudtl.dat');
-const toolchainIcu = path.join(
-  repoRoot, 'native', 'engine', 'toolchain', 'engine-artifacts', 'icudtl.dat',
-);
-const icu = fs.existsSync(engineIcu) ? engineIcu : toolchainIcu;
-const assets = path.join(
-  repoRoot, 'native', 'engine', 'work', 'skyline-app', 'build', 'flutter_assets',
-);
-const kernel = path.join(assets, 'kernel_blob.bin');
 const baselinePath = path.join(repoRoot, 'spec', 'l5-baseline.json');
 
 const logicalWidth = 320;
@@ -159,64 +149,22 @@ function fixtureSetProblems(baselines = {}) {
 }
 
 function prerequisites() {
-  const missing = [];
-  if (!fs.existsSync(host)) missing.push('native/build/skyline_host');
-  if (!fs.existsSync(engineLib)) missing.push('libflutter_engine.so');
-  if (!fs.existsSync(engineRuntime)) missing.push('embedded libskyline.so');
-  if (!fs.existsSync(kernel)) missing.push('kernel_blob.bin');
-  if (!fs.existsSync(icu)) missing.push('icudtl.dat');
-  return missing;
+  return missingPrerequisites(SKYLINE_DEBUG);
 }
 
+// Replays one fixture and returns the RGBA frame captured after 1.8 s.
 function render(fixturePath, options = {}) {
-  const dpr = options.dpr === undefined ? 1 : options.dpr;
-  const cssWidth = options.width === undefined ? logicalWidth : options.width;
-  const cssHeight = options.height === undefined ? logicalHeight : options.height;
-  const frameWidth = Math.ceil(cssWidth * dpr);
-  const frameHeight = Math.ceil(cssHeight * dpr);
-  const expectedFrameSize = frameWidth * frameHeight * 4;
-  const key = `skyline_l5_${process.pid}_${Date.now().toString(36)}_${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
-  const shmPath = `/dev/shm/skyline_${key}.dat`;
-  const env = {
-    ...process.env,
-    LD_LIBRARY_PATH: [engineDir, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':'),
-    SKYLINE_APP_SERVICE_OPS: `@${fixturePath}`,
-  };
-  const result = spawnSync(host, [
-    '--assets', assets,
-    '--icu', icu,
-    '--width', String(cssWidth),
-    '--height', String(cssHeight),
-    '--dpr', String(dpr),
-    '--shm-key', key,
-    '--timeout-ms', '1800',
-    '--frames', '0',
-    '--no-shutdown',
-    ...devtoolsEntrypointArgs({ width: cssWidth, height: cssHeight, skylineLibrary: engineLib }),
-  ], { encoding: 'utf8', timeout: 45000, env });
-  try {
-    if (!fs.existsSync(shmPath)) {
-      throw new Error(`no frame for ${path.basename(fixturePath)}:\n${result.stderr}`);
-    }
-    const buffer = fs.readFileSync(shmPath);
-    const dataSize = Number(buffer.readBigUInt64LE(0));
-    if (buffer.length !== 16 + dataSize) {
-      throw new Error(`bad shared-memory size for ${path.basename(fixturePath)}`);
-    }
-    const data = buffer.subarray(16);
-    if (data.readUInt32LE(4) !== expectedFrameSize) {
-      throw new Error(`bad frame size for ${path.basename(fixturePath)}`);
-    }
-    return data.subarray(8, 8 + expectedFrameSize);
-  } finally {
-    try {
-      fs.unlinkSync(shmPath);
-    } catch {
-      // Best effort.
-    }
-  }
+  const { pixels, logs } = runHost({
+    key: 'skyline_l5',
+    ops: fixturePath,
+    width: options.width === undefined ? logicalWidth : options.width,
+    height: options.height === undefined ? logicalHeight : options.height,
+    dpr: options.dpr === undefined ? 1 : options.dpr,
+    timeoutMs: 1800,
+    frames: 0,
+  });
+  if (!pixels) throw new Error(`no frame for ${path.basename(fixturePath)}:\n${logs}`);
+  return pixels;
 }
 
 function samples(pixels) {
@@ -245,6 +193,9 @@ function record() {
   return {
     comment:
       'Linux-side deterministic frame baseline. Windows entries use the same schema.',
+    // Source fingerprints of the runtime / dart:ui / app_compat inputs the
+    // frames were rendered with (tools/build-status.js).
+    recordedWith: fingerprints(),
     fixtures,
   };
 }
@@ -271,7 +222,7 @@ function compare(baseline) {
     }
     console.error(
       `FAIL ${name}: expected ${expected.sha256}, got ${hash} ` +
-      `(maxDelta=${maxDelta}, mismatchedChannels=${mismatched})`);
+      `(maxDelta=${maxDelta}, mismatchedChannels=${mismatched}; ${baselineChangeHint(baseline)})`);
   }
   return failed === 0;
 }
@@ -295,7 +246,7 @@ function main() {
       process.exit(1);
     }
     const baseline = record();
-    fs.writeFileSync(baselinePath, JSON.stringify(baseline, null, 1) + '\n');
+    fs.writeFileSync(baselinePath, stringifyBaseline(baseline) + '\n');
     console.error(`wrote ${baselinePath}`);
     return;
   }
@@ -314,8 +265,20 @@ function main() {
 
 if (require.main === module) main();
 
+// Explains a hash mismatch: whether the renderer inputs changed since the
+// baseline was recorded.
+function baselineChangeHint(baseline) {
+  if (!baseline.recordedWith) return 'the baseline does not record its source fingerprints';
+  const current = fingerprints();
+  const changed = Object.keys(current).filter(key => current[key] !== baseline.recordedWith[key]);
+  return changed.length
+    ? `sources changed since the baseline was recorded (${changed.join(', ')})`
+    : 'sources are unchanged since the baseline was recorded, so the renderer is nondeterministic or the environment differs (fonts?)';
+}
+
 module.exports = {
   EXCLUDED_FIXTURES,
+  baselineChangeHint,
   FIXTURES,
   baselinePath,
   fixtureKey,

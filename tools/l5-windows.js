@@ -6,6 +6,11 @@
 //   node tools/l5-windows.js --write      # capture + write spec/l5-baseline.win32.json
 //   node tools/l5-windows.js              # compare Linux frames with the baseline
 //   node tools/l5-windows.js --reuse --write
+//   --only name1,name2                    # limit capture (merge) or comparison
+//
+// Frames are stored as spec/l5/win32/<fixture>.png and indexed by the baseline
+// JSON.  Comparing needs only the Linux engine; failures write
+// expected/actual/diff PNGs to test/results/l5.
 //
 // The official engine only accepts device_pixel_ratio == 2, so frames are
 // captured at 320x240 CSS pixels and stored as 640x480 RGBA.  The raw shared
@@ -19,18 +24,27 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const zlib = require('node:zlib');
 
 const repoRoot = path.resolve(__dirname, '..');
-const appDir = path.join(repoRoot, 'tools', 'l5-win-app');
+const appDir = path.join(repoRoot, 'tools', 'win-host');
 const workDir = path.join(repoRoot, 'tmp', 'l5-win');
 const shimDir = path.join(workDir, 'electron');
 const frameDir = path.join(workDir, 'frames');
 const baselinePath = path.join(repoRoot, 'spec', 'l5-baseline.win32.json');
 const l5 = require(path.join(__dirname, 'l5-baseline.js'));
-const { compareFrames } = require(path.join(repoRoot, 'test', 'lib', 'l5.js'));
-const { windowsResources, windowsElectron, wineBinary } = require(
+const {
+  compareFrames,
+  compareWithWindows,
+  stringifyBaseline,
+  windowsFrame,
+  writeDiffImages,
+} = require(path.join(repoRoot, 'test', 'lib', 'l5.js'));
+const { encodePng } = require(path.join(repoRoot, 'test', 'lib', 'png.js'));
+const framesDir = path.join(repoRoot, 'spec', 'l5', 'win32');
+const diffDir = path.join(repoRoot, 'test', 'results', 'l5');
+const { toWindowsPath, windowsResources, windowsElectron, wineBinary } = require(
   path.join(repoRoot, 'test', 'lib', 'env.js'));
+const { ensureShim } = require(path.join(repoRoot, 'test', 'lib', 'win-shim.js'));
 
 const LOGICAL_WIDTH = 320;
 const LOGICAL_HEIGHT = 240;
@@ -103,37 +117,11 @@ const KNOWN_DIVERGENCES = {
 
 function missingPrerequisites() {
   const missing = [];
-  if (!fs.existsSync(appDir)) missing.push('tools/l5-win-app');
+  if (!fs.existsSync(appDir)) missing.push('tools/win-host');
   if (!windowsElectron()) missing.push('official Windows electron.exe');
   if (!windowsResources()) missing.push('official app.asar.unpacked resources');
   if (spawnSync(wineBinary(), ['--version']).status !== 0) missing.push('wine');
   return missing;
-}
-
-function winePath(value) {
-  return 'Z:' + path.resolve(value).replace(/\//g, '\\');
-}
-
-function ensureShim(electron) {
-  const source = path.dirname(electron);
-  const expectedApp = path.join(appDir);
-  const appLink = path.join(shimDir, 'resources', 'app');
-  let current = null;
-  try { current = fs.realpathSync(appLink); } catch {}
-  if (fs.existsSync(path.join(shimDir, path.basename(electron)))
-      && current === fs.realpathSync(expectedApp)) {
-    return path.join(shimDir, path.basename(electron));
-  }
-  fs.rmSync(shimDir, { recursive: true, force: true });
-  fs.mkdirSync(path.join(shimDir, 'resources'), { recursive: true });
-  for (const entry of fs.readdirSync(source)) {
-    if (entry === 'resources') continue;
-    const from = path.join(source, entry);
-    const to = path.join(shimDir, entry);
-    try { fs.linkSync(from, to); } catch { fs.cpSync(from, to, { recursive: true }); }
-  }
-  fs.symlinkSync(appDir, appLink);
-  return path.join(shimDir, path.basename(electron));
 }
 
 function samples(pixels) {
@@ -168,14 +156,15 @@ function captureOne(name, electron, resources) {
   const env = {
     ...process.env,
     SKYLINE_WIN_RESOURCES: resources,
-    L5_FIXTURE: winePath(fixture),
-    L5_FRAME: winePath(frameFile),
-    L5_OUT: winePath(reportFile),
+    L5_FIXTURE: toWindowsPath(fixture),
+    L5_FRAME: toWindowsPath(frameFile),
+    L5_OUT: toWindowsPath(reportFile),
     L5_KEY: `l5win_${name}_${process.pid}_${Date.now().toString(36)}`,
     L5_WIDTH: String(LOGICAL_WIDTH),
     L5_HEIGHT: String(LOGICAL_HEIGHT),
     L5_DPR: String(DPR),
     WINEDEBUG: '-all',
+    SKYLINE_WIN_SCENARIO: 'l5',
   };
   const started = Date.now();
   const proc = spawnSync(wineBinary(), [electron, '--no-sandbox'], {
@@ -253,11 +242,13 @@ function writeBaseline(electron, resources, reuse, only = null) {
     const capture = report && report.report ? report.report : report;
     if (capture && capture.skyline) skyline = capture.skyline;
     const divergence = KNOWN_DIVERGENCES[name];
+    fs.mkdirSync(framesDir, { recursive: true });
+    fs.writeFileSync(path.join(framesDir, `${name}.png`), encodePng(frame, FRAME_WIDTH, FRAME_HEIGHT));
     const entry = {
       sha256: crypto.createHash('sha256').update(frame).digest('hex'),
       nonWhite: nonWhite(frame),
       samples: samples(frame),
-      rgbaZlib: zlib.deflateSync(frame, { level: 9 }).toString('base64'),
+      frame: `l5/win32/${name}.png`,
     };
     if (divergence) {
       entry.note = divergence.note;
@@ -303,7 +294,12 @@ function writeBaseline(electron, resources, reuse, only = null) {
     ignoreRects: existing && existing.ignoreRects ? existing.ignoreRects : IGNORE_RECTS,
     fixtures,
   };
-  fs.writeFileSync(baselinePath, JSON.stringify(baseline, null, 1) + '\n');
+  fs.writeFileSync(baselinePath, stringifyBaseline(baseline) + '\n');
+  // Drop frames of fixtures that left the baseline.
+  const referenced = new Set(Object.keys(fixtures).map((name) => `${name}.png`));
+  for (const file of fs.readdirSync(framesDir)) {
+    if (!referenced.has(file)) fs.rmSync(path.join(framesDir, file));
+  }
   console.error(`wrote ${baselinePath}`);
 }
 
@@ -318,7 +314,7 @@ function parseOnly(argv) {
     .map((name) => name.replace(/\.ops\.json$/, ''));
 }
 
-function compareBaseline() {
+function compareBaseline(only = null) {
   if (!fs.existsSync(baselinePath)) {
     console.error(`missing ${baselinePath}; run with --write`);
     process.exit(1);
@@ -332,7 +328,13 @@ function compareBaseline() {
     console.error(`FAIL ${problem}`);
     failures++;
   }
-  for (const [name, expected] of Object.entries(baseline.fixtures || {})) {
+  const entries = Object.entries(baseline.fixtures || {})
+    .filter(([name]) => !only || only.includes(name));
+  if (only && entries.length !== only.length) {
+    console.error(`FAIL --only names without a baseline entry: ${only.filter((name) => !baseline.fixtures[name]).join(', ')}`);
+    failures++;
+  }
+  for (const [name, expected] of entries) {
     const fixture = path.join(repoRoot, 'test', 'fixtures', `${name}.ops.json`);
     if (!fs.existsSync(fixture)) continue;  // reported by fixtureSetProblems()
     if (expected.compare === false) {
@@ -340,25 +342,20 @@ function compareBaseline() {
       console.log(`skip ${name}: ${expected.note || 'not comparable'}`);
       continue;
     }
-    const win = zlib.inflateSync(Buffer.from(expected.rgbaZlib, 'base64'));
+    const win = windowsFrame(expected, baselinePath);
     const linux = l5.render(fixture, {
       dpr, width: baseline.width, height: baseline.height,
     });
-    const tolerance = Number.isInteger(expected.tolerance)
-      ? expected.tolerance : baseline.tolerance;
-    const maxRatio = typeof expected.maxMismatchRatio === 'number'
-      ? expected.maxMismatchRatio : baseline.maxMismatchRatio ?? 0.01;
-    const result = compareFrames(win, linux, {
-      width: baseline.frame_width || FRAME_WIDTH,
-      tolerance,
-      maxMismatchRatio: maxRatio,
-      ignoreRects: baseline.ignoreRects || IGNORE_RECTS,
-    });
+    const result = compareWithWindows(baseline, expected, win, linux);
     compared++;
-    const status = result.passed ? 'ok  ' : 'FAIL';
-    console.log(`${status} ${name} maxDelta=${result.maxDelta} ` +
-      `mismatchRatio=${result.mismatchRatio.toFixed(6)} (<= ${maxRatio})`);
-    if (!result.passed) failures++;
+    let detail = '';
+    if (!result.passed) {
+      const diff = writeDiffImages(diffDir, name, win, linux, result.width, result.tolerance);
+      detail = ` -> ${path.relative(repoRoot, diff)}`;
+      failures++;
+    }
+    console.log(`${result.passed ? 'ok  ' : 'FAIL'} ${name} maxDelta=${result.maxDelta} ` +
+      `mismatchRatio=${result.mismatchRatio.toFixed(6)} (<= ${result.maxMismatchRatio})${detail}`);
   }
   if (compared === 0) {
     console.error('baseline has no comparable fixtures');
@@ -369,18 +366,24 @@ function compareBaseline() {
 }
 
 function main() {
+  const only = parseOnly(process.argv);
+  if (!process.argv.includes('--write')) {
+    // Comparing only renders the Linux side against the committed frames.
+    const missing = l5.prerequisites();
+    if (missing.length) {
+      console.error(`missing prerequisites: ${missing.join(', ')}`);
+      process.exit(77);
+    }
+    compareBaseline(only);
+    return;
+  }
   const missing = missingPrerequisites();
   if (missing.length) {
     console.error(`missing prerequisites: ${missing.join(', ')}`);
     process.exit(77);
   }
-  const electron = ensureShim(windowsElectron());
-  const resources = windowsResources();
-  if (process.argv.includes('--write')) {
-    writeBaseline(electron, resources, process.argv.includes('--reuse'), parseOnly(process.argv));
-    return;
-  }
-  compareBaseline();
+  const electron = ensureShim(windowsElectron(), appDir, shimDir);
+  writeBaseline(electron, windowsResources(), process.argv.includes('--reuse'), only);
 }
 
 if (require.main === module) main();

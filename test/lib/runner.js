@@ -7,7 +7,7 @@ const { resultsDir, toWindowsPath, wineBinary } = require('./env');
 const { ensureShim } = require('./win-shim');
 
 const driverPath = path.resolve(__dirname, '..', 'driver.js');
-const oracleAppDir = path.resolve(__dirname, '..', '..', 'tools', 'win-oracle-app');
+const winHostDir = path.resolve(__dirname, '..', '..', 'tools', 'win-host');
 const oracleShimDir = path.resolve(__dirname, '..', '..', 'tmp', 'win-oracle');
 
 function safeName(id) {
@@ -28,12 +28,13 @@ function buildInvocation(options, resultPath, logPath) {
   if (platform === 'win32') {
     // Engine-context cases must run in a real Electron renderer: the official
     // module aborts in NodePlatform::ForIsolate when ELECTRON_RUN_AS_NODE
-    // starts a Flutter engine.  tools/win-oracle-app reuses the same renderer
-    // host as the L5 collector and writes the driver's result JSON.
+    // starts a Flutter engine.  tools/win-host (oracle scenario) shares the
+    // renderer host with the L5 collector and writes the driver's result JSON.
     if (options.allowEngineContext) {
       const env = {
         ...process.env,
         WINEDEBUG: '-all',
+        SKYLINE_WIN_SCENARIO: 'oracle',
         ORACLE_CASE: caseId,
         ORACLE_OUT: toWindowsPath(resultPath),
         ORACLE_DRIVER: toWindowsPath(driverPath),
@@ -54,8 +55,8 @@ function buildInvocation(options, resultPath, logPath) {
         if (value) env[key] = toWindowsPath(value);
       }
       // The DevTools Electron is a packaged app; replace resources/app with
-      // the oracle host instead of passing an app path on the command line.
-      const shimElectron = ensureShim(paths.electron, oracleAppDir, oracleShimDir);
+      // the Wine host instead of passing an app path on the command line.
+      const shimElectron = ensureShim(paths.electron, winHostDir, oracleShimDir);
       return {
         command: wineBinary(),
         args: [shimElectron, '--no-sandbox'],

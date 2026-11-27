@@ -24,7 +24,6 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const zlib = require('node:zlib');
 const { spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
@@ -179,7 +178,7 @@ function l5Comparison(enabled) {
     return result;
   }
   const l5 = require('./l5-baseline');
-  const { compareFrames } = require('../test/lib/l5');
+  const { compareWithWindows, windowsFrame } = require('../test/lib/l5');
   for (const [name, expected] of Object.entries(baseline.fixtures || {})) {
     const entry = {
       name,
@@ -207,14 +206,8 @@ function l5Comparison(enabled) {
         width: baseline.width,
         height: baseline.height,
       });
-      const win = zlib.inflateSync(Buffer.from(expected.rgbaZlib, 'base64'));
-      const stats = compareFrames(win, linux, {
-        width: baseline.frame_width,
-        tolerance: Number.isInteger(expected.tolerance) ? expected.tolerance : baseline.tolerance,
-        maxMismatchRatio: typeof expected.maxMismatchRatio === 'number'
-          ? expected.maxMismatchRatio : baseline.maxMismatchRatio ?? 0.01,
-        ignoreRects: baseline.ignoreRects || [],
-      });
+      const win = windowsFrame(expected, l5BasePath);
+      const stats = compareWithWindows(baseline, expected, win, linux);
       entry.maxDelta = stats.maxDelta;
       entry.mismatchRatio = Number(stats.mismatchRatio.toFixed(6));
       entry.passed = stats.passed;

@@ -7,25 +7,31 @@
 //
 // The Windows half uses frames captured by `tools/l5-windows.js` from the
 // official Windows `skyline.node` under Wine (dpr=2).  `spec/l5-baseline.win32.json`
-// stores the zlib-compressed RGBA frames; comparison uses a per-channel
-// tolerance and excludes the Linux debug build's corner banner.
+// indexes the frames stored as spec/l5/win32/<fixture>.png; comparison uses a
+// per-channel tolerance and excludes the Linux debug build's corner banner.
+// Failing comparisons write expected/actual/diff PNGs to test/results/l5.
 // See docs/feasibility.md section 3.1.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const zlib = require('node:zlib');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const l5 = require(path.join(repoRoot, 'tools', 'l5-baseline.js'));
-const { compareFrames, sha256 } = require(path.join(repoRoot, 'test', 'lib', 'l5.js'));
-const { checkBuildCurrent } = require(path.join(repoRoot, 'test', 'lib', 'host.js'));
+const {
+  compareWithWindows,
+  sha256,
+  windowsFrame,
+  writeDiffImages,
+} = require(path.join(repoRoot, 'test', 'lib', 'l5.js'));
+const {
+  SKYLINE_DEBUG,
+  checkBuildCurrent,
+  prerequisiteSkip,
+} = require(path.join(repoRoot, 'test', 'lib', 'host.js'));
 
-function skipReason() {
-  const missing = l5.prerequisites();
-  return missing.length ? `missing ${missing.join(', ')}` : false;
-}
+const hostSkip = prerequisiteSkip(SKYLINE_DEBUG);
 
 function windowsBaselinePath() {
   const env = process.env.SKYLINE_L5_WINDOWS_BASELINE;
@@ -50,18 +56,35 @@ test('L5: fixture lists and baselines cover the same fixtures', () => {
   const winPath = windowsBaselinePath();
   if (winPath) baselines[path.relative(repoRoot, winPath)] = JSON.parse(fs.readFileSync(winPath, 'utf8'));
   const problems = l5.fixtureSetProblems(baselines);
+  if (winPath) {
+    // Every Windows entry's PNG exists, and no PNG is left without an entry.
+    const winBaseline = baselines[path.relative(repoRoot, winPath)];
+    const framesDir = path.join(path.dirname(winPath), 'l5', 'win32');
+    const referenced = new Set();
+    for (const [name, entry] of Object.entries(winBaseline.fixtures || {})) {
+      if (!entry.frame) continue;
+      const file = path.resolve(path.dirname(winPath), entry.frame);
+      referenced.add(file);
+      if (!fs.existsSync(file)) problems.push(`${name}: missing frame ${entry.frame}`);
+    }
+    if (fs.existsSync(framesDir)) {
+      for (const file of fs.readdirSync(framesDir)) {
+        if (!referenced.has(path.join(framesDir, file))) problems.push(`unreferenced frame spec/l5/win32/${file}`);
+      }
+    }
+  }
   assert.deepEqual(problems, [],
     `L5 fixture sets disagree:\n  ${problems.join('\n  ')}\n` +
     'List new fixtures in FIXTURES or EXCLUDED_FIXTURES (tools/l5-baseline.js), then run ' +
     'npm run l5:baseline and npm run l5:windows -- --only <name> --write.');
 });
 
-test('L5: build artifacts match the sources', { skip: skipReason() }, t => {
+test('L5: build artifacts match the sources', { skip: hostSkip }, t => {
   checkBuildCurrent(t, ['engine-debug', 'kernel']);
 });
 
 test('L5: Linux frame baseline is deterministic', {
-  skip: skipReason(),
+  skip: hostSkip,
   timeout: 120000,
 }, () => {
   assert.ok(fs.existsSync(l5.baselinePath),
@@ -72,12 +95,13 @@ test('L5: Linux frame baseline is deterministic', {
   for (const [name, expected] of entries) {
     const pixels = l5.render(fixturePath(name));
     assert.equal(sha256(pixels), expected.sha256,
-      `${name} frame hash changed; regenerate the baseline if the change is intended`);
+      `${name} frame hash changed (${l5.baselineChangeHint(baseline)}); ` +
+      'run npm run l5:baseline if the change is intended');
   }
 });
 
 test('L5: Windows baseline comparison uses a channel tolerance', {
-  skip: skipReason() || (windowsBaselinePath() === null
+  skip: hostSkip || (windowsBaselinePath() === null
     ? 'missing spec/l5-baseline.win32.json (run npm run l5:windows)'
     : false),
   timeout: 240000,
@@ -109,24 +133,21 @@ test('L5: Windows baseline comparison uses a channel tolerance', {
     });
     assert.equal(pixels.length, frameSize,
       `${name}: Linux frame is ${pixels.length} bytes, expected ${frameSize}`);
-    if (typeof expected.rgbaZlib === 'string') {
-      const win = zlib.inflateSync(Buffer.from(expected.rgbaZlib, 'base64'));
+    const win = windowsFrame(expected, baselinePath);
+    if (win) {
       assert.equal(win.length, frameSize,
         `${name}: Windows baseline frame has the wrong size`);
       assert.equal(sha256(win), expected.sha256,
         `${name}: Windows baseline frame hash is corrupt`);
-      const result = compareFrames(win, pixels, {
-        width: frameWidth,
-        tolerance: Number.isInteger(expected.tolerance) ? expected.tolerance : tolerance,
-        maxMismatchRatio: typeof expected.maxMismatchRatio === 'number'
-          ? expected.maxMismatchRatio
-          : baseline.maxMismatchRatio ?? 0.01,
-        ignoreRects,
-      });
-      assert.ok(result.passed,
-        `${name} frame differs: maxDelta=${result.maxDelta}, ` +
-        `mismatchRatio=${result.mismatchRatio.toFixed(6)}` +
-        (expected.note ? ` (${expected.note})` : ''));
+      const result = compareWithWindows(baseline, expected, win, pixels);
+      if (!result.passed) {
+        const diff = writeDiffImages(path.join(repoRoot, 'test', 'results', 'l5'), name,
+          win, pixels, frameWidth, result.tolerance);
+        assert.fail(`${name} frame differs: maxDelta=${result.maxDelta}, ` +
+          `mismatchRatio=${result.mismatchRatio.toFixed(6)}` +
+          (expected.note ? ` (${expected.note})` : '') +
+          `; see ${path.relative(repoRoot, diff)}`);
+      }
     }
     for (const [x, y, rgba] of (expected.samplesInformational ? [] : (expected.samples || []))) {
       if (ignored(x, y)) continue;

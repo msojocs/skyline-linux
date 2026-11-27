@@ -1,11 +1,12 @@
 'use strict';
-// Captures one L5 fixture frame with the official Windows Skyline engine.
-// The engine runs in this Electron renderer; PageContext is the native V8
-// binding used by the appservice renderer bundle.
+// L5 scenario: captures one fixture frame with the official Windows Skyline
+// engine (tools/l5-windows.js).  The engine runs in this Electron renderer;
+// PageContext is the native V8 binding used by the appservice renderer bundle.
 const { ipcRenderer } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { openOfficialWindow } = require(path.join(__dirname, 'official-window.js'));
 
 const RES = process.env.SKYLINE_WIN_RESOURCES;
 const fixturePath = process.env.L5_FIXTURE;
@@ -21,12 +22,12 @@ const report = { ok: false, key: KEY, width: W, height: H, dpr: DPR, events: [] 
 function log(...args) {
   const line = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
   report.events.push(line);
-  ipcRenderer.send('l5-log', { kind: 'renderer', line });
+  ipcRenderer.send('win-host-log', { kind: 'renderer', line });
   console.log(line);
 }
 function finish(ok) {
   report.ok = !!ok;
-  ipcRenderer.send('l5-finish', report);
+  ipcRenderer.send('win-host-result', report);
 }
 
 function countNonWhite(pixels) {
@@ -46,42 +47,23 @@ try {
 }
 
 try {
-  const shared = require(path.join(RES, 'node_modules', 'sharedMemory', 'sharedMemory.node'));
-  require(path.join(RES, 'node_modules', 'skyline-addon', 'build', 'skyline.node'));
-  report.skyline = global.SkylineDebugInfo;
-  const shell = new global.SkylineShell();
+  const addon = path.join(RES, 'node_modules', 'skyline-addon', 'build', 'skyline.node');
   let started = false;
   let runStarted = false;
-
-  for (const name of [
-    'setNotifyBootstrapDoneCallback', 'setNotifyWindowReadyCallback',
-    'setNotifyRouteDoneCallback', 'setNavigateBackCallback',
-    'setNavigateBackDoneCallback', 'setSendLogCallback',
-  ]) {
-    try {
-      shell[name]((...args) => {
-        if (name === 'setNotifyWindowReadyCallback') {
-          log('windowReady', ...args);
-          start();
-        }
-      });
-    } catch (error) {
-      log(name, 'register error', String(error && error.message || error));
-    }
-  }
-  shell.setLoadResourceCallback((request) => {
-    const p = typeof request === 'string' ? request : (request && (request.path || request.name));
-    log('loadResource', String(p));
-    try { return fs.readFileSync(p); } catch (error) { return Buffer.alloc(0); }
+  const { shell, shared, created } = openOfficialWindow({
+    sharedPath: path.join(RES, 'node_modules', 'sharedMemory', 'sharedMemory.node'),
+    addonPath: addon,
+    bundle: process.env.L5_BUNDLE || path.join(RES, 'node_modules', 'skyline-addon', 'bundle'),
+    windowId: WINDOW_ID,
+    width: W,
+    height: H,
+    dpr: DPR,
+    key: KEY,
+    log,
+    onWindowReady: () => start(),
   });
-  shell.setLoadResourceAsyncCallback((request) => log('loadResourceAsync', JSON.stringify(request)));
-  shell.setHttpRequestCallback((request) => log('httpRequest', JSON.stringify(request)));
-  const descriptor = shared.setMemory(KEY, frameSize * 4 + 8);
-  const bundle = process.env.L5_BUNDLE ||
-    path.join(RES, 'node_modules', 'skyline-addon', 'bundle');
-  const addon = path.join(RES, 'node_modules', 'skyline-addon', 'build', 'skyline.node');
-  const ret = shell.createWindow(WINDOW_ID, bundle, W, H, DPR, true, null, addon, descriptor);
-  log('createWindow', ret && ret.constructor && ret.constructor.name);
+  report.skyline = global.SkylineDebugInfo;
+  log('createWindow', created && created.constructor && created.constructor.name);
 
   let lastSaved = -1;
   let lastMutation = 0;
