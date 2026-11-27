@@ -66,11 +66,28 @@ for spec in "${patch_specs[@]}"; do
     die "not a git worktree: $repo (run npm run engine:fetch)"
 done
 
+compat_parts=(application.dart mmtrace.dart skyline_ext.dart)
+
 check_parts() {
   local part
-  for part in application.dart mmtrace.dart skyline_ext.dart; do
-    [ -f "$ui_dir/$part" ] || die "dart:ui compat part missing: $ui_dir/$part"
+  for part in "${compat_parts[@]}"; do
+    [ -f "$ui_dir/$part" ] || die "dart:ui compat part missing: $ui_dir/$part (run without --check)"
+    cmp -s "$compat_dir/$part" "$ui_dir/$part" ||
+      die "dart:ui compat part is stale: $ui_dir/$part (run without --check)"
     grep -q "part '$part';" "$ui_dir/ui.dart" || die "ui.dart does not declare $part"
+  done
+}
+
+# The parts are new files, so they are copied rather than patched.  Copy only
+# when the content differs to keep ninja's view of them stable.
+install_parts() {
+  local part
+  for part in "${compat_parts[@]}"; do
+    [ -f "$compat_dir/$part" ] || die "missing compat part: $compat_dir/$part"
+    if ! cmp -s "$compat_dir/$part" "$ui_dir/$part"; then
+      cp "$compat_dir/$part" "$ui_dir/$part"
+      log "installed: $part"
+    fi
   done
 }
 
@@ -90,7 +107,7 @@ if [ "$check_only" -eq 1 ]; then
   exit 0
 fi
 
-check_parts
+install_parts
 
 for spec in "${patch_specs[@]}"; do
   repo=${spec%%|*}
@@ -107,6 +124,7 @@ for spec in "${patch_specs[@]}"; do
   log "applied: $name"
 done
 
+check_parts
 log "dart:ui compat layer installed in $ui_dir"
 
 if [ ! -d "$out_dir" ]; then
