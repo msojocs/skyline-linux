@@ -27,18 +27,10 @@
 
 #include "frame_writer.hh"
 
-// Implemented by the embedded Skyline runtime when present.  The weak
-// reference keeps the host buildable against engines built without the runtime.
-extern "C" void DispatchSkylineKeyEvent(int32_t kind, uint32_t logical,
-                                        const char* text)
-    __attribute__((weak));
-
-// D10: the embedded runtime asks the host to apply accessibility state on the
-// platform thread (the embedder API has a platform-thread contract).
-extern "C" void SkylineSetAccessibilitySink(void (*sink)(int32_t kind,
-                                                         int32_t value))
-    __attribute__((weak));
-extern "C" int32_t SkylineGetAccessibilityState() __attribute__((weak));
+// Weak references keep the host usable with an engine built without the
+// embedded Skyline runtime: every runtime function is then null.
+#define SKYLINE_RUNTIME_API_WEAK
+#include "skyline/runtime_api.h"
 
 namespace {
 

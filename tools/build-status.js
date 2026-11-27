@@ -25,10 +25,10 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { entryFile, readManifest } = require('./lib/runtime-manifest');
 
 const repoRoot = path.resolve(__dirname, '..');
 const engineDir = path.join(repoRoot, 'native', 'engine');
-const runtimeDir = path.join(repoRoot, 'native', 'runtime');
 const appCompatDir = path.join(engineDir, 'app_compat');
 const workDir = process.env.SKYLINE_ENGINE_WORK || path.join(engineDir, 'work');
 const skylineApp = path.join(workDir, 'skyline-app');
@@ -68,21 +68,22 @@ function listFiles(dir, suffix) {
   return fs.readdirSync(dir).filter(name => name.endsWith(suffix)).sort();
 }
 
-// Every file listed in native/runtime/sources.txt (all sections).
+// Every file listed in native/runtime/sources.txt, by its manifest path.
 function runtimeSources() {
-  const files = [];
-  const manifest = fs.readFileSync(path.join(runtimeDir, 'sources.txt'), 'utf8');
-  for (const raw of manifest.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#') || /^\[[a-z]+\]$/.test(line)) continue;
-    files.push(line);
-  }
-  return files;
+  return readManifest().map(entry => entry.path);
 }
 
-// `root` lets build-engine.sh hash the copies inside the engine checkout.
-function runtimeFingerprint(root = runtimeDir) {
-  return hashFiles(root, runtimeSources());
+// `root` lets build-engine.sh hash the copies inside the engine checkout,
+// which keep every manifest entry at <root>/<path>.
+function runtimeFingerprint(root = null) {
+  const hash = crypto.createHash('sha256');
+  const entries = readManifest().sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  for (const entry of entries) {
+    const file = entryFile(entry, root);
+    const digest = fs.existsSync(file) ? sha256(fs.readFileSync(file)) : 'missing';
+    hash.update(`${entry.path}\0${digest}\n`);
+  }
+  return hash.digest('hex');
 }
 
 function dartUiFingerprint() {
@@ -426,7 +427,7 @@ function main(args) {
     const kind = args[1];
     const root = optionValue(args, '--root');
     const value = {
-      runtime: () => runtimeFingerprint(root ? path.resolve(root) : runtimeDir),
+      runtime: () => runtimeFingerprint(root ? path.resolve(root) : null),
       'dart-ui': dartUiFingerprint,
       'app-compat': appCompatFingerprint,
     }[kind];

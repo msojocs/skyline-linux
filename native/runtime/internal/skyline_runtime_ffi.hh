@@ -493,18 +493,14 @@ using VoidCommandFn = void (*)();
 using AccessibilityBoldTextEnabledFn = uint8_t (*)();
 
 // Accessibility state is shared between the Dart runtime layer and the host
-// embedder.  The host installs `SkylineSetAccessibilitySink`; `kind` 0 asks the
-// embedder to apply accessibility *features*, kind 1 enables the semantics
-// tree (the two are separate engine APIs).
-using SkylineAccessibilitySink = void (*)(int32_t kind, int32_t value);
+// embedder, which installs `SkylineSetAccessibilitySink` (kinds in
+// skyline/runtime_api.h).
 inline std::atomic<SkylineAccessibilitySink> g_accessibility_sink{nullptr};
 inline std::atomic<int32_t> g_accessibility_enabled{0};
 inline std::atomic<int32_t> g_accessibility_bold_text{0};
 // DevTools shell HTTP bridge: the addon proxies `setHttpRequestCallback`
 // (window.fetch in the pageframe renderer) so network requests show up in the
 // DevTools Network panel instead of an in-engine dart:io socket.
-using SkylineHttpRequestSink = void (*)(uint32_t request_id, const char* url);
-using SkylineHasHttpRequestCallbackFn = int32_t (*)();
 inline std::atomic<SkylineHttpRequestSink> g_shell_http_request{nullptr};
 inline std::atomic<SkylineHasHttpRequestCallbackFn> g_shell_http_available{nullptr};
 

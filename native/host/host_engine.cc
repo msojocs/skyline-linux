@@ -11,6 +11,8 @@
 
 #include <flutter_embedder.h>
 
+#include "skyline/runtime_api.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -107,12 +109,6 @@ void LogMessage(const char* tag, const char* message, void* /*user_data*/) {
   std::fprintf(stderr, "[skyline-engine:%s] %s\n", tag != nullptr ? tag : "?",
                message != nullptr ? message : "");
 }
-
-// The embedded runtime installs this sink for accessibility requests; when the
-// addon is built against a stock engine the symbol is absent.
-extern "C" void SkylineSetAccessibilitySink(void (*sink)(int32_t kind,
-                                                         int32_t value))
-    __attribute__((weak));
 
 void OnSemanticsUpdate(const FlutterSemanticsUpdate2* update, void* /*data*/) {
   if (update == nullptr || std::getenv("SKYLINE_APP_SERVICE_DEBUG") == nullptr) {
@@ -407,9 +403,7 @@ class WindowHost {
       std::lock_guard<std::mutex> lock(accessibility_mutex_);
       accessibility_host_ = this;
     }
-    if (SkylineSetAccessibilitySink != nullptr) {
-      SkylineSetAccessibilitySink(&WindowHost::AccessibilitySink);
-    }
+    SkylineSetAccessibilitySink(&WindowHost::AccessibilitySink);
 
     FlutterWindowMetricsEvent metrics = {};
     metrics.struct_size = sizeof(FlutterWindowMetricsEvent);

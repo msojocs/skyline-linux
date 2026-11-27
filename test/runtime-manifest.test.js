@@ -8,24 +8,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-
-const repoRoot = path.resolve(__dirname, '..');
-const runtimeDir = path.join(repoRoot, 'native', 'runtime');
+const { entryFile, nativeDir, readManifest, runtimeDir } = require('../tools/lib/runtime-manifest');
 
 function manifest() {
   const sections = new Map();
-  let section = null;
-  for (const raw of fs.readFileSync(path.join(runtimeDir, 'sources.txt'), 'utf8').split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const header = /^\[([a-z]+)\]$/.exec(line);
-    if (header) {
-      section = header[1];
-      sections.set(section, []);
-      continue;
-    }
-    assert.ok(section, `source outside a section: ${line}`);
-    sections.get(section).push(line);
+  for (const entry of readManifest()) {
+    if (!sections.has(entry.section)) sections.set(entry.section, []);
+    sections.get(entry.section).push(entry.path);
   }
   return sections;
 }
@@ -42,17 +31,18 @@ function runtimeFiles() {
 }
 
 test('runtime manifest: every listed file exists and is listed once', () => {
-  const sections = manifest();
-  const all = [...sections.values()].flat();
+  const entries = readManifest();
+  const all = entries.map(entry => entry.path);
   assert.deepEqual([...new Set(all)].sort(), all.slice().sort(),
     'sources.txt lists a file more than once');
-  for (const file of all) {
-    assert.ok(fs.existsSync(path.join(runtimeDir, file)), `missing runtime file: ${file}`);
+  for (const entry of entries) {
+    assert.ok(fs.existsSync(entryFile(entry)), `missing runtime file: [${entry.section}] ${entry.path}`);
   }
 });
 
 test('runtime manifest: every runtime source is listed', () => {
-  const listed = new Set([...manifest().values()].flat());
+  const sections = manifest();
+  const listed = new Set([...(sections.get('common') ?? []), ...(sections.get('embedded') ?? [])]);
   for (const file of runtimeFiles()) {
     assert.ok(listed.has(file), `${file} is not listed in sources.txt`);
   }
@@ -64,6 +54,27 @@ test('runtime manifest: common holds only the ABI entry TU', () => {
   const embedded = manifest().get('embedded') ?? [];
   assert.ok(embedded.filter((file) => file.endsWith('.cc')).length >= 10,
     'the embedded replay should be split into multiple modules');
+});
+
+test('runtime manifest: shared files live under native/include or native/common', () => {
+  for (const file of manifest().get('shared') ?? []) {
+    assert.match(file, /^(include\/skyline|common)\//, `unexpected shared path: ${file}`);
+  }
+});
+
+// The engine compiles copies of the listed files only, so every shared header
+// a runtime file includes must be listed too.
+test('runtime manifest: shared headers included by the runtime are listed', () => {
+  const entries = readManifest();
+  const shared = new Set(entries.filter(entry => entry.section === 'shared').map(entry => entry.path));
+  for (const entry of entries) {
+    const text = fs.readFileSync(entryFile(entry), 'utf8');
+    for (const match of text.matchAll(/^#include "(skyline\/[^"]+)"/gm)) {
+      const included = path.posix.join('include', match[1]);
+      assert.ok(fs.existsSync(path.join(nativeDir, included)), `${entry.path}: missing ${included}`);
+      assert.ok(shared.has(included), `${entry.path} includes ${included}, which is not in [shared]`);
+    }
+  }
 });
 
 test('runtime manifest: every embedded module uses the shared declaration header', () => {

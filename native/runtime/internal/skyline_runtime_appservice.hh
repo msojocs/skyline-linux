@@ -478,42 +478,29 @@ struct OpPage {
   std::vector<PageEntry> page_stack;
   RuntimeHolder* holder = nullptr;
 };
-// The DevTools addon installs a sink that forwards scroll callbacks to the
-// appservice JS (`bindscroll`, worklet handlers).  The standalone host leaves
-// it null and only writes diagnostics.
+// The DevTools addon installs sinks (skyline/runtime_api.h) that forward
+// scroll, widget and JSON events to the appservice JS.  The standalone host
+// leaves them null and only writes diagnostics.
 enum : int32_t {
-  kScrollPhaseStart = 0,
-  kScrollPhaseScroll = 1,
-  kScrollPhaseEnd = 2,
+  kScrollPhaseStart = SKYLINE_SCROLL_PHASE_START,
+  kScrollPhaseScroll = SKYLINE_SCROLL_PHASE_SCROLL,
+  kScrollPhaseEnd = SKYLINE_SCROLL_PHASE_END,
 };
-using SkylineScrollEventSink = void (*)(
-    uint32_t node_id, int32_t phase, double scroll_top, double scroll_left,
-    double scroll_width, double scroll_height, double delta_x, double delta_y,
-    uint8_t is_drag, double boundary_velocity);
-// Native widget events (swiper change/transition, picker column change/start/
-// end, programmatic input focus/blur) use a second sink so the addon can
-// dispatch them to the appservice mirror.
 enum : int32_t {
-  kWidgetSwiperChange = 0,   // value = page, extra = reason
-  kWidgetSwiperScroll = 1,   // value = translatePixels, extra = state, flag = current
-  kWidgetPickerChange = 2,   // value = index, extra = reason
-  kWidgetPickerStart = 3,
-  kWidgetPickerEnd = 4,
-  kWidgetInputFocus = 5,
-  kWidgetInputBlur = 6,
-  kWidgetRefresherPulling = 8,
-  kWidgetRefresherWillRefresh = 9,
-  kWidgetRefresherRefresh = 10,
-  kWidgetRefresherRestore = 11,
-  kWidgetRefresherAbort = 12,
-  kWidgetRefresherStatus = 13,
+  kWidgetSwiperChange = SKYLINE_WIDGET_SWIPER_CHANGE,
+  kWidgetSwiperScroll = SKYLINE_WIDGET_SWIPER_SCROLL,
+  kWidgetPickerChange = SKYLINE_WIDGET_PICKER_CHANGE,
+  kWidgetPickerStart = SKYLINE_WIDGET_PICKER_START,
+  kWidgetPickerEnd = SKYLINE_WIDGET_PICKER_END,
+  kWidgetInputFocus = SKYLINE_WIDGET_INPUT_FOCUS,
+  kWidgetInputBlur = SKYLINE_WIDGET_INPUT_BLUR,
+  kWidgetRefresherPulling = SKYLINE_WIDGET_REFRESHER_PULLING,
+  kWidgetRefresherWillRefresh = SKYLINE_WIDGET_REFRESHER_WILL_REFRESH,
+  kWidgetRefresherRefresh = SKYLINE_WIDGET_REFRESHER_REFRESH,
+  kWidgetRefresherRestore = SKYLINE_WIDGET_REFRESHER_RESTORE,
+  kWidgetRefresherAbort = SKYLINE_WIDGET_REFRESHER_ABORT,
+  kWidgetRefresherStatus = SKYLINE_WIDGET_REFRESHER_STATUS,
 };
-using SkylineWidgetEventSink = void (*)(uint32_t node_id, int32_t kind,
-                                        double value, double extra,
-                                        uint8_t flag);
-// Rich events (intersection/selection/navigate-back) are forwarded as JSON to
-// the addon JS thread; the bootstrap parses and dispatches them.
-using SkylineJsonEventSink = void (*)(const char* json);
 // Layout geometry published for the appservice selector-query APIs
 // (`createSelectorQuery().boundingClientRect`).  The appservice JS queries node
 // geometry synchronously from the NAPI thread while the UI thread may be

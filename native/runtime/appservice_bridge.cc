@@ -83,17 +83,17 @@ SKYLINE_EXPORT extern "C" int32_t SkylineGetNodeRect(uint32_t node_id,
 }
 
 SKYLINE_EXPORT extern "C" void SkylineSetScrollEventSink(
-    appservice::SkylineScrollEventSink sink) {
+    SkylineScrollEventSink sink) {
   appservice::g_scroll_event_sink.store(sink);
 }
 
 SKYLINE_EXPORT extern "C" void SkylineSetWidgetEventSink(
-    appservice::SkylineWidgetEventSink sink) {
+    SkylineWidgetEventSink sink) {
   appservice::g_widget_event_sink.store(sink);
 }
 
 SKYLINE_EXPORT extern "C" void SkylineSetJsonEventSink(
-    appservice::SkylineJsonEventSink sink) {
+    SkylineJsonEventSink sink) {
   appservice::g_json_event_sink.store(sink);
 }
 
@@ -153,7 +153,9 @@ SKYLINE_EXPORT extern "C" void SkylineSetAccessibilitySink(
   g_accessibility_sink.store(sink);
   // Replay the state the Dart app reported before the host installed its sink.
   if (sink != nullptr) {
-    if (g_accessibility_enabled.load() != 0) sink(1, 1);
+    if (g_accessibility_enabled.load() != 0) {
+      sink(SKYLINE_ACCESSIBILITY_SEMANTICS, 1);
+    }
   }
 }
 
@@ -165,8 +167,10 @@ SKYLINE_EXPORT extern "C" int32_t SkylineGetAccessibilityState() {
 // Programmatic accessibility toggle (DevTools automation / appservice ops).
 SKYLINE_EXPORT extern "C" void SkylineRequestAccessibility(uint8_t enabled) {
   g_accessibility_enabled.store(enabled != 0 ? 1 : 0);
-  appservice::NotifyAccessibilitySink(1, enabled != 0 ? 1 : 0);
-  appservice::NotifyAccessibilitySink(0, enabled != 0 ? 1 : 0);
+  appservice::NotifyAccessibilitySink(SKYLINE_ACCESSIBILITY_SEMANTICS,
+                                      enabled != 0 ? 1 : 0);
+  appservice::NotifyAccessibilitySink(SKYLINE_ACCESSIBILITY_FEATURES,
+                                      enabled != 0 ? 1 : 0);
 }
 
 // Safe-area insets for CSS `env(safe-area-inset-*)` (pushed by the DevTools'
@@ -234,8 +238,10 @@ SKYLINE_EXPORT extern "C" void UpdateAccessibility(void* /*runtime_ptr*/,
   g_accessibility_enabled.store(enabled != 0 ? 1 : 0);
   std::fprintf(stderr, "[skyline-runtime] UpdateAccessibility: enabled=%u\n",
                static_cast<unsigned>(enabled != 0));
-  appservice::NotifyAccessibilitySink(1, enabled != 0 ? 1 : 0);
-  appservice::NotifyAccessibilitySink(0, enabled != 0 ? 1 : 0);
+  appservice::NotifyAccessibilitySink(SKYLINE_ACCESSIBILITY_SEMANTICS,
+                                      enabled != 0 ? 1 : 0);
+  appservice::NotifyAccessibilitySink(SKYLINE_ACCESSIBILITY_FEATURES,
+                                      enabled != 0 ? 1 : 0);
 #ifdef SKYLINE_EMBEDDED
   auto runner = UiTaskRunner();
   if (runner) {

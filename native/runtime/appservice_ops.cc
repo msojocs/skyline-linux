@@ -1304,8 +1304,8 @@ void ApplyOperation(const rapidjson::Value& op) {
     // Enable the semantics tree before the accessibility feature flag: the
     // page's root `ExcludeSemantics` wrapper rebuilds when MediaQuery reports
     // accessibleNavigation, and it must observe semanticsEnabled == true then.
-    NotifyAccessibilitySink(1, enabled ? 1 : 0);
-    NotifyAccessibilitySink(0, enabled ? 1 : 0);
+    NotifyAccessibilitySink(SKYLINE_ACCESSIBILITY_SEMANTICS, enabled ? 1 : 0);
+    NotifyAccessibilitySink(SKYLINE_ACCESSIBILITY_FEATURES, enabled ? 1 : 0);
   } else if (std::strcmp(kind, "dumpElementTree") == 0) {
     DumpTree(true);
   } else if (std::strcmp(kind, "dumpRenderTree") == 0) {

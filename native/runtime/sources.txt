@@ -6,13 +6,22 @@
 # split into `appservice_*` modules; `skyline_runtime_stub.cc` keeps the
 # bootstrap/ABI surface and the exported no-op stubs shared by both builds.
 #
+# [shared] lists the files the runtime shares with skyline.node and the hosts.
+# Its paths are relative to native/ (not native/runtime); the engine copy keeps
+# them under the same relative path and puts `include` on the include path.
+# Translation units in [shared] are compiled into both runtime builds.
+#
 # Keep this list in sync with native/engine/patch-skyline-runtime.sh,
-# tools/conformance-gaps.js and native/CMakeLists.txt; all three consume it.
+# tools/lib/runtime-manifest.js and native/CMakeLists.txt; all three consume
+# it.
 
 [common]
 skyline_runtime_stub.cc
 internal/skyline_runtime_abi.hh
 internal/skyline_runtime_module.hh
+
+[shared]
+include/skyline/runtime_api.h
 
 [embedded]
 internal/skyline_runtime_ffi.hh

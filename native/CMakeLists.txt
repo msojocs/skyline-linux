@@ -161,8 +161,9 @@ endif()
 # renders the Flutter UI; layout/paint/gesture behaviour is still a no-op.
 # ---------------------------------------------------------------------------
 # Runtime sources: the manifest is shared with the engine patch script and the
-# conformance scanner.  Only [common] translation units are compiled into the
-# standalone libskyline.so; the engine embedder adds the [embedded] modules.
+# conformance scanner.  Only [common] and [shared] translation units are
+# compiled into the standalone libskyline.so; the engine embedder adds the
+# [embedded] modules.  [shared] paths are relative to native/.
 set(SKYLINE_RUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/runtime")
 file(STRINGS "${SKYLINE_RUNTIME_DIR}/sources.txt" SKYLINE_RUNTIME_MANIFEST)
 set(_skyline_runtime_section "")
@@ -176,8 +177,13 @@ foreach(_line IN LISTS SKYLINE_RUNTIME_MANIFEST)
     set(_skyline_runtime_section "${CMAKE_MATCH_1}")
     continue()
   endif()
-  if(_skyline_runtime_section STREQUAL "common" AND _line MATCHES "\\.cc$")
+  if(NOT _line MATCHES "\\.cc$")
+    continue()
+  endif()
+  if(_skyline_runtime_section STREQUAL "common")
     list(APPEND SKYLINE_RUNTIME_SOURCES "${SKYLINE_RUNTIME_DIR}/${_line}")
+  elseif(_skyline_runtime_section STREQUAL "shared")
+    list(APPEND SKYLINE_RUNTIME_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${_line}")
   endif()
 endforeach()
 if(NOT SKYLINE_RUNTIME_SOURCES)
@@ -187,6 +193,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${SKYLINE_RUNTIME_DIR}/sources.txt")
 
 add_library(skyline_runtime SHARED ${SKYLINE_RUNTIME_SOURCES})
+target_include_directories(skyline_runtime PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/include")
 set_target_properties(skyline_runtime PROPERTIES
   PREFIX "lib"
   OUTPUT_NAME "skyline"
@@ -229,6 +237,7 @@ if(SKYLINE_BUILD_HOST)
     )
     target_include_directories(skyline_host PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}/host"
+      "${CMAKE_CURRENT_SOURCE_DIR}/include"
       "${SKYLINE_ENGINE_ROOT}"
     )
     target_link_libraries(skyline_host PRIVATE

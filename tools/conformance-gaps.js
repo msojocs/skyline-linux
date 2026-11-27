@@ -25,23 +25,20 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { entryFile, readManifest } = require('./lib/runtime-manifest');
 
 const repoRoot = path.resolve(__dirname, '..');
 const runtimeDir = path.join(repoRoot, 'native', 'runtime');
 
 // The runtime is split into modules listed in sources.txt (entry TU plus the
-// appservice_* replay modules and their internal headers).  Concatenate them so
-// the scanner sees the same declarations as the compiler.
+// appservice_* replay modules, their internal headers and the shared public
+// headers).  Concatenate them so the scanner sees the same declarations as the
+// compiler.
 function readRuntimeSource() {
   try {
-    const manifest = fs.readFileSync(path.join(runtimeDir, 'sources.txt'), 'utf8');
-    const files = manifest.split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith('#') && !/^\[.+\]$/.test(line));
-    if (!files.length) return null;
-    return files
-      .map((file) => fs.readFileSync(path.join(runtimeDir, file), 'utf8'))
-      .join('\n');
+    const entries = readManifest();
+    if (!entries.length) return null;
+    return entries.map((entry) => fs.readFileSync(entryFile(entry), 'utf8')).join('\n');
   } catch {
     return null;
   }

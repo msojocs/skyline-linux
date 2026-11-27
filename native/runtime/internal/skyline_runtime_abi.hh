@@ -67,6 +67,10 @@
 #define SKYLINE_EXPORT
 #endif
 
+// The host/addon-facing exports and their sink types.  Including the public
+// declarations here makes the compiler check every definition against them.
+#include "skyline/runtime_api.h"
+
 // Global-scope ABI value types returned/consumed by the exported C API.
 struct SkylineLayoutSize {
   double width;
