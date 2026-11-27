@@ -200,9 +200,16 @@ native/build/sharedMemory.node
 
 ```bash
 npm test             # L1–L4、契约、bootstrap 单测与引擎/运行时测试（缺少引擎或 kernel 的用例会 skip）
-npm run test:ops     # appservice 操作流回放
+npm run test:ops     # appservice 操作流回放（native/test/ops/，按领域拆分、并行执行）
+npm run test:golden  # 60 个夹具的结构化布局快照（test/golden/layout）逐节点比较
 npm run test:l5      # L5：夹具/基线集合校验 + Linux 确定性基线 + Windows 逐像素容差比较
 ```
+
+宿主测试统一通过 `test/lib/host.js` 启动 `skyline_host`；缺少引擎或 kernel 时跳过，
+设置 `SKYLINE_REQUIRE_ENGINE=1` 则改为失败。布局快照记录每个节点的矩形、解析后的
+样式摘要与物化出的 widget（运行时在 `SKYLINE_LAYOUT_DUMP` 指定的文件中输出）；
+有意的布局变化用 `npm run golden:update -- --only <夹具>` 重新记录。L5 比较失败时
+期望/实际/差异图写入 `test/results/l5/`。
 
 - 通过：L1/L2 契约对比（默认目标 `reference/skyline-node.js`；`native/build/skyline.node`
   同样 53/53 通过，含 14 个引擎上下文用例；10 个官方进程崩溃用例跳过）、L3/L4 共享内存与帧协议、跨进程可见性、Windows ↔ Linux
@@ -221,7 +228,7 @@ npm run test:l5      # L5：夹具/基线集合校验 + Linux 确定性基线 + 
   native 定时更新（`DecoratedBoxUpdateColor` → 重绘），以及增量
   `appendChild`/`removeChild`（`YGConnectorUpdateChildren` + relayout），以及
   `updateOpacity`/`updateBorder` 运行时样式更新，以及
-  `native/test/skyline-appservice-ops.test.js`（官方 exparser bundle 节点操作流 ->
+  `native/test/ops/*.test.js`（按领域拆分；官方 exparser bundle 节点操作流 ->
   CSS 级联 + flexbox 布局 -> 真实 `package:skyline` 回调；attach 后结构重建与
   `TextSpanUpdate*`/`DecoratedBoxUpdate*` 细粒度更新；真实 tap -> `setData` ->
   操作流 -> 重绘；`@font-face` -> `LoadResourceAsync` -> `NotifyResourceLoad`

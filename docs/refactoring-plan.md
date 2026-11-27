@@ -517,6 +517,50 @@ class OpsSession {
 验收：所有 host 测试只通过 `test/lib/host.js` 启动；60 个夹具都有 golden；ops 测试
 并行后总时长下降；CI 输出 skip 数量，超出预期即失败。
 
+**状态（2026-11-27）：已完成，个别条目有调整。**
+
+- host harness：`test/lib/host.js` 统一了产物路径、前置条件注册表、`runHost()` /
+  `runHostAsync()`、共享内存帧读取与取像素。所有启动 `skyline_host` 的测试与工具
+  （ops、page、appservice、aot、4 个引擎冒烟、layout golden、L5）都经它启动。
+  `SKYLINE_REQUIRE_ENGINE=1` 时，缺少前置条件会额外登记一个失败用例；exit-77 的
+  stub host 改为明确报错。顺带删除了 53 处检查 `engine artifacts missing` 的死代码：
+  这个字符串从未被任何程序输出。
+- 布局 golden：运行时在设置 `SKYLINE_LAYOUT_DUMP` 时，于每次发布节点矩形与每个 op
+  批次结束时追加一份去重后的快照（节点矩形、解析后的样式摘要、物化出的 widget）。
+  `test/golden/layout/` 覆盖全部 60 个夹具（约 270 KB），两次回放逐字节一致，8 路
+  并行下也稳定。`npm run test:golden` 约 22 s，`npm run golden:update [-- --only …]`
+  只记录两次回放一致的结果，失败时把实际结果写入 `test/results/layout/` 并输出逐节点 diff。
+- ops 测试拆为 `native/test/ops/` 下 11 个领域文件（103 个用例 + 每个文件一个新鲜度
+  用例），并行执行约 39 s（原先串行约 240 s），连续 4 次运行稳定。与计划的差异：没有把
+  42 个内联 ops 抽成夹具（会给 L5/golden 集合增加 69 个条目），也没有批量替换硬编码坐标
+  与日志正则，结构性覆盖改由 golden 承担，这两项留待后续按需处理。
+- 全量并行会让 20 多个软件渲染 host 同时运行，依赖时序的用例（指针脚本、定时更新批次、
+  L5 的 1.8 s 截帧）因此失败。`tools/run-tests.js` 把文件并发限制为 CPU 数的一半，
+  golden 内部并发为 CPU 数的四分之一（`SKYLINE_TEST_CONCURRENCY` 可覆盖）。
+- 引擎无关的快速检查：`test/ffi-hashes.test.js` 校验运行时中全部 146 个
+  `k*Hash` 常量（2 个本地别名显式列出）；`test/source-manifest.test.js` 编译拼接后的
+  bootstrap。
+- L5：`test/lib/l5.js` 提供 `windowsFrame()`、`compareWithWindows()`、
+  `writeDiffImages()`，测试、`l5-windows.js` 与 `npm run gaps` 共用同一套比较逻辑；
+  比较模式支持 `--only`，且不再需要 Wine；失败时在 `test/results/l5/` 输出期望/实际/
+  差异 PNG。Linux 基线记录源码指纹（`recordedWith`），哈希不一致时提示是源码变了
+  还是渲染不确定。
+- Wine 宿主：`l5-win-app` 与 `win-oracle-app` 合并为 `tools/win-host/`，用
+  `SKYLINE_WIN_SCENARIO=l5|oracle` 选择场景，`official-window.js` 收拢两边共用的窗口
+  创建流程；`l5-windows.js` 改用 `test/lib/win-shim.js` 与 `env.toWindowsPath`。已在
+  Wine 下验证：重新采集 2 个夹具得到逐字节相同的帧，`brightness.validation`、
+  `create.argumentCount` 两个 oracle 用例结果与已提交的基线一致。
+- 基线存储：Windows 帧改为 `spec/l5/win32/<夹具>.png`（自带的 PNG 编解码见
+  `test/lib/png.js`，40 帧往返哈希全部一致），索引 JSON 从 860 KB / 72k 行降到
+  268 KB / 7.6k 行；两份基线都改用紧凑格式（样本点每行一个），Linux 基线从 13.6k 行
+  降到 2.2k 行，哈希不变。
+- CI：用 `SKYLINE_REQUIRE_ENGINE=1` 运行 `test:skyline:aot`（release 引擎 + AOT 来自
+  build-deps），这样 CI 至少真实跑一次引擎回放；`npm test` 的计数写入 job summary。
+  debug 引擎测试在 CI 中仍会跳过，P4 的 `skyline_layout_cli` 会补上不依赖引擎的布局检查。
+- 验证：`npm test` 共 335 个用例，311 pass、0 fail、24 skip（与之前相同，均为契约用例
+  在 JS 参考实现上没有引擎），约 154 s，连续两次结果一致；`test:l5` 4/4；
+  `SKYLINE_REQUIRE_ENGINE=1 npm run test:skyline:aot` 通过。
+
 ### P3 边界与基础设施（5–8 人日）
 
 任务：
