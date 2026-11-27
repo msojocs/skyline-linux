@@ -189,12 +189,14 @@ native/build/sharedMemory.node
 `spec/skyline-node.win32.json` 与 `npm run l5:windows` 产生的
 `spec/l5-baseline.win32.json` 是提交的基准文件（不含绝对路径）。
 
-### 当前结果（2026-11-22）
+### 当前结果
 
-```
-npm test: 198 tests, 174 pass, 0 fail, 24 skipped
-npm run test:ops: 75 tests, 75 pass
-npm run test:l5: 2 tests, 2 pass (Linux 确定性基线 + Windows 逐像素容差比较)
+测试计数随功能增长变化很快，README 不再手写具体数字；以本地运行结果为准：
+
+```bash
+npm test             # L1–L4、契约、bootstrap 单测与引擎/运行时测试（缺少引擎或 kernel 的用例会 skip）
+npm run test:ops     # appservice 操作流回放
+npm run test:l5      # L5：夹具/基线集合校验 + Linux 确定性基线 + Windows 逐像素容差比较
 ```
 
 - 通过：L1/L2 契约对比（默认目标 `reference/skyline-node.js`；`native/build/skyline.node`
