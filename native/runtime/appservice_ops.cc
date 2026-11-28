@@ -457,11 +457,11 @@ bool ReadDartBytes(Dart_Handle data, std::vector<uint8_t>* out) {
 bool WriteSnapshotFile(const char* prefix, uint32_t request_id,
                        const std::string& extension,
                        const std::vector<uint8_t>& bytes) {
-  const char* dir = std::getenv("SKYLINE_SNAPSHOT_DIR");
-  if (dir == nullptr || dir[0] == '\0') return false;
+  const std::string& dir = config::String(config::kSnapshotDir);
+  if (dir.empty()) return false;
   char path[512];
-  std::snprintf(path, sizeof(path), "%s/%s-%u.%s", dir, prefix, request_id,
-                extension.c_str());
+  std::snprintf(path, sizeof(path), "%s/%s-%u.%s", dir.c_str(), prefix,
+                request_id, extension.c_str());
   std::ofstream file(path, std::ios::binary);
   if (!file) return false;
   file.write(reinterpret_cast<const char*>(bytes.data()),
@@ -765,7 +765,7 @@ void ApplyAttachCustomRoute(const rapidjson::Value& op) {
   config.can_transition_from = as_bool(9, true);
   config.animation_hash = as_string(10);
   config.secondary_animation_hash = as_string(11);
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr,
                  "[skyline-runtime] attachCustomRoute custom=%d opaque=%d "
                  "transition=%d/%d barrier=%08x anim=%s secondary=%s\n",
@@ -1004,7 +1004,7 @@ void ApplyOperation(const rapidjson::Value& op) {
       const uint8_t type =
           static_cast<uint8_t>(MemberUint(op, "type", 0));
       reinterpret_cast<DispatchTouchEventFn>(callback)(type, x, y);
-      if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      if (config::Flag(config::kAppServiceDebug)) {
         using GetNodeFromPointFn = intptr_t (*)(double, double, uint8_t);
         auto* hit = reinterpret_cast<GetNodeFromPointFn>(
             FindCallback(g_page->holder->ffi_table, kGetNodeFromPointHash));

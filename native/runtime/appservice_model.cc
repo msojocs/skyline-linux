@@ -306,8 +306,8 @@ void AppendSnapshotNode(std::string& out, const AppNode* node) {
 // can be checked structurally instead of through pixels.  Called whenever node
 // rects are published and at the end of every applied op batch.
 void DumpLayoutSnapshot() {
-  static const char* path = std::getenv("SKYLINE_LAYOUT_DUMP");
-  if (path == nullptr || *path == '\0' || g_page == nullptr) return;
+  const std::string& path = config::String(config::kLayoutDump);
+  if (path.empty() || g_page == nullptr) return;
   std::vector<const AppNode*> nodes;
   for (const auto& entry : g_page->nodes) {
     if (entry.second != nullptr && !entry.second->released) nodes.push_back(entry.second);
@@ -323,7 +323,7 @@ void DumpLayoutSnapshot() {
   if (body == last) return;
   last = body;
   static int sequence = 0;
-  FILE* file = std::fopen(path, "a");
+  FILE* file = std::fopen(path.c_str(), "a");
   if (file == nullptr) return;
   std::fprintf(file, "{\"seq\":%d,\"nodes\":[%s]}\n", sequence++, body.c_str());
   std::fclose(file);
@@ -333,7 +333,7 @@ void PublishNodeRects() {
   std::lock_guard<std::mutex> lock(g_rect_mutex);
   g_rect_snapshot.clear();
   if (g_page == nullptr) return;
-  const bool debug = std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr;
+  const bool debug = config::Flag(config::kAppServiceDebug);
   for (auto& entry : g_page->nodes) {
     const AppNode* node = entry.second;
     if (node == nullptr || node->released) continue;

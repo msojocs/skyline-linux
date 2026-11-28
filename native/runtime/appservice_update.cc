@@ -771,7 +771,7 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
                     newDecoratedBox, newOpacity, newScrollView, newListView,
                     newGridView, newDirectRenderWidget, newListBuilder,
                     newGridBuilder, false);
-    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    if (config::Flag(config::kAppServiceDebug)) {
       std::fprintf(stderr, "[ops-debug] rebuild fixed #%u/%s widget=%s\n",
                    fixed->id, fixed->name.c_str(),
                    widget != nullptr && !Dart_IsError(widget) ? "ok" : "failed");
@@ -793,7 +793,7 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
   }
   PublishNodeRects();
   SnapshotNode(root);
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     DebugDumpNode(root, 0);
     for (const NodeMetric& metric : metrics) {
       std::fprintf(stderr, "[ops-debug] rebuild metric #%u -> top=%g left=%g "
@@ -1102,7 +1102,7 @@ void AdvanceTransitions(RuntimeHolder* holder) {
         InterpolateTransition(transition, eased);
     transition.node->animation_override_active = true;
     applied = true;
-    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    if (config::Flag(config::kAppServiceDebug)) {
       std::fprintf(stderr,
                    "[skyline-runtime] transition #%u t=%.3f opacity=%.3f "
                    "background=%08x\n",

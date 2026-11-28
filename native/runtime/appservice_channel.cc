@@ -452,7 +452,7 @@ SKYLINE_EXPORT extern "C" void HandleGestureEvent(void* /*runtime_ptr*/,
                                                   int32_t gesture_type,
                                                   void* /*data*/,
                                                   int32_t /*bytes*/) {
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr,
                  "[skyline-runtime] HandleGestureEvent: handler=%d type=%d\n",
                  handler_id, gesture_type);

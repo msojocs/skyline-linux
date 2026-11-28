@@ -128,7 +128,7 @@ void DirectRenderImagePaint(intptr_t ptr, Dart_Handle canvas_handle,
   if (!node->image_dl) return;
 
   auto* canvas = tonic::DartConverter<flutter::Canvas*>::FromDart(canvas_handle);
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr,
                  "[skyline-runtime] image paint: ptr=0x%lx canvas=%p %dx%d "
                  "size=%gx%g at (%g,%g)\n",

@@ -461,7 +461,7 @@ void ParseTransform(const std::string& raw, AppStyle* style) {
       }
       local[1] = static_cast<float>(std::tan(ay));
       local[4] = static_cast<float>(std::tan(ax));
-      if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      if (config::Flag(config::kAppServiceDebug)) {
         std::fprintf(stderr,
                      "[skyline-runtime] transform %s: ax=%g ay=%g m1=%g m4=%g\n",
                      name.c_str(), ax, ay, local[1], local[4]);

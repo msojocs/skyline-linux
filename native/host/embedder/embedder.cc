@@ -7,10 +7,13 @@
 #include <cstring>
 #include <stdexcept>
 
+#include "skyline/config.h"
 #include "skyline/runtime_api.h"
 
 namespace skyline::embedder {
 namespace {
+
+namespace config = skyline::config;
 
 void PutU32(uint8_t* out, uint32_t value) {
   out[0] = static_cast<uint8_t>(value);
@@ -82,7 +85,7 @@ void WriteFrameHeader(void* data_area, uint32_t frame_id,
 
 void LogSemanticsUpdate(const char* prefix,
                         const FlutterSemanticsUpdate2* update) {
-  if (update == nullptr || std::getenv("SKYLINE_APP_SERVICE_DEBUG") == nullptr) {
+  if (update == nullptr || !config::Flag(config::kAppServiceDebug)) {
     return;
   }
   for (size_t i = 0; i < update->node_count; i++) {

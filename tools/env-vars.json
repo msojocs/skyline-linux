@@ -1,0 +1,400 @@
+{
+  "$comment": "Environment variable registry: the single source for docs/env.md and native/include/skyline/config_vars.inc (npm run env:doc). test/env-registry.test.js checks that every SKYLINE_* variable the code reads is registered here.",
+  "components": {
+    "runtime": "嵌入式运行时（libflutter_engine.so 中的 native/runtime，及独立 libskyline.so）",
+    "addon": "skyline.node（native/src 与 native/host/flutter_window_backend.cc）",
+    "host": "独立宿主 skyline_host（native/host/main.cc）",
+    "shared-memory": "sharedMemory.node（native/shared-memory）",
+    "native": "全部原生组件（runtime、addon、host、shared-memory）",
+    "dart": "Dart 侧：package:sample（native/engine/app_compat 补丁）",
+    "scripts": "构建脚本 native/engine/*.sh",
+    "tests": "测试（test/、native/test/）",
+    "tools": "工具（tools/）"
+  },
+  "notVariables": {
+    "SKYLINE_EMBEDDED": "预处理宏：引擎内嵌运行时的编译开关（BUILD.gn defines）",
+    "SKYLINE_HOST_RESULT": "skyline_host 在 stdout 输出的结果行标记"
+  },
+  "variables": [
+    {
+      "name": "SKYLINE_APP_SERVICE_DEBUG",
+      "type": "flag",
+      "default": "",
+      "components": ["native"],
+      "description": "调试开关：输出回放、手势、滚动与语义树等调试日志。"
+    },
+    {
+      "name": "SKYLINE_APP_SERVICE_OPS",
+      "type": "string",
+      "default": "",
+      "components": ["runtime"],
+      "description": "Dart 应用就绪后回放的录制 ops：`@<文件>` 或内联 JSON。独立 skyline_host 测试通过它加载夹具。"
+    },
+    {
+      "name": "SKYLINE_STUB_PAGE",
+      "type": "string",
+      "default": "",
+      "components": ["runtime"],
+      "description": "合成演示页：`text`、`card` 或任意值（条纹页）；以 `{` 或 `@` 开头时视为页面描述 JSON。"
+    },
+    {
+      "name": "SKYLINE_STUB_PAGE_JSON",
+      "type": "string",
+      "default": "",
+      "components": ["runtime"],
+      "description": "合成演示页的描述 JSON（`@<文件>` 或内联），优先于 SKYLINE_STUB_PAGE。"
+    },
+    {
+      "name": "SKYLINE_DUMP_OPS",
+      "type": "path",
+      "default": "",
+      "components": ["runtime"],
+      "description": "把每批实时 ops 写入该目录（`ops-NNN.json`），用于把 DevTools 中的页面转成夹具。"
+    },
+    {
+      "name": "SKYLINE_LAYOUT_DEBUG_ID",
+      "type": "int",
+      "default": "0",
+      "components": ["runtime"],
+      "description": "输出该节点 id 的测量与布局细节（0 表示不输出）。"
+    },
+    {
+      "name": "SKYLINE_LAYOUT_DUMP",
+      "type": "path",
+      "default": "",
+      "components": ["runtime"],
+      "description": "结构化布局快照（layout golden）的追加输出文件，见 tools/layout-golden.js。"
+    },
+    {
+      "name": "SKYLINE_SNAPSHOT_DIR",
+      "type": "path",
+      "default": "",
+      "components": ["runtime"],
+      "description": "takeAppSnapshot / snapshotNode 的结果同时写入该目录。"
+    },
+    {
+      "name": "SKYLINE_RESOURCE_ROOT",
+      "type": "path",
+      "default": "",
+      "components": ["runtime"],
+      "description": "相对图片、字体等资源路径的根目录。"
+    },
+    {
+      "name": "SKYLINE_ASSETS",
+      "type": "path",
+      "default": "",
+      "components": ["addon"],
+      "description": "覆盖 createWindow 使用的 flutter_assets 目录。"
+    },
+    {
+      "name": "SKYLINE_AOT_LIBRARY",
+      "type": "path",
+      "default": "",
+      "components": ["addon"],
+      "description": "createWindow 强制使用的 AOT 快照（libapp.so），即使 bundle 中有 kernel_blob.bin。"
+    },
+    {
+      "name": "SKYLINE_ICU",
+      "type": "path",
+      "default": "",
+      "components": ["addon"],
+      "description": "bundle 中没有 icudtl.dat 时使用的 ICU 数据文件。"
+    },
+    {
+      "name": "SKYLINE_DEVTOOLS",
+      "type": "flag",
+      "default": "",
+      "components": ["addon"],
+      "description": "强制按 devtools.dart 的入口参数启动（默认只在路径包含 skyline-addon 时这样做）。"
+    },
+    {
+      "name": "SKYLINE_DEVTOOLS_DEMO_OPS",
+      "type": "path",
+      "default": "",
+      "components": ["addon"],
+      "description": "createWindow 之后立即回放的 ops 文件，用于在没有 appservice 桥时演示页面。"
+    },
+    {
+      "name": "SKYLINE_POINTER_VIEW_ID",
+      "type": "int",
+      "default": "0",
+      "components": ["host"],
+      "description": "--pointer-script 事件使用的 Flutter view id。"
+    },
+    {
+      "name": "SKYLINE_SHARED_MEMORY_LOG",
+      "type": "flag",
+      "default": "",
+      "components": ["shared-memory"],
+      "description": "输出 sharedMemory.node 的调试日志。"
+    },
+    {
+      "name": "SKYLINE_SHARED_MEMORY_HANDLE",
+      "type": "flag",
+      "default": "",
+      "components": ["shared-memory"],
+      "description": "强制 Electron 句柄模式：setMemory 返回 16 字节指针/长度描述符（appservice 删除了 `process`，自动检测会退回 UA 判断）。"
+    },
+    {
+      "name": "SKYLINE_HTTP_TEST_URL",
+      "type": "string",
+      "default": "",
+      "components": ["dart"],
+      "description": "devtools.dart 启动时用 dart:io 请求该 URL，并打印 `SKYLINE_HTTP_RESULT <字节数> <内容>`（图片网络测试）。"
+    },
+    {
+      "name": "SKYLINE_ENGINE_CHECKOUT",
+      "type": "path",
+      "default": "native/engine/checkout",
+      "components": ["scripts"],
+      "description": "Flutter 引擎 checkout 目录。"
+    },
+    {
+      "name": "SKYLINE_DEPOT_TOOLS",
+      "type": "path",
+      "default": "native/engine/depot_tools",
+      "components": ["scripts"],
+      "description": "depot_tools 目录。"
+    },
+    {
+      "name": "SKYLINE_ENGINE_TOOLCHAIN",
+      "type": "path",
+      "default": "native/engine/toolchain",
+      "components": ["scripts"],
+      "description": "下载的 Flutter/Dart 工具链目录。"
+    },
+    {
+      "name": "SKYLINE_ENGINE_STAGE",
+      "type": "path",
+      "default": "native/engine/out/linux-x64-debug",
+      "components": ["scripts", "tools"],
+      "description": "引擎产物目录（libflutter_engine.so、flutter_embedder.h、patched_sdk）。"
+    },
+    {
+      "name": "SKYLINE_ENGINE_WORK",
+      "type": "path",
+      "default": "native/engine/work",
+      "components": ["scripts", "tools"],
+      "description": "从官方 kernel 恢复出的源码与 Skyline 应用的工作目录。"
+    },
+    {
+      "name": "SKYLINE_PATCHED_SDK",
+      "type": "path",
+      "default": "$SKYLINE_ENGINE_STAGE/patched_sdk",
+      "components": ["scripts", "tools"],
+      "description": "打过 dart:ui 兼容补丁的 Flutter SDK。"
+    },
+    {
+      "name": "SKYLINE_APP_DIR",
+      "type": "path",
+      "default": "apps/empty-page",
+      "components": ["scripts"],
+      "description": "build-empty-page.sh / build-aot.sh 构建的 Flutter 应用目录（相对仓库根或绝对路径）。"
+    },
+    {
+      "name": "SKYLINE_PROXY",
+      "type": "string",
+      "default": "",
+      "components": ["scripts"],
+      "description": "下载引擎与工具链时使用的 HTTP(S) 代理。"
+    },
+    {
+      "name": "SKYLINE_PYTHON",
+      "type": "path",
+      "default": "",
+      "components": ["scripts"],
+      "description": "引擎构建使用的 Python 3.12；未设置时优先用 uv 安装。"
+    },
+    {
+      "name": "SKYLINE_GEN_SNAPSHOT",
+      "type": "path",
+      "default": "",
+      "components": ["scripts"],
+      "description": "build-aot.sh 使用的 gen_snapshot（默认取 release 引擎构建目录中的版本）。"
+    },
+    {
+      "name": "SKYLINE_DEVTOOLS_DIR",
+      "type": "path",
+      "default": "../wechat-web-devtools-linux",
+      "components": ["scripts", "tests", "tools"],
+      "description": "Linux 微信开发者工具目录：staging 目标、Windows 资源与录制器的查找位置。"
+    },
+    {
+      "name": "SKYLINE_DEVTOOLS_ENGINE",
+      "type": "enum",
+      "values": ["release", "debug"],
+      "default": "release",
+      "components": ["scripts"],
+      "description": "devtools:stage 打包的引擎模式。"
+    },
+    {
+      "name": "SKYLINE_SHARED_MEMORY_NODE",
+      "type": "path",
+      "default": "",
+      "components": ["scripts"],
+      "description": "devtools:stage 改用该 sharedMemory.node，而不是仓库内构建的版本。"
+    },
+    {
+      "name": "SKYLINE_REQUIRE_ENGINE",
+      "type": "flag",
+      "default": "",
+      "components": ["tests"],
+      "description": "设为 1 时，依赖引擎产物的测试在产物缺失时失败而不是跳过（CI 使用）。"
+    },
+    {
+      "name": "SKYLINE_ALLOW_STALE_BUILD",
+      "type": "flag",
+      "default": "",
+      "components": ["tests"],
+      "description": "设为 1 时，构建产物过期的 host 测试改为跳过。"
+    },
+    {
+      "name": "SKYLINE_TEST_CONCURRENCY",
+      "type": "int",
+      "default": "",
+      "components": ["tools"],
+      "description": "tools/run-tests.js 同时运行的测试文件数（默认 CPU 数的一半）。"
+    },
+    {
+      "name": "SKYLINE_L5_WINDOWS_BASELINE",
+      "type": "path",
+      "default": "spec/l5-baseline.win32.json",
+      "components": ["tests"],
+      "description": "test:l5 使用的 Windows 基线索引。"
+    },
+    {
+      "name": "SKYLINE_LINUX_SKYLINE_ADDON",
+      "type": "path",
+      "default": "reference/skyline-node.js",
+      "components": ["tests"],
+      "description": "契约测试的目标实现（test:native 使用 native/build/skyline.node）。"
+    },
+    {
+      "name": "SKYLINE_LINUX_SHARED_MEMORY",
+      "type": "path",
+      "default": "native/build*/sharedMemory.node",
+      "components": ["tests"],
+      "description": "契约与共享内存测试使用的 Linux sharedMemory.node。"
+    },
+    {
+      "name": "SKYLINE_LINUX_BUNDLE",
+      "type": "path",
+      "default": "",
+      "components": ["tests"],
+      "description": "契约测试 createWindow 使用的 bundle 目录。"
+    },
+    {
+      "name": "SKYLINE_LINUX_RESOURCES",
+      "type": "path",
+      "default": "",
+      "components": ["tests"],
+      "description": "契约测试使用的资源目录（默认同 bundle）。"
+    },
+    {
+      "name": "SKYLINE_SHARED_MEMORY_MODULE",
+      "type": "path",
+      "default": "",
+      "components": ["tests"],
+      "description": "共享内存测试优先加载的 sharedMemory.node。"
+    },
+    {
+      "name": "SKYLINE_RESULTS_DIR",
+      "type": "path",
+      "default": "tmp/results",
+      "components": ["tests"],
+      "description": "契约测试中每个用例结果文件的目录。"
+    },
+    {
+      "name": "SKYLINE_SPEC",
+      "type": "path",
+      "default": "spec/skyline-node.win32.json",
+      "components": ["tests"],
+      "description": "契约测试比对的 Windows oracle 记录。"
+    },
+    {
+      "name": "SKYLINE_DEVTOOLS_VERSION",
+      "type": "string",
+      "default": "2.02.2609250",
+      "components": ["tests"],
+      "description": "spec:record 写入 oracle 记录的 DevTools 版本。"
+    },
+    {
+      "name": "SKYLINE_WINE",
+      "type": "path",
+      "default": "wine",
+      "components": ["tests", "tools"],
+      "description": "运行官方 Windows 模块使用的 wine。"
+    },
+    {
+      "name": "SKYLINE_WIN_ELECTRON",
+      "type": "path",
+      "default": "",
+      "components": ["tests", "tools"],
+      "description": "Wine 下使用的官方 DevTools electron.exe。"
+    },
+    {
+      "name": "SKYLINE_WIN_RESOURCES",
+      "type": "path",
+      "default": "",
+      "components": ["tests", "tools"],
+      "description": "官方 Windows DevTools 的 resources/app.asar.unpacked 目录。"
+    },
+    {
+      "name": "SKYLINE_WIN_SCENARIO",
+      "type": "enum",
+      "values": ["l5", "oracle"],
+      "default": "",
+      "components": ["tests", "tools"],
+      "description": "tools/win-host 的场景：L5 采帧或契约 oracle 用例。"
+    },
+    {
+      "name": "SKYLINE_KERNEL_BLOB",
+      "type": "path",
+      "default": "",
+      "components": ["tools"],
+      "description": "官方 kernel_blob.bin（spec:symbols、源码恢复）。"
+    },
+    {
+      "name": "SKYLINE_ISOLATE_SNAPSHOT",
+      "type": "path",
+      "default": "",
+      "components": ["tools"],
+      "description": "官方 isolate_snapshot_data（spec:symbols）。"
+    },
+    {
+      "name": "SKYLINE_WIN_ADDON",
+      "type": "path",
+      "default": "",
+      "components": ["tools"],
+      "description": "官方 Windows skyline.node（spec:symbols 读取导出表）。"
+    },
+    {
+      "name": "SKYLINE_SKYLINE_BUNDLE",
+      "type": "path",
+      "default": "",
+      "components": ["tools"],
+      "description": "ops:record 使用的官方 Skyline 渲染 bundle。"
+    },
+    {
+      "name": "SKYLINE_EXAMPLES",
+      "type": "path",
+      "default": "../awesome-skyline/examples",
+      "components": ["tools"],
+      "description": "npm run gaps 扫描的 Skyline 示例目录。"
+    },
+    {
+      "name": "SKYLINE_DEVTOOLS_RESOURCES",
+      "type": "path",
+      "default": "$SKYLINE_DEVTOOLS_DIR/resources",
+      "components": ["tools"],
+      "description": "wxlib:style 读取的 DevTools resources 目录。"
+    },
+    {
+      "name": "SKYLINE_WXLIB_VERSION",
+      "type": "string",
+      "default": "REVISION 中的 WXLIB_VERSION",
+      "components": ["tools"],
+      "description": "wxlib:style 提取样式的基础库版本。"
+    }
+  ]
+}

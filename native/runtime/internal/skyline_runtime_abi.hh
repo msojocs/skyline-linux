@@ -70,6 +70,9 @@
 // The host/addon-facing exports and their sink types.  Including the public
 // declarations here makes the compiler check every definition against them.
 #include "skyline/runtime_api.h"
+// Environment variables, read once (tools/env-vars.json).
+#include "skyline/config.h"
+namespace config = skyline::config;
 
 // Global-scope ABI value types returned/consumed by the exported C API.
 struct SkylineLayoutSize {

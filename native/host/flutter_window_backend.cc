@@ -26,12 +26,14 @@
 #include <vector>
 
 #include "embedder/embedder.hh"
+#include "skyline/config.h"
 #include "skyline/frame_protocol.h"
 #include "skyline/runtime_api.h"
 
 namespace skyline {
 namespace {
 
+namespace config = skyline::config;
 using embedder::FileExists;
 using embedder::JoinPath;
 
@@ -39,9 +41,8 @@ constexpr int32_t kTouchDevice = 1;
 constexpr int32_t kMouseDevice = 2;
 
 std::string ResolveAssets(const std::string& bundle_path) {
-  if (const char* override_path = std::getenv("SKYLINE_ASSETS")) {
-    if (override_path[0] != '\0') return override_path;
-  }
+  const std::string& override_path = config::String(config::kAssets);
+  if (!override_path.empty()) return override_path;
   const std::string nested = JoinPath(bundle_path, "flutter_assets");
   if (FileExists(JoinPath(nested, "kernel_blob.bin"))) return nested;
   if (FileExists(JoinPath(bundle_path, "kernel_blob.bin"))) return bundle_path;
@@ -50,10 +51,9 @@ std::string ResolveAssets(const std::string& bundle_path) {
 
 std::string ResolveAot(const std::string& bundle_path,
                        const std::string& assets) {
-  if (const char* override_path = std::getenv("SKYLINE_AOT_LIBRARY")) {
-    if (override_path[0] != '\0' && FileExists(override_path)) {
-      return override_path;
-    }
+  const std::string& override_path = config::String(config::kAotLibrary);
+  if (!override_path.empty() && FileExists(override_path)) {
+    return override_path;
   }
   return embedder::FindAotLibrary(bundle_path, assets);
 }
@@ -64,10 +64,9 @@ std::string ResolveIcu(const std::string& bundle_path) {
         JoinPath(JoinPath(bundle_path, "flutter_assets"), "icudtl.dat")}) {
     if (FileExists(candidate)) return candidate;
   }
-  if (const char* override_path = std::getenv("SKYLINE_ICU")) {
-    if (override_path[0] != '\0' && FileExists(override_path)) {
-      return override_path;
-    }
+  const std::string& override_path = config::String(config::kIcu);
+  if (!override_path.empty() && FileExists(override_path)) {
+    return override_path;
   }
 #ifdef SKYLINE_DEFAULT_ICU
   if (FileExists(SKYLINE_DEFAULT_ICU)) return SKYLINE_DEFAULT_ICU;
@@ -105,8 +104,7 @@ class WindowHost {
     }
     assets_ = ResolveAssets(args_.bundle_path);
     const bool has_kernel = FileExists(JoinPath(assets_, "kernel_blob.bin"));
-    const char* env_aot = std::getenv("SKYLINE_AOT_LIBRARY");
-    use_aot_ = !has_kernel || (env_aot != nullptr && env_aot[0] != '\0');
+    use_aot_ = !has_kernel || !config::String(config::kAotLibrary).empty();
     if (use_aot_) {
       aot_library_ = ResolveAot(args_.bundle_path, assets_);
     }
@@ -275,7 +273,7 @@ class WindowHost {
     config.icu = icu_;
     if (use_aot_) config.aot_library = aot_library_;
     const bool devtools_entrypoint =
-        std::getenv("SKYLINE_DEVTOOLS") != nullptr ||
+        config::Flag(config::kDevtools) ||
         args_.bundle_path.find("skyline-addon") != std::string::npos ||
         args_.skyline_addon_path.find("skyline-addon") != std::string::npos;
     if (devtools_entrypoint) {

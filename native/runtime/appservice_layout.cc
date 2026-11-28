@@ -92,8 +92,7 @@ SizeF MeasureNode(AppNode* node, float avail_w, bool stretch_w, float avail_h,
     return size;
   }
   static const uint32_t debug_node_id = [] {
-    const char* value = std::getenv("SKYLINE_LAYOUT_DEBUG_ID");
-    return value != nullptr ? static_cast<uint32_t>(std::atoi(value)) : 0u;
+    return static_cast<uint32_t>(config::Int(config::kLayoutDebugId));
   }();
   const bool debug_node = debug_node_id != 0 && node->id == debug_node_id;
   if (containing_w < 0.0f) containing_w = avail_w;
@@ -511,8 +510,7 @@ void LayoutNode(AppNode* node, float x, float y, float w, float h,
   node->abs_x = abs_x;
   node->abs_y = abs_y;
   static const uint32_t debug_node_id = [] {
-    const char* value = std::getenv("SKYLINE_LAYOUT_DEBUG_ID");
-    return value != nullptr ? static_cast<uint32_t>(std::atoi(value)) : 0u;
+    return static_cast<uint32_t>(config::Int(config::kLayoutDebugId));
   }();
   if (debug_node_id != 0 && node->id == debug_node_id) {
     std::fprintf(stderr,

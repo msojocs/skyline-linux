@@ -244,7 +244,7 @@ SKYLINE_EXPORT extern "C" void LogError(void* tag, void* message) {
 namespace {
 
 bool DebugChannels() {
-  return std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr;
+  return config::Flag(config::kAppServiceDebug);
 }
 
 const char* DartStringOrNull(SkylineHandle value) {
@@ -615,7 +615,7 @@ SKYLINE_EXPORT extern "C" double AdjustDecelerationVelocity(
 
 SKYLINE_EXPORT extern "C" int32_t ShouldAcceptGesture(void* /*runtime*/,
                                                      int32_t handler_id) {
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr, "[skyline-runtime] ShouldAcceptGesture: %d -> 1\n",
                  handler_id);
   }
@@ -692,7 +692,7 @@ bool ScrollViewYieldsToSwiper(int32_t handler_id, double dx, double dy) {
   const bool yield =
       (delta > 0.0 && at_start && can_previous) ||
       (delta < 0.0 && at_end && can_next);
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr,
                  "[skyline-runtime] ShouldGestureResponse: scroll #%u -> "
                  "swiper #%u offset=%g total=%g viewport=%g delta=%g "
@@ -720,7 +720,7 @@ SKYLINE_EXPORT extern "C" int32_t ShouldGestureResponse(
   (void)handler_id;
   (void)native_event;
 #endif
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr, "[skyline-runtime] ShouldGestureResponse: %d -> 1\n",
                  handler_id);
   }
@@ -809,7 +809,7 @@ SKYLINE_EXPORT extern "C" SkylineNativeRect HandleHeroOnFrame(
   json.reserve(320);
   json += "{\"type\":\"heroFrame\",\"hash\":\"";
   json += appservice::JsonEscapeString(hash);
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr,
                  "[skyline-runtime] hero frame hash=%s progress=%.3f "
                  "direction=%d\n",

@@ -29,6 +29,7 @@
 #define SKYLINE_RUNTIME_API_WEAK
 #endif
 #include "skyline/runtime_api.h"
+#include "skyline/config.h"
 
 // RUNTIME(call) calls into the embedded runtime; RUNTIME_OR(call, fallback)
 // yields `fallback` when skyline.node is built without an engine.
@@ -359,15 +360,15 @@ napi_value CreateWindow(const Args& args) {
   // DevTools integration demo: render a static page while the private
   // appservice JS bridge is unavailable.  The page ops use the same schema as
   // the recorded fixtures.
-  if (const char* demo = std::getenv("SKYLINE_DEVTOOLS_DEMO_OPS")) {
-    if (demo[0] != '\0') {
-      std::ifstream file(demo);
-      if (file) {
-        const std::string json((std::istreambuf_iterator<char>(file)),
-                               std::istreambuf_iterator<char>());
-        if (!json.empty()) {
-          RUNTIME(SkylineApplyLiveOps(json.c_str(), window.window_id));
-        }
+  const std::string& demo =
+      skyline::config::String(skyline::config::kDevtoolsDemoOps);
+  if (!demo.empty()) {
+    std::ifstream file(demo);
+    if (file) {
+      const std::string json((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+      if (!json.empty()) {
+        RUNTIME(SkylineApplyLiveOps(json.c_str(), window.window_id));
       }
     }
   }
@@ -432,7 +433,7 @@ napi_value DispatchTouch(const Args& args) {
   } else if (kind == "cancel") {
     phase = Phase::kCancel;
   }
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (skyline::config::Flag(skyline::config::kAppServiceDebug)) {
     AddonLog("dispatchTouch kind=%s window=%g x=%g y=%g", kind.c_str(),
              window_id, x, y);
   }
@@ -448,7 +449,7 @@ napi_value DispatchWheel(const Args& args) {
   const double y = args.Number(2);
   const double delta_x = args.Number(3);
   const double delta_y = args.Number(4);
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (skyline::config::Flag(skyline::config::kAppServiceDebug)) {
     AddonLog("dispatchWheel window=%g x=%g y=%g dx=%g dy=%g", window_id, x, y,
              delta_x, delta_y);
   }

@@ -262,7 +262,7 @@ bool HasStickyFlowChildren(const AppNode* node) {
 }
 
 void OnStickyHeaderStickOnTop(intptr_t native_widget_ptr, uint8_t value) {
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") == nullptr) return;
+  if (!config::Flag(config::kAppServiceDebug)) return;
   std::fprintf(stderr,
                "[skyline-runtime] sticky header 0x%lx onTop=%u\n",
                static_cast<long>(native_widget_ptr),
@@ -533,7 +533,7 @@ Dart_Handle WrapHero(AppNode* node, Dart_Handle inner) {
   DeletePersistent(&node->hero_p);
   node->hero_widget = hero;
   node->hero_p = Dart_NewPersistentHandle(hero);
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr,
                  "[skyline-runtime] hero #%u tag=%s gesture=%d onFrame=%s "
                  "tween=%s push=%s pop=%s\n",
@@ -1182,7 +1182,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       inner = sliver;
 
       const bool inside_scroll = InsideSliverContext(node);
-      if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      if (config::Flag(config::kAppServiceDebug)) {
         const float first_h = items.empty() ? -1.0f : items[0]->measured_h;
         const float first_w = items.empty() ? -1.0f : items[0]->measured_w;
         std::fprintf(stderr,
@@ -1271,7 +1271,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             HasStickyFlowChildren(child)) {
           std::vector<Dart_Handle> grandchildren;
           std::vector<AppNode*> flow = OrderedFlowChildren(child);
-          if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+          if (config::Flag(config::kAppServiceDebug)) {
             std::fprintf(stderr,
                          "[ops-debug] sticky section #%u flow=%zu children=",
                          child->id, flow.size());
@@ -1295,7 +1295,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                             newDirectRenderWidget, newListBuilder,
                             newGridBuilder, true);
             if (item == nullptr || Dart_IsError(item) || Dart_IsNull(item)) {
-              if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+              if (config::Flag(config::kAppServiceDebug)) {
                 std::fprintf(stderr,
                              "[ops-debug] sticky grand #%u/%s build failed\n",
                              grand->id, grand->name.c_str());
@@ -1325,7 +1325,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
               child->style.padding[1], child->style.padding[2],
               child->style.padding[3]);
           if (!Dart_IsError(section)) {
-            if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+            if (config::Flag(config::kAppServiceDebug)) {
               std::fprintf(stderr,
                            "[ops-debug] sticky section #%u ok n=%zu\n",
                            child->id, grandchildren.size());
@@ -1454,7 +1454,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         const bool scroll_y_attr = AttrBool(node, "scrollY", false);
         // List/grid slivers require a CustomScrollView; plain box children are
         // wrapped in SliverToBoxAdapter by SkylineScrollView.
-        if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+        if (config::Flag(config::kAppServiceDebug)) {
           std::fprintf(stderr,
                        "[ops-debug] scrollview #%u scrollX=%d scrollY=%d "
                        "scrollEnabled=%d type=%u (slivers=%d sticky=%d) "
@@ -1509,7 +1509,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             if (header_widget != nullptr && !Dart_IsError(header_widget) &&
                 !Dart_IsNull(header_widget)) {
               refresher_header = header_widget;
-              if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+              if (config::Flag(config::kAppServiceDebug)) {
                 std::fprintf(stderr,
                              "[ops-debug] scrollview #%u refresher header #%u\n",
                              node->id, sibling->id);
@@ -1660,7 +1660,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       Dart_Null(), 0.0, 0.0, 0.0, 0.0, 1, 0,
       style.pointer_events_none ? 1 : 0, Dart_Null(), yoga_connector, inner);
   if (style.pointer_events_none &&
-      std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr, "[skyline-runtime] pointer-events:none id=%u addr=0x%lx\n",
                  node->id, static_cast<long>(node->address));
   }
@@ -1697,7 +1697,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                                &origin_x, &origin_y);
         origin(yoga_node, origin_x, origin_y, -1.0, -1.0);
       }
-      if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+      if (config::Flag(config::kAppServiceDebug)) {
         std::fprintf(stderr,
                      "[skyline-runtime] transform #%u matrix=[%g,%g,%g,%g "
                      "%g,%g,%g,%g %g,%g,%g,%g %g,%g,%g,%g]\n",

@@ -22,6 +22,7 @@
 
 #include "embedder/embedder.hh"
 #include "frame_writer.hh"
+#include "skyline/config.h"
 
 // Weak references keep the host usable with an engine built without the
 // embedded Skyline runtime: every runtime function is then null.
@@ -586,8 +587,8 @@ int main(int argc, char** argv) {
       event.signal_kind = scripted.signal_kind;
       event.scroll_delta_x = scripted.scroll_dx;
       event.scroll_delta_y = scripted.scroll_dy;
-      const char* view_id_env = std::getenv("SKYLINE_POINTER_VIEW_ID");
-      event.view_id = view_id_env != nullptr ? std::atoi(view_id_env) : 0;
+      event.view_id = static_cast<FlutterViewId>(
+          skyline::config::Int(skyline::config::kPointerViewId));
       const FlutterEngineResult pointer_result =
           FlutterEngineSendPointerEvent(engine->get(), &event, 1);
       if (pointer_result != kSuccess && !pointer_error_reported) {

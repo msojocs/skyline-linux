@@ -122,8 +122,14 @@ void SchedulePendingStyleUpdates() {
 }  // namespace
 
 void CreateDemoPage(RuntimeHolder* holder) {
-  const char* ops_descriptor = std::getenv("SKYLINE_APP_SERVICE_OPS");
-  if (ops_descriptor == nullptr && std::getenv("SKYLINE_STUB_PAGE") == nullptr) {
+  const char* ops_descriptor =
+      config::IsSet(config::kAppServiceOps)
+          ? config::String(config::kAppServiceOps).c_str()
+          : nullptr;
+  const char* stub_page = config::IsSet(config::kStubPage)
+                              ? config::String(config::kStubPage).c_str()
+                              : nullptr;
+  if (ops_descriptor == nullptr && stub_page == nullptr) {
     return;  // opt-in: synthetic page for tests, not the default appservice UI
   }
   if (g_demo_page_created || holder == nullptr) {
@@ -156,19 +162,19 @@ void CreateDemoPage(RuntimeHolder* holder) {
     CreateAppServiceOpsPage(holder, ops_descriptor);
     return;
   }
-  const char* descriptor = std::getenv("SKYLINE_STUB_PAGE_JSON");
-  if (descriptor == nullptr) {
-    const char* page = std::getenv("SKYLINE_STUB_PAGE");
-    if (page != nullptr && (page[0] == '{' || page[0] == '@')) {
-      descriptor = page;
-    }
+  const char* descriptor = config::IsSet(config::kStubPageJson)
+                               ? config::String(config::kStubPageJson).c_str()
+                               : nullptr;
+  if (descriptor == nullptr && stub_page != nullptr &&
+      (stub_page[0] == '{' || stub_page[0] == '@')) {
+    descriptor = stub_page;
   }
   if (descriptor != nullptr) {
     g_json_active = true;
     CreateJsonPage(holder, descriptor);
     return;
   }
-  const char* mode = std::getenv("SKYLINE_STUB_PAGE");
+  const char* mode = stub_page;
   if (mode != nullptr && std::strcmp(mode, "text") == 0) {
     g_demo_mode = DemoMode::kText;
     CreateTextPage(holder);

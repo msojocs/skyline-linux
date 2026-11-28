@@ -525,7 +525,7 @@ bool AttachDetachedPortalContent(AppNode* root) {
       if (node->parent->name == "root") {
         DetachFromParent(node);
       } else {
-        if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+        if (config::Flag(config::kAppServiceDebug)) {
           std::fprintf(stderr,
                        "[skyline-runtime] portal #%u kept under #%u/%s%s\n",
                        node->id, node->parent->id, node->parent->name.c_str(),
@@ -536,7 +536,7 @@ bool AttachDetachedPortalContent(AppNode* root) {
     }
     AppendChild(root, node);
     changed = true;
-    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    if (config::Flag(config::kAppServiceDebug)) {
       std::fprintf(stderr, "[skyline-runtime] attached detached portal #%u (%s)\n",
                    node->id, node->name.c_str());
     }
@@ -634,7 +634,7 @@ void ResetNodeHandlesSelf(AppNode* node, bool include_layout) {
     node->texture_widget = nullptr;
   }
   if (node->texture_view_id >= 0) {
-    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    if (config::Flag(config::kAppServiceDebug)) {
       std::fprintf(stderr,
                    "[skyline-runtime] native view dispose: viewId=%d\n",
                    node->texture_view_id);

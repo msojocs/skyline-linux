@@ -10,6 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 
@@ -100,20 +101,39 @@ test('sharedMemory: setMemory validates keys, lengths, and missing keys', { skip
 
 test('sharedMemory: Electron handle mode returns a 16-byte descriptor', { skip }, () => {
   // The DevTools appservice deletes `process`, so detection falls back to the
-  // user agent; the launch environment can force handle mode explicitly.
-  const previous = process.env.SKYLINE_SHARED_MEMORY_HANDLE;
-  process.env.SKYLINE_SHARED_MEMORY_HANDLE = '1';
+  // user agent; the launch environment can force handle mode explicitly.  The
+  // addon reads its environment once, so the mode is set on a fresh process.
   const key = uniqueKey('handle');
-  try {
-    const handle = shared.setMemory(key, 32);
-    assert.ok(handle instanceof Uint8Array, 'handle mode returns a typed array');
-    assert.equal(handle.byteLength, 16);
+  const script = `
+    const shared = require(process.env.HANDLE_MODULE);
+    const handle = shared.setMemory(process.env.HANDLE_KEY, 32);
     const view = new DataView(handle.buffer, handle.byteOffset, handle.byteLength);
-    assert.notEqual(view.getBigUint64(0, true), 0n, 'pointer must be non-zero');
-    assert.equal(view.getBigUint64(8, true), 32n, 'size follows the pointer');
+    console.log(JSON.stringify({
+      typed: handle instanceof Uint8Array,
+      length: handle.byteLength,
+      pointer: String(view.getBigUint64(0, true)),
+      size: String(view.getBigUint64(8, true)),
+    }));
+    shared.removeMemory(process.env.HANDLE_KEY);
+  `;
+  try {
+    const result = spawnSync(process.execPath, ['-e', script], {
+      encoding: 'utf8',
+      timeout: 20000,
+      env: {
+        ...process.env,
+        SKYLINE_SHARED_MEMORY_HANDLE: '1',
+        HANDLE_MODULE: modulePath,
+        HANDLE_KEY: key,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const handle = JSON.parse(result.stdout.trim().split('\n').pop());
+    assert.ok(handle.typed, 'handle mode returns a typed array');
+    assert.equal(handle.length, 16);
+    assert.notEqual(handle.pointer, '0', 'pointer must be non-zero');
+    assert.equal(handle.size, '32', 'size follows the pointer');
   } finally {
-    if (previous === undefined) delete process.env.SKYLINE_SHARED_MEMORY_HANDLE;
-    else process.env.SKYLINE_SHARED_MEMORY_HANDLE = previous;
     cleanup(key);
   }
 });

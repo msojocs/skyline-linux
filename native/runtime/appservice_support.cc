@@ -48,10 +48,9 @@ std::string ResolveResourcePath(const std::string& path) {
     resolved = resolved.substr(7);
   }
   if (resolved.empty() || resolved[0] == '/') return resolved;
-  const char* root = std::getenv("SKYLINE_RESOURCE_ROOT");
-  if (root == nullptr || *root == '\0') return resolved;
-  std::string base = root;
-  if (!base.empty() && base.back() != '/') base.push_back('/');
+  std::string base = config::String(config::kResourceRoot);
+  if (base.empty()) return resolved;
+  if (base.back() != '/') base.push_back('/');
   return base + resolved;
 }
 

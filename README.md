@@ -58,7 +58,8 @@ Skyline 运行时与嵌入层。该路线周期长，因此先交付可执行的
 并用 Wine 中的官方引擎作为持续回归基准。完整论证见
 [docs/feasibility.md](docs/feasibility.md)，分阶段实施见
 [docs/native-roadmap.md](docs/native-roadmap.md)，接口契约见
-[docs/contract.md](docs/contract.md)。
+[docs/contract.md](docs/contract.md)，环境变量参考见 [docs/env.md](docs/env.md)
+（由 `npm run env:doc` 生成）。
 
 ## 测试分层
 

@@ -236,7 +236,7 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   }
   PublishNodeRects();
   SnapshotNode(root);
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     DebugDumpNode(layout_root, 0);
     for (const NodeMetric& metric : metrics) {
       std::fprintf(stderr,
@@ -436,7 +436,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
     return;
   }
   SchedulePendingAnimatedStyles(holder);
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     DebugDumpNode(FindNode(g_page->root_id), 0);
   }
   std::fprintf(stderr,
@@ -624,10 +624,11 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
   }
   // Diagnostic: dump every replayed batch so a live page can be replayed as a
   // host fixture (`SKYLINE_DUMP_OPS=<dir>` in the DevTools environment).
-  if (const char* dump_dir = std::getenv("SKYLINE_DUMP_OPS")) {
+  if (const std::string& dump_dir = config::String(config::kDumpOps);
+      !dump_dir.empty()) {
     static int dump_index = 0;
     char name[1024];
-    std::snprintf(name, sizeof(name), "%s/ops-%03d.json", dump_dir,
+    std::snprintf(name, sizeof(name), "%s/ops-%03d.json", dump_dir.c_str(),
                   dump_index++);
     if (FILE* dump = std::fopen(name, "wb")) {
       std::fwrite(json.data(), 1, json.size(), dump);
@@ -801,7 +802,7 @@ void ScrollNodeTo(uint32_t node_id, double top) {
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   if (node == nullptr || node->scroll_view_p == nullptr) {
-    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    if (config::Flag(config::kAppServiceDebug)) {
       std::fprintf(stderr,
                    "[skyline-runtime] scrollNodeTo #%u: %s\n", node_id,
                    node == nullptr ? "no node" : "no scroll widget");
@@ -817,7 +818,7 @@ void ScrollNodeTo(uint32_t node_id, double top) {
   char buffer[64];
   std::snprintf(buffer, sizeof(buffer), "%g", top);
   node->attrs["scrollTop"] = buffer;
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr, "[skyline-runtime] scrollNodeTo #%u -> %g\n", node_id,
                  top);
   }
@@ -839,7 +840,7 @@ void ScrollIntoView(uint32_t scroll_node_id, uint32_t target_node_id,
   AppNode* target = FindNode(target_node_id);
   if (scroll == nullptr || target == nullptr ||
       scroll->scroll_view_p == nullptr || target->yoga_node_p == nullptr) {
-    if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+    if (config::Flag(config::kAppServiceDebug)) {
       std::fprintf(stderr,
                    "[skyline-runtime] scrollIntoView scroll=#%u target=#%u "
                    "missing widget\n",
@@ -850,7 +851,7 @@ void ScrollIntoView(uint32_t scroll_node_id, uint32_t target_node_id,
   auto* update = reinterpret_cast<ScrollViewUpdateScrollIntoViewFn>(FindCallback(
       g_page->holder->ffi_table, kScrollViewUpdateScrollIntoViewHash));
   if (update == nullptr) return;
-  if (std::getenv("SKYLINE_APP_SERVICE_DEBUG") != nullptr) {
+  if (config::Flag(config::kAppServiceDebug)) {
     std::fprintf(stderr,
                  "[skyline-runtime] scrollIntoView scroll=#%u target=#%u "
                  "within=%d animated=%d offset=%g align=%u\n",

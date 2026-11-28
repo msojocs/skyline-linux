@@ -4,6 +4,7 @@
 #define MEMORY_HH
 #include "napi.h"
 #include "manager.hh"
+#include "skyline/config.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -147,8 +148,8 @@ namespace SharedMemory {
     // Electron's preload context does not always expose `process` on the
     // isolate global, so the DevTools launch env can force the handle mode.
     inline bool is_electron(Napi::Env env) {
-        if (const char *forced = std::getenv("SKYLINE_SHARED_MEMORY_HANDLE")) {
-            if (forced[0] != '\0') return true;
+        if (skyline::config::Flag(skyline::config::kSharedMemoryHandle)) {
+            return true;
         }
         auto global = env.Global();
         if (global.Has("process")) {
