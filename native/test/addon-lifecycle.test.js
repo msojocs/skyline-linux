@@ -10,14 +10,17 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { paths, prerequisiteSkip } = require('../../test/lib/host');
 
 const skip = prerequisiteSkip(['addon-debug', 'engine-debug', 'empty-page-kernel']);
-const bundle = require('node:path').dirname(paths.appAssets('empty-page'));
+const bundle = path.dirname(paths.appAssets('empty-page'));
 
 // Runs `body` (the source of an async function receiving `shell`, `frame`
 // and `createWindow`) in a fresh Node process.
-function runScenario(body, timeoutMs = 45000) {
+function runScenario(body, env = {}, timeoutMs = 45000) {
   const script = `
     'use strict';
     const addonPath = process.env.LIFECYCLE_ADDON;
@@ -41,9 +44,11 @@ function runScenario(body, timeoutMs = 45000) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ['-e', script], {
       env: {
+        SKYLINE_LOG_LEVEL: 'info',
         ...process.env,
         LIFECYCLE_ADDON: paths.addon('debug'),
         LIFECYCLE_BUNDLE: bundle,
+        ...env,
       },
     });
     let stdout = '';
@@ -75,6 +80,23 @@ describe('addon lifecycle', { skip, concurrency: true }, () => {
     const result = await runScenario('');
     assertCleanExit(result);
     assert.match(result.stderr, /\[skyline-addon\] init ok/);
+  });
+
+  it('lifecycle messages go to SKYLINE_ADDON_LOG, stderr stays at warning', {
+    timeout: 60000,
+  }, async () => {
+    const logFile = path.join(os.tmpdir(), `skyline-addon-lifecycle-${process.pid}.log`);
+    fs.rmSync(logFile, { force: true });
+    try {
+      // An empty SKYLINE_LOG_LEVEL falls back to the default (warning).
+      const result = await runScenario('', { SKYLINE_LOG_LEVEL: '', SKYLINE_ADDON_LOG: logFile });
+      assertCleanExit(result);
+      assert.doesNotMatch(result.stderr, /\[skyline-addon\]/);
+      assert.match(fs.readFileSync(logFile, 'utf8'),
+        /^\[pid \d+\] \[skyline-addon\] init begin\n(.*\n)*\[pid \d+\] \[skyline-addon\] init ok$/m);
+    } finally {
+      fs.rmSync(logFile, { force: true });
+    }
   });
 
   it('destroying the window releases its frame callback', {

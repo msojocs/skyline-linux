@@ -79,6 +79,7 @@ test('appservice ops: a captured tap gesture drives a real update batch', {
     assert.ok(kinds.has('addClass'), 'tap should add the rect transform class');
 
     const { result, logs, pixels, details } = runOps(recorded.path, {
+      debugLogs: true,
       timeoutMs: 2000,
       frames: 0,
     });
@@ -136,6 +137,7 @@ test('appservice ops: recorder samples animated style worklets', {
       `expected a varying translateX timeline, got ${translateValues}`);
 
     const { result, logs, pixels } = runOps(recorded.path, {
+      debugLogs: true,
       timeoutMs: 3400,
       frames: 0,
     });

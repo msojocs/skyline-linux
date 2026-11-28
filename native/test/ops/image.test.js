@@ -243,6 +243,7 @@ test('appservice ops: network images load through RequestHttpResource', {
       ],
     }));
     const { result, logs, pixels } = runOps(ops, {
+      debugLogs: true,
       timeoutMs: 3000,
       frames: 0,
     });
@@ -312,6 +313,7 @@ test('appservice ops: network images share one request per URL', {
       ],
     }));
     const { result, logs, pixels } = runOps(ops, {
+      debugLogs: true,
       timeoutMs: 4000,
       frames: 0,
     });
@@ -356,6 +358,7 @@ test('appservice ops: images repeat and cache by URL', {
   }));
   try {
     const { result, logs, pixels } = runOps(ops, {
+      debugLogs: true,
       env: { SKYLINE_RESOURCE_ROOT: dir },
     });
     assert.equal(result.status, 0,
@@ -399,6 +402,7 @@ test('appservice ops: CSS background-image paints through NewDecoratedBox', {
   }));
   try {
     const { result, logs, pixels } = runOps(ops, {
+      debugLogs: true,
       env: { SKYLINE_RESOURCE_ROOT: dir },
     });
     assert.equal(result.status, 0,
@@ -516,6 +520,7 @@ test('appservice ops: SVG images decode through SvgToRgba', {
   }));
   try {
     const { result, logs, pixels } = runOps(ops, {
+      debugLogs: true,
       timeoutMs: 4000,
       frames: 0,
       env: { SKYLINE_RESOURCE_ROOT: dir },

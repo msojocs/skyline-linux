@@ -1,45 +1,35 @@
 #ifndef __LOGGER_HH__
 #define __LOGGER_HH__
 
-// Minimal logger for the sharedMemory addon.
+// Logger for the sharedMemory addon.
 //
-// The upstream module used spdlog, which dragged in vcpkg.  This repository
-// builds without external packages, so the addon keeps the same call sites but
-// routes them to an opt-in stderr sink:
-//
-//   SKYLINE_SHARED_MEMORY_LOG=1 ./bin/wechat-devtools
-//
-// Messages are emitted verbatim; the upstream sources mix fmt ("{}") and
-// printf ("%s") placeholders, so arguments are intentionally ignored.
+// The upstream module used spdlog; this repository builds without external
+// packages, so the same call sites take printf-style formats and go through
+// the shared native log (skyline/log.h) under the "sharedMemory" category.
+// SKYLINE_SHARED_MEMORY_LOG=1 shows every level; otherwise SKYLINE_LOG_LEVEL
+// applies (warning and above by default).
 
+#include <cstdarg>
 #include <memory>
+
+#include "skyline/log.h"
 
 namespace Logger {
 
 class Logger {
  public:
-  template <typename... Args>
-  void debug(const char* message, Args&&...) const {
-    Emit("debug", message);
-  }
-
-  template <typename... Args>
-  void info(const char* message, Args&&...) const {
-    Emit("info", message);
-  }
-
-  template <typename... Args>
-  void warn(const char* message, Args&&...) const {
-    Emit("warn", message);
-  }
-
-  template <typename... Args>
-  void error(const char* message, Args&&...) const {
-    Emit("error", message);
-  }
+  void debug(const char* format, ...) const
+      __attribute__((format(printf, 2, 3)));
+  void info(const char* format, ...) const
+      __attribute__((format(printf, 2, 3)));
+  void warn(const char* format, ...) const
+      __attribute__((format(printf, 2, 3)));
+  void error(const char* format, ...) const
+      __attribute__((format(printf, 2, 3)));
 
  private:
-  static void Emit(const char* level, const char* message);
+  static void Emit(skyline::log::Level level, const char* format,
+                   va_list args);
 };
 
 extern std::shared_ptr<Logger> logger;

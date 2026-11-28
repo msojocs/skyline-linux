@@ -41,10 +41,10 @@ cmake --build native/build --target shared_memory
 ## Changes from upstream
 
 - **No vcpkg / no spdlog.**  Upstream logged through spdlog (and therefore
-  depended on vcpkg).  The in-tree logger is a no-op by default; set
-  `SKYLINE_SHARED_MEMORY_LOG=1` to print messages to stderr.  Call arguments
-  are not interpolated because upstream mixes fmt (`{}`) and printf (`%s`)
-  placeholders.
+  depended on vcpkg).  The in-tree logger takes printf-style formats and
+  writes through the shared native log (`native/include/skyline/log.h`) as
+  `[sharedMemory] ...`: warnings and errors follow `SKYLINE_LOG_LEVEL`, and
+  `SKYLINE_SHARED_MEMORY_LOG=1` shows every level (see `docs/env.md`).
 - **No npm dependencies.**  `node-addon-api` 7.1.0 headers are vendored under
   `third_party/node-addon-api` instead of being resolved from `node_modules`.
 - Missing `<stdexcept>` includes that spdlog used to provide are declared

@@ -78,16 +78,14 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   if (g_page == nullptr || builders.create_route == nullptr) return false;
   AppNode* root = FindNode(root_id);
   if (root == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] appservice ops: no attach root (root=%u)\n",
-                 root_id);
+    SKY_LOG(kInfo, kLogRuntime, "appservice ops: no attach root (root=%u)",
+            root_id);
     return false;
   }
   if (builders.yg_node == nullptr || builders.yg_connector == nullptr ||
       builders.text == nullptr || builders.text_span == nullptr ||
       builders.decorated == nullptr || builders.opacity == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] appservice ops: callbacks not registered\n");
+    SKY_LOG(kWarning, kLogRuntime, "appservice ops: callbacks not registered");
     return false;
   }
 
@@ -134,7 +132,7 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
     g_collect_fixed_nodes = false;
     ResetDeferredFixedNodes();
     if (host_widget == nullptr || Dart_IsError(host_widget)) {
-      std::fprintf(stderr, "[skyline-runtime] appservice ops: host build failed\n");
+      SKY_LOG(kWarning, kLogRuntime, "appservice ops: host build failed");
       return false;
     }
   }
@@ -151,7 +149,7 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   g_collect_fixed_nodes = false;
   ResetDeferredFixedNodes();
   if (root_widget == nullptr || Dart_IsError(root_widget)) {
-    std::fprintf(stderr, "[skyline-runtime] appservice ops: build failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "appservice ops: build failed");
     return false;
   }
 
@@ -190,12 +188,12 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   g_page->root_id = root->id;
   g_page->current_page_id = page_id;
   g_page->page_count++;
-  std::fprintf(stderr,
-               "[skyline-runtime] appservice page %d -> CreatePageRoute "
-               "(openType=%u, %gx%g, custom=%d, bg=%08x)\n",
-               g_page->page_count, static_cast<unsigned>(open_type),
-               static_cast<double>(viewport_w), static_cast<double>(viewport_h),
-               is_custom ? 1 : 0, page_background);
+  SKY_LOG(kInfo, kLogRuntime,
+          "appservice page %d -> CreatePageRoute (openType=%u, %gx%g, "
+          "custom=%d, bg=%08x)",
+          g_page->page_count, static_cast<unsigned>(open_type),
+          static_cast<double>(viewport_w), static_cast<double>(viewport_h),
+          is_custom ? 1 : 0, page_background);
   builders.create_route(
       callback_id, open_type,
       is_custom ? 1 : 0,
@@ -236,14 +234,13 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
   }
   PublishNodeRects();
   SnapshotNode(root);
-  if (config::Flag(config::kAppServiceDebug)) {
+  if (SKY_LOG_ENABLED(kDebug)) {
     DebugDumpNode(layout_root, 0);
     for (const NodeMetric& metric : metrics) {
-      std::fprintf(stderr,
-                   "[ops-debug] metrics #%u -> top=%g left=%g w=%g h=%g\n",
-                   metric.node->id, static_cast<double>(metric.y),
-                   static_cast<double>(metric.x), static_cast<double>(metric.w),
-                   static_cast<double>(metric.h));
+      SKY_LOG(kDebug, kLogOps, "metrics #%u -> top=%g left=%g w=%g h=%g",
+              metric.node->id, static_cast<double>(metric.y),
+              static_cast<double>(metric.x), static_cast<double>(metric.w),
+              static_cast<double>(metric.h));
     }
   }
   return true;
@@ -265,8 +262,7 @@ bool MaterializeAppBar(RuntimeHolder* holder, const PageBuilders& builders) {
       builders.yg_connector == nullptr || builders.text == nullptr ||
       builders.text_span == nullptr || builders.decorated == nullptr ||
       builders.opacity == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] app bar: callbacks not registered\n");
+    SKY_LOG(kWarning, kLogRuntime, "app bar: callbacks not registered");
     return false;
   }
   ResolveStyles(root, nullptr);
@@ -301,17 +297,16 @@ bool MaterializeAppBar(RuntimeHolder* holder, const PageBuilders& builders) {
   g_collect_fixed_nodes = false;
   ResetDeferredFixedNodes();
   if (widget == nullptr || Dart_IsError(widget)) {
-    std::fprintf(stderr, "[skyline-runtime] app bar: build failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "app bar: build failed");
     return false;
   }
   DeletePersistent(&g_page->appbar_widget);
   g_page->appbar_widget = Dart_NewPersistentHandle(widget);
   createAppBar(widget);
   PublishNodeRects();
-  std::fprintf(stderr,
-               "[skyline-runtime] app bar -> CreateAppBar (root=%u, %gx%g)\n",
-               g_page->appbar_root_id, static_cast<double>(viewport_w),
-               static_cast<double>(viewport_h));
+  SKY_LOG(kInfo, kLogRuntime, "app bar -> CreateAppBar (root=%u, %gx%g)",
+          g_page->appbar_root_id, static_cast<double>(viewport_w),
+          static_cast<double>(viewport_h));
   return true;
 }
 
@@ -321,8 +316,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
       builders.create_route == nullptr || builders.text == nullptr ||
       builders.text_span == nullptr || builders.decorated == nullptr ||
       builders.opacity == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] appservice ops: callbacks not registered\n");
+    SKY_LOG(kWarning, kLogRuntime, "appservice ops: callbacks not registered");
     return;
   }
   auto* navigateBack = reinterpret_cast<NavigateBackFn>(
@@ -332,22 +326,21 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
 
   std::string json;
   if (!ReadDescriptor(descriptor, &json)) {
-    std::fprintf(stderr, "[skyline-runtime] appservice ops: cannot read %s\n",
-                 descriptor);
+    SKY_LOG(kWarning, kLogRuntime, "appservice ops: cannot read %s",
+            descriptor);
     return;
   }
   g_ops_document = std::make_unique<rapidjson::Document>();
   rapidjson::Document& doc = *g_ops_document;
   doc.Parse(json.c_str());
   if (doc.HasParseError() || !doc.IsObject()) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] appservice ops: parse error at %zu\n",
-                 static_cast<size_t>(doc.GetErrorOffset()));
+    SKY_LOG(kWarning, kLogRuntime, "appservice ops: parse error at %zu",
+            static_cast<size_t>(doc.GetErrorOffset()));
     return;
   }
   const auto ops_member = doc.FindMember("ops");
   if (ops_member == doc.MemberEnd() || !ops_member->value.IsArray()) {
-    std::fprintf(stderr, "[skyline-runtime] appservice ops: missing ops array\n");
+    SKY_LOG(kWarning, kLogRuntime, "appservice ops: missing ops array");
     return;
   }
 
@@ -381,17 +374,16 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
       if (g_page->page_count > 0 && navigateBack != nullptr) {
         navigateBack(g_page->pending_back_delta,
                      g_page->pending_back_animated ? 1 : 0, 0);
-        std::fprintf(stderr,
-                     "[skyline-runtime] NavigateBack: delta=%d animated=%d\n",
-                     g_page->pending_back_delta,
-                     g_page->pending_back_animated ? 1 : 0);
+        SKY_LOG(kInfo, kLogRuntime, "NavigateBack: delta=%d animated=%d",
+                g_page->pending_back_delta,
+                g_page->pending_back_animated ? 1 : 0);
       }
       g_page->pending_open_type = 0;
     } else if (std::strcmp(kind, "notifySwitchTab") == 0) {
       if (g_page->page_count > 0 && switchTab != nullptr) {
         switchTab(g_page->pending_page_id, 0);
-        std::fprintf(stderr, "[skyline-runtime] SwitchTab: page=%d\n",
-                     g_page->pending_page_id);
+        SKY_LOG(kInfo, kLogRuntime, "SwitchTab: page=%d",
+                g_page->pending_page_id);
         g_page->pending_open_type = 0;
       }
     }
@@ -430,20 +422,18 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
     MaterializeAppBar(holder, builders);
   }
   if (g_page->page_count == 0) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] appservice ops: no attach root (root=%u)\n",
-                 g_page->root_id);
+    SKY_LOG(kInfo, kLogRuntime, "appservice ops: no attach root (root=%u)",
+            g_page->root_id);
     return;
   }
   SchedulePendingAnimatedStyles(holder);
-  if (config::Flag(config::kAppServiceDebug)) {
+  if (SKY_LOG_ENABLED(kDebug)) {
     DebugDumpNode(FindNode(g_page->root_id), 0);
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] appservice ops: %d ops, %u nodes -> "
-               "CreatePageRoute (%d page(s))\n",
-               g_page->applied_ops,
-               static_cast<unsigned>(g_page->nodes.size()), g_page->page_count);
+  SKY_LOG(kInfo, kLogRuntime,
+          "appservice ops: %d ops, %u nodes -> CreatePageRoute (%d page(s))",
+          g_page->applied_ops, static_cast<unsigned>(g_page->nodes.size()),
+          g_page->page_count);
 
   // @font-face requests go through the real Dart font pipeline:
   // LoadFontFace -> ResourceLoader.loadResourceAsync -> LoadResourceAsync ->
@@ -461,8 +451,8 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
         continue;
       }
       Dart_ListSetAt(urls, 0, url);
-      std::fprintf(stderr, "[skyline-runtime] appservice font face: %s -> %s\n",
-                   font.family.c_str(), font.url.c_str());
+      SKY_LOG(kInfo, kLogRuntime, "appservice font face: %s -> %s",
+              font.family.c_str(), font.url.c_str());
       const int32_t callback_id = ++font_callback_id;
       g_font_callback_families[static_cast<uint32_t>(callback_id)] =
           font.family;
@@ -515,18 +505,17 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
                 if (navigateBack != nullptr && g_page->page_count > 0) {
                   navigateBack(g_page->pending_back_delta,
                                g_page->pending_back_animated ? 1 : 0, 0);
-                  std::fprintf(
-                      stderr,
-                      "[skyline-runtime] NavigateBack: delta=%d animated=%d\n",
-                      g_page->pending_back_delta,
-                      g_page->pending_back_animated ? 1 : 0);
+                  SKY_LOG(kInfo, kLogRuntime,
+                          "NavigateBack: delta=%d animated=%d",
+                          g_page->pending_back_delta,
+                          g_page->pending_back_animated ? 1 : 0);
                 }
                 g_page->pending_open_type = 0;
               } else if (std::strcmp(name, "notifySwitchTab") == 0) {
                 if (switchTab != nullptr && g_page->page_count > 0) {
                   switchTab(g_page->pending_page_id, 0);
-                  std::fprintf(stderr, "[skyline-runtime] SwitchTab: page=%d\n",
-                               g_page->pending_page_id);
+                  SKY_LOG(kInfo, kLogRuntime, "SwitchTab: page=%d",
+                          g_page->pending_page_id);
                   g_page->pending_open_type = 0;
                 }
               } else if (std::strcmp(name, "dispatchTouch") != 0 &&
@@ -591,9 +580,8 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
             DumpLayoutSnapshot();
           },
           fml::TimeDelta::FromMilliseconds(delay_ms));
-      std::fprintf(stderr,
-                   "[skyline-runtime] appservice update in %d ms (%u ops)\n",
-                   delay_ms, static_cast<unsigned>(ops->GetArray().Size()));
+      SKY_LOG(kDebug, kLogRuntime, "appservice update in %d ms (%u ops)",
+              delay_ms, static_cast<unsigned>(ops->GetArray().Size()));
     }
   }
 }
@@ -612,14 +600,12 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
       builders.create_route == nullptr || builders.text == nullptr ||
       builders.text_span == nullptr || builders.decorated == nullptr ||
       builders.opacity == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] live ops: callbacks not registered\n");
+    SKY_LOG(kWarning, kLogRuntime, "live ops: callbacks not registered");
     return;
   }
   std::string json;
   if (!ReadDescriptor(descriptor, &json)) {
-    std::fprintf(stderr, "[skyline-runtime] live ops: cannot read %s\n",
-                 descriptor);
+    SKY_LOG(kWarning, kLogRuntime, "live ops: cannot read %s", descriptor);
     return;
   }
   // Diagnostic: dump every replayed batch so a live page can be replayed as a
@@ -639,13 +625,13 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
   rapidjson::Document& doc = *g_ops_document;
   doc.Parse(json.c_str());
   if (doc.HasParseError() || !doc.IsObject()) {
-    std::fprintf(stderr, "[skyline-runtime] live ops: parse error at %zu\n",
-                 static_cast<size_t>(doc.GetErrorOffset()));
+    SKY_LOG(kWarning, kLogRuntime, "live ops: parse error at %zu",
+            static_cast<size_t>(doc.GetErrorOffset()));
     return;
   }
   const auto ops_member = doc.FindMember("ops");
   if (ops_member == doc.MemberEnd() || !ops_member->value.IsArray()) {
-    std::fprintf(stderr, "[skyline-runtime] live ops: missing ops array\n");
+    SKY_LOG(kWarning, kLogRuntime, "live ops: missing ops array");
     return;
   }
 
@@ -783,14 +769,14 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
     FlushAppServicePage(holder, structural);
   }
   DumpLayoutSnapshot();
-  std::fprintf(stderr,
-               "[skyline-runtime] live ops: %u ops (first=%d structural=%d "
-               "flush=%d route=%d pages=%d ctx=%llu appbar_ctx=%llu\n",
-               static_cast<unsigned>(ops_member->value.GetArray().Size()),
-               first_batch ? 1 : 0, structural ? 1 : 0, needs_flush ? 1 : 0,
-               created_route ? 1 : 0, g_page->page_count,
-               static_cast<unsigned long long>(g_page->active_context_id),
-               static_cast<unsigned long long>(g_page->appbar_context_id));
+  SKY_LOG(kDebug, kLogRuntime,
+          "live ops: %u ops (first=%d structural=%d flush=%d route=%d pages=%d "
+          "ctx=%llu appbar_ctx=%llu",
+          static_cast<unsigned>(ops_member->value.GetArray().Size()),
+          first_batch ? 1 : 0, structural ? 1 : 0, needs_flush ? 1 : 0,
+          created_route ? 1 : 0, g_page->page_count,
+          static_cast<unsigned long long>(g_page->active_context_id),
+          static_cast<unsigned long long>(g_page->appbar_context_id));
 }
 
 // Synthetic keyboard input: append/delete text on the focused node and push
@@ -802,11 +788,8 @@ void ScrollNodeTo(uint32_t node_id, double top) {
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   if (node == nullptr || node->scroll_view_p == nullptr) {
-    if (config::Flag(config::kAppServiceDebug)) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] scrollNodeTo #%u: %s\n", node_id,
-                   node == nullptr ? "no node" : "no scroll widget");
-    }
+    SKY_LOG(kDebug, kLogRuntime, "scrollNodeTo #%u: %s", node_id,
+            node == nullptr ? "no node" : "no scroll widget");
     return;
   }
   auto* update = reinterpret_cast<ScrollViewUpdateScrollTopFn>(FindCallback(
@@ -818,10 +801,7 @@ void ScrollNodeTo(uint32_t node_id, double top) {
   char buffer[64];
   std::snprintf(buffer, sizeof(buffer), "%g", top);
   node->attrs["scrollTop"] = buffer;
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] scrollNodeTo #%u -> %g\n", node_id,
-                 top);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "scrollNodeTo #%u -> %g", node_id, top);
   update(Dart_HandleFromPersistent(node->scroll_view_p), top);
   // The native scroll callback may not fire for a programmatic jump on every
   // host; republish the viewport rects here as well.
@@ -840,24 +820,19 @@ void ScrollIntoView(uint32_t scroll_node_id, uint32_t target_node_id,
   AppNode* target = FindNode(target_node_id);
   if (scroll == nullptr || target == nullptr ||
       scroll->scroll_view_p == nullptr || target->yoga_node_p == nullptr) {
-    if (config::Flag(config::kAppServiceDebug)) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] scrollIntoView scroll=#%u target=#%u "
-                   "missing widget\n",
-                   scroll_node_id, target_node_id);
-    }
+    SKY_LOG(kDebug, kLogRuntime,
+            "scrollIntoView scroll=#%u target=#%u missing widget",
+            scroll_node_id, target_node_id);
     return;
   }
   auto* update = reinterpret_cast<ScrollViewUpdateScrollIntoViewFn>(FindCallback(
       g_page->holder->ffi_table, kScrollViewUpdateScrollIntoViewHash));
   if (update == nullptr) return;
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] scrollIntoView scroll=#%u target=#%u "
-                 "within=%d animated=%d offset=%g align=%u\n",
-                 scroll_node_id, target_node_id, within_extent ? 1 : 0,
-                 animated ? 1 : 0, offset, static_cast<unsigned>(alignment));
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "scrollIntoView scroll=#%u target=#%u within=%d animated=%d "
+          "offset=%g align=%u",
+          scroll_node_id, target_node_id, within_extent ? 1 : 0,
+          animated ? 1 : 0, offset, static_cast<unsigned>(alignment));
   update(Dart_HandleFromPersistent(scroll->scroll_view_p),
          Dart_HandleFromPersistent(target->yoga_node_p),
          within_extent ? 1 : 0, animated ? 1 : 0,
@@ -868,10 +843,9 @@ void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
                     const std::string& text) {  if (g_page == nullptr || kind == 1 /* key up */) return;
   AppNode* input = FindNode(g_page->focused_input_id);
   if (input == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] key event ignored: no focused input "
-                 "(kind=%d logical=%u)\n",
-                 static_cast<int>(kind), logical);
+    SKY_LOG(kDebug, kLogRuntime,
+            "key event ignored: no focused input (kind=%d logical=%u)",
+            static_cast<int>(kind), logical);
     return;
   }
   ClampInputState(input);
@@ -945,10 +919,9 @@ void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
             focus(Dart_HandleFromPersistent(input->input_widget_p), 0);
           }
         }
-        std::fprintf(stderr,
-                     "[skyline-runtime] key input: id=%u confirm, "
-                     "InputHoldKeyboard hold=0\n",
-                     input->id);
+        SKY_LOG(kDebug, kLogRuntime,
+                "key input: id=%u confirm, InputHoldKeyboard hold=0",
+                input->id);
         g_page->focused_input_id = 0;
         return;
       }
@@ -976,11 +949,10 @@ void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
   ClampInputState(input);
   if (!changed) return;
   NotifyInputState(input);
-  std::fprintf(stderr,
-               "[skyline-runtime] key input: id=%u value=\"%s\" cursor=%d "
-               "selection=[%d,%d]\n",
-               input->id, input->text.c_str(), input->input_cursor,
-               input->input_selection_start, input->input_selection_end);
+  SKY_LOG(kDebug, kLogRuntime,
+          "key input: id=%u value=\"%s\" cursor=%d selection=[%d,%d]",
+          input->id, input->text.c_str(), input->input_cursor,
+          input->input_selection_start, input->input_selection_end);
   FlushAppServicePage(holder, false);
 }
 

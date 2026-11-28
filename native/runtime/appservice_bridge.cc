@@ -14,9 +14,8 @@ void ScheduleLiveOps(std::string payload, int attempt) {
   auto runner = UiTaskRunner();
   if (!runner) return;
   const auto scheduled = std::chrono::steady_clock::now();
-  std::fprintf(stderr,
-               "[skyline-runtime] live ops scheduled (attempt=%d, bytes=%zu)\n",
-               attempt, payload.size());
+  SKY_LOG(kDebug, kLogRuntime, "live ops scheduled (attempt=%d, bytes=%zu)",
+          attempt, payload.size());
   // Run the batch immediately; the Dart app may not have registered its
   // callbacks yet, in which case we retry after 500 ms.  (The old code delayed
   // every batch by 500 ms, which alone made every setData visibly late.)
@@ -25,9 +24,8 @@ void ScheduleLiveOps(std::string payload, int attempt) {
     const auto delay_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                               started - scheduled)
                               .count();
-    std::fprintf(stderr,
-                 "[skyline-runtime] live ops begin delay=%lldms bytes=%zu\n",
-                 static_cast<long long>(delay_ms), payload.size());
+    SKY_LOG(kDebug, kLogRuntime, "live ops begin delay=%lldms bytes=%zu",
+            static_cast<long long>(delay_ms), payload.size());
     DemoPageApiScope scope;
     if (g_isolate == nullptr || g_fallback_holder.ffi_table == nullptr) {
       if (attempt < 20) {
@@ -35,8 +33,7 @@ void ScheduleLiveOps(std::string payload, int attempt) {
             [payload, attempt]() { ScheduleLiveOps(payload, attempt + 1); },
             fml::TimeDelta::FromMilliseconds(500));
       } else {
-        std::fprintf(stderr,
-                     "[skyline-runtime] live page: Dart app not ready\n");
+        SKY_LOG(kWarning, kLogRuntime, "live page: Dart app not ready");
       }
       return;
     }
@@ -44,11 +41,11 @@ void ScheduleLiveOps(std::string payload, int attempt) {
     // creation before the attach and deltas afterwards.
     appservice::ApplyLiveOpsBatch(&g_fallback_holder, payload.c_str());
     const auto finished = std::chrono::steady_clock::now();
-    std::fprintf(stderr, "[skyline-runtime] live ops end processing=%lldms\n",
-                 static_cast<long long>(
-                     std::chrono::duration_cast<std::chrono::milliseconds>(
-                         finished - started)
-                         .count()));
+    SKY_LOG(kDebug, kLogRuntime, "live ops end processing=%lldms",
+            static_cast<long long>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(finished -
+                                                                      started)
+                    .count()));
   });
 }
 
@@ -236,8 +233,8 @@ SKYLINE_EXPORT extern "C" void SkylineShutdownApplication() {
 SKYLINE_EXPORT extern "C" void UpdateAccessibility(void* /*runtime_ptr*/,
                                                    uint8_t enabled) {
   g_accessibility_enabled.store(enabled != 0 ? 1 : 0);
-  std::fprintf(stderr, "[skyline-runtime] UpdateAccessibility: enabled=%u\n",
-               static_cast<unsigned>(enabled != 0));
+  SKY_LOG(kInfo, kLogRuntime, "UpdateAccessibility: enabled=%u",
+          static_cast<unsigned>(enabled != 0));
   appservice::NotifyAccessibilitySink(SKYLINE_ACCESSIBILITY_SEMANTICS,
                                       enabled != 0 ? 1 : 0);
   appservice::NotifyAccessibilitySink(SKYLINE_ACCESSIBILITY_FEATURES,
@@ -249,9 +246,8 @@ SKYLINE_EXPORT extern "C" void UpdateAccessibility(void* /*runtime_ptr*/,
       DemoPageApiScope scope;
       const bool bold = appservice::QueryAccessibilityBoldText();
       g_accessibility_bold_text.store(bold ? 1 : 0);
-      std::fprintf(stderr,
-                   "[skyline-runtime] AccessibilityBoldTextEnabled: %d\n",
-                   bold ? 1 : 0);
+      SKY_LOG(kInfo, kLogRuntime, "AccessibilityBoldTextEnabled: %d",
+              bold ? 1 : 0);
     });
   }
 #endif
@@ -261,9 +257,8 @@ SKYLINE_EXPORT extern "C" void UpdateAccessibility(void* /*runtime_ptr*/,
 SKYLINE_EXPORT extern "C" void OnAccessibilityFeaturesChanged(
     void* /*runtime_ptr*/, uint8_t bold_text) {
   g_accessibility_bold_text.store(bold_text != 0 ? 1 : 0);
-  std::fprintf(stderr,
-               "[skyline-runtime] OnAccessibilityFeaturesChanged: boldText=%u\n",
-               static_cast<unsigned>(bold_text != 0));
+  SKY_LOG(kInfo, kLogRuntime, "OnAccessibilityFeaturesChanged: boldText=%u",
+          static_cast<unsigned>(bold_text != 0));
   char buffer[96];
   std::snprintf(buffer, sizeof(buffer),
                 "{\"type\":\"accessibilityFeatures\",\"boldText\":%s}",
@@ -338,9 +333,8 @@ SKYLINE_EXPORT extern "C" void SceneToImage(Dart_Handle scene_handle,
       Dart_TypedDataReleaseData(data);
     }
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] SceneToImage: %dx%d format=%d bytes=%zu\n",
-               width, height, format, bytes.size());
+  SKY_LOG(kInfo, kLogRuntime, "SceneToImage: %dx%d format=%d bytes=%zu", width,
+          height, format, bytes.size());
   auto callback = reinterpret_cast<NodeSnapshotCallback>(callback_ptr);
   if (callback != nullptr) {
     callback(g_pending_node_snapshot_request.load(), data);
@@ -396,7 +390,7 @@ SKYLINE_EXPORT extern "C" void SkylineNavigatorPop(int32_t page_id) {
     auto* callback = reinterpret_cast<NavigatorPopFn>(FindCallback(
         appservice::g_page->holder->ffi_table, kNavigatorPopHash));
     if (callback != nullptr) {
-      std::fprintf(stderr, "[skyline-runtime] NavigatorPop page=%d\n", page_id);
+      SKY_LOG(kInfo, kLogRuntime, "NavigatorPop page=%d", page_id);
       callback(page_id);
     }
   });
@@ -516,10 +510,9 @@ SKYLINE_EXPORT extern "C" void SkylineApplyLiveOps(const char* json,
 SKYLINE_EXPORT extern "C" void DispatchSkylineKeyEvent(int32_t kind,
                                                        uint32_t logical,
                                                        const char* text) {
-  std::fprintf(stderr,
-               "[skyline-runtime] DispatchSkylineKeyEvent: kind=%d logical=%u "
-               "text=%s\n",
-               static_cast<int>(kind), logical, text != nullptr ? text : "");
+  SKY_LOG(kDebug, kLogRuntime,
+          "DispatchSkylineKeyEvent: kind=%d logical=%u text=%s",
+          static_cast<int>(kind), logical, text != nullptr ? text : "");
   if (appservice::g_page == nullptr || appservice::g_page->holder == nullptr) {
     return;
   }
@@ -556,7 +549,7 @@ void ScheduleCreateDemoPage(RuntimeHolder* holder) {
   auto task_runner = fml::MessageLoop::GetCurrent().GetTaskRunner();
 #pragma GCC diagnostic pop
   if (!task_runner) {
-    std::fprintf(stderr, "[skyline-runtime] demo page: no UI task runner\n");
+    SKY_LOG(kWarning, kLogRuntime, "demo page: no UI task runner");
     return;
   }
   task_runner->PostTask([holder]() { CreateDemoPage(holder); });

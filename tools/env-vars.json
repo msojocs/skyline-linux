@@ -17,11 +17,26 @@
   },
   "variables": [
     {
+      "name": "SKYLINE_LOG_LEVEL",
+      "type": "enum",
+      "values": ["debug", "info", "warning", "error", "off"],
+      "default": "warning",
+      "components": ["native"],
+      "description": "原生日志（SKY_LOG）输出到 stderr 的最低级别。测试 harness 启动 skyline_host 时默认设为 info。"
+    },
+    {
       "name": "SKYLINE_APP_SERVICE_DEBUG",
       "type": "flag",
       "default": "",
       "components": ["native"],
-      "description": "调试开关：输出回放、手势、滚动与语义树等调试日志。"
+      "description": "调试开关：日志级别降到 debug（回放、手势、滚动、布局与语义树等调试日志），等价于 SKYLINE_LOG_LEVEL=debug。"
+    },
+    {
+      "name": "SKYLINE_ADDON_LOG",
+      "type": "path",
+      "default": "/tmp/skyline-addon.log",
+      "components": ["addon"],
+      "description": "skyline.node 把 info 及以上的日志追加到该文件（DevTools 的 appservice 渲染进程没有可用的控制台），超过 1 MiB 时轮转为 `.1`；设为空字符串关闭。"
     },
     {
       "name": "SKYLINE_APP_SERVICE_OPS",
@@ -126,7 +141,7 @@
       "type": "flag",
       "default": "",
       "components": ["shared-memory"],
-      "description": "输出 sharedMemory.node 的调试日志。"
+      "description": "输出 sharedMemory.node 的全部日志（不受 SKYLINE_LOG_LEVEL 限制）。"
     },
     {
       "name": "SKYLINE_SHARED_MEMORY_HANDLE",

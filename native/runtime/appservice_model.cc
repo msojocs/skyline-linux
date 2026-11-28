@@ -333,7 +333,7 @@ void PublishNodeRects() {
   std::lock_guard<std::mutex> lock(g_rect_mutex);
   g_rect_snapshot.clear();
   if (g_page == nullptr) return;
-  const bool debug = config::Flag(config::kAppServiceDebug);
+  const bool debug = SKY_LOG_ENABLED(kDebug);
   for (auto& entry : g_page->nodes) {
     const AppNode* node = entry.second;
     if (node == nullptr || node->released) continue;
@@ -362,11 +362,10 @@ void PublishNodeRects() {
         static_cast<float>(style.z_index),
         style.pointer_events_none ? 1.0f : 0.0f};
     if (debug) {
-      std::fprintf(stderr,
-                   "[ops-debug] rect #%u left=%g top=%g w=%g h=%g\n", node->id,
-                   static_cast<double>(left), static_cast<double>(top),
-                   static_cast<double>(node->measured_w),
-                   static_cast<double>(node->measured_h));
+      SKY_LOG(kDebug, kLogOps, "rect #%u left=%g top=%g w=%g h=%g", node->id,
+              static_cast<double>(left), static_cast<double>(top),
+              static_cast<double>(node->measured_w),
+              static_cast<double>(node->measured_h));
     }
   }
   DumpLayoutSnapshot();

@@ -28,6 +28,7 @@
 #include "embedder/embedder.hh"
 #include "skyline/config.h"
 #include "skyline/frame_protocol.h"
+#include "skyline/log.h"
 #include "skyline/runtime_api.h"
 
 namespace skyline {
@@ -37,6 +38,7 @@ namespace config = skyline::config;
 using embedder::FileExists;
 using embedder::JoinPath;
 
+constexpr char kLog[] = "skyline-engine";
 constexpr int32_t kTouchDevice = 1;
 constexpr int32_t kMouseDevice = 2;
 
@@ -75,19 +77,18 @@ std::string ResolveIcu(const std::string& bundle_path) {
 }
 
 void LogMessage(const char* tag, const char* message, void* /*user_data*/) {
-  std::fprintf(stderr, "[skyline-engine:%s] %s\n", tag != nullptr ? tag : "?",
-               message != nullptr ? message : "");
+  embedder::LogEngineMessage(kLog, tag, message);
 }
 
 void OnSemanticsUpdate(const FlutterSemanticsUpdate2* update, void* /*data*/) {
-  embedder::LogSemanticsUpdate("[skyline-engine]", update);
+  embedder::LogSemanticsUpdate(kLog, update);
 }
 
 class WindowHost {
  public:
   explicit WindowHost(CreateWindowArgs args)
       : args_(std::move(args)),
-        loop_("[skyline-engine] window " + FormatId(args_.window_id)) {}
+        loop_(kLog, "window " + FormatId(args_.window_id) + " ") {}
   ~WindowHost() { Stop(); }
 
   WindowHost(const WindowHost&) = delete;
@@ -299,8 +300,8 @@ class WindowHost {
       return;
     }
     if (use_aot_) {
-      std::fprintf(stderr, "[skyline-engine] window %g: AOT snapshot %s\n",
-                   args_.window_id, aot_library_.c_str());
+      SKY_LOG(kInfo, kLog, "window %g: AOT snapshot %s", args_.window_id,
+              aot_library_.c_str());
     }
     embedder::SetAccessibilityTarget(&loop_);
     SkylineSetAccessibilitySink(&embedder::RouteAccessibility);
@@ -320,12 +321,11 @@ class WindowHost {
       ready_ = true;
     }
     ready_cv_.notify_all();
-    std::fprintf(stderr,
-                 "[skyline-engine] window %g ready (%zux%zu @%g, assets=%s)\n",
-                 args_.window_id,
-                 embedder::PhysicalPixels(args_.width, pixel_ratio_),
-                 embedder::PhysicalPixels(args_.height, pixel_ratio_),
-                 pixel_ratio_, assets_.c_str());
+    SKY_LOG(kInfo, kLog, "window %g ready (%zux%zu @%g, assets=%s)",
+            args_.window_id,
+            embedder::PhysicalPixels(args_.width, pixel_ratio_),
+            embedder::PhysicalPixels(args_.height, pixel_ratio_), pixel_ratio_,
+            assets_.c_str());
 
     while (loop_.RunOnce(engine_->get(), std::chrono::milliseconds(5))) {
     }
@@ -334,13 +334,11 @@ class WindowHost {
     loop_.DrainVsync(engine_->get(), std::chrono::milliseconds(150));
     embedder::ClearAccessibilityTarget(&loop_);
     engine_.reset();
-    std::fprintf(stderr, "[skyline-engine] window %g stopped\n",
-                 args_.window_id);
+    SKY_LOG(kInfo, kLog, "window %g stopped", args_.window_id);
   }
 
   void Fail(const std::string& message) {
-    std::fprintf(stderr, "[skyline-engine] window %g: %s\n", args_.window_id,
-                 message.c_str());
+    SKY_LOG(kError, kLog, "window %g: %s", args_.window_id, message.c_str());
     std::lock_guard<std::mutex> lock(mutex_);
     init_error_ = message;
     ready_ = true;
@@ -375,18 +373,16 @@ class WindowHost {
                                    static_cast<uint32_t>(frame_size));
         wrote = true;
         if (frame_id_ == 1) {
-          std::fprintf(stderr,
-                       "[skyline-engine] window %g first frame %ux%zu "
-                       "(%zu bytes)\n",
-                       args_.window_id, width, height, frame_size);
+          SKY_LOG(kInfo, kLog, "window %g first frame %ux%zu (%zu bytes)",
+                  args_.window_id, width, height, frame_size);
         }
       } else if (!warned_no_buffer_) {
         warned_no_buffer_ = true;
-        std::fprintf(stderr,
-                     "[skyline-engine] window %g: frame buffer missing or too "
-                     "small (%zu < %zu); frames are dropped\n",
-                     args_.window_id, frame_buffer_size_,
-                     SKYLINE_FRAME_HEADER_BYTES + frame_size);
+        SKY_LOG(kWarning, kLog,
+                "window %g: frame buffer missing or too small (%zu < %zu); "
+                "frames are dropped",
+                args_.window_id, frame_buffer_size_,
+                SKYLINE_FRAME_HEADER_BYTES + frame_size);
       }
       callback = callback_;
     }
@@ -450,7 +446,7 @@ class FlutterWindowBackend final : public WindowBackend {
       window = std::move(found->second);
       windows_.erase(found);
     }
-    std::fprintf(stderr, "[skyline-engine] destroy window %g\n", window_id);
+    SKY_LOG(kInfo, kLog, "destroy window %g", window_id);
     window.reset();  // joins the platform thread outside the map lock
   }
 

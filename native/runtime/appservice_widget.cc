@@ -262,11 +262,8 @@ bool HasStickyFlowChildren(const AppNode* node) {
 }
 
 void OnStickyHeaderStickOnTop(intptr_t native_widget_ptr, uint8_t value) {
-  if (!config::Flag(config::kAppServiceDebug)) return;
-  std::fprintf(stderr,
-               "[skyline-runtime] sticky header 0x%lx onTop=%u\n",
-               static_cast<long>(native_widget_ptr),
-               static_cast<unsigned>(value));
+  SKY_LOG(kDebug, kLogRuntime, "sticky header 0x%lx onTop=%u",
+          static_cast<long>(native_widget_ptr), static_cast<unsigned>(value));
 }
 
 // ---------------------------------------------------------------------------
@@ -392,11 +389,10 @@ Dart_Handle WrapSemantics(AppNode* node, Dart_Handle inner) {
   }
   node->semantics_widget = semantics;
   node->semantics_p = Dart_NewPersistentHandle(semantics);
-  std::fprintf(stderr,
-               "[skyline-runtime] semantics #%u label=\"%s\" role=\"%s\" "
-               "hidden=%d disabled=%d\n",
-               node->id, info.label.c_str(), info.role.c_str(),
-               info.hidden ? 1 : 0, info.disabled ? 1 : 0);
+  SKY_LOG(kDebug, kLogRuntime,
+          "semantics #%u label=\"%s\" role=\"%s\" hidden=%d disabled=%d",
+          node->id, info.label.c_str(), info.role.c_str(), info.hidden ? 1 : 0,
+          info.disabled ? 1 : 0);
   return semantics;
 }
 
@@ -433,11 +429,10 @@ void UpdateNodeSemantics(AppNode* node) {
   }
   if (hidden != nullptr) hidden(semantics, info.hidden ? 1 : 0);
   if (disable != nullptr) disable(semantics, info.disabled ? 1 : 0);
-  std::fprintf(stderr,
-               "[skyline-runtime] semantics update #%u label=\"%s\" "
-               "role=\"%s\" hidden=%d disabled=%d\n",
-               node->id, info.label.c_str(), info.role.c_str(),
-               info.hidden ? 1 : 0, info.disabled ? 1 : 0);
+  SKY_LOG(kDebug, kLogRuntime,
+          "semantics update #%u label=\"%s\" role=\"%s\" hidden=%d disabled=%d",
+          node->id, info.label.c_str(), info.role.c_str(), info.hidden ? 1 : 0,
+          info.disabled ? 1 : 0);
 }
 
 // `<snapshot>` wraps its child in the Dart SkylineSnapshot widget so DevTools
@@ -533,14 +528,11 @@ Dart_Handle WrapHero(AppNode* node, Dart_Handle inner) {
   DeletePersistent(&node->hero_p);
   node->hero_widget = hero;
   node->hero_p = Dart_NewPersistentHandle(hero);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] hero #%u tag=%s gesture=%d onFrame=%s "
-                 "tween=%s push=%s pop=%s\n",
-                 node->id, tag.c_str(), gesture ? 1 : 0, on_frame.c_str(),
-                 rect_tween_type.c_str(), shuttle_on_push.c_str(),
-                 shuttle_on_pop.c_str());
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "hero #%u tag=%s gesture=%d onFrame=%s tween=%s push=%s pop=%s",
+          node->id, tag.c_str(), gesture ? 1 : 0, on_frame.c_str(),
+          rect_tween_type.c_str(), shuttle_on_push.c_str(),
+          shuttle_on_pop.c_str());
   return hero;
 }
 
@@ -822,10 +814,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             node->texture_widget = texture;
             node->texture_widget_p = Dart_NewPersistentHandle(texture);
             g_texture_nodes[view_id] = node;
-            std::fprintf(stderr,
-                         "[skyline-runtime] native view #%u: viewId=%d "
-                         "type=%s\n",
-                         node->id, view_id, type.c_str());
+            SKY_LOG(kInfo, kLogRuntime, "native view #%u: viewId=%d type=%s",
+                    node->id, view_id, type.c_str());
           }
         }
       }
@@ -907,12 +897,10 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     }
     node->builder_p = Dart_NewPersistentHandle(builder);
     g_builders_by_address[node->address] = node;
-    std::fprintf(stderr,
-                 "[skyline-runtime] builder #%u: %s count=%d item=%gx%g\n",
-                 node->id, node->builder_kind == 1 ? "grid" : "list",
-                 node->builder_child_count,
-                 static_cast<double>(node->measured_w),
-                 static_cast<double>(node->builder_child_height));
+    SKY_LOG(kDebug, kLogRuntime, "builder #%u: %s count=%d item=%gx%g",
+            node->id, node->builder_kind == 1 ? "grid" : "list",
+            node->builder_child_count, static_cast<double>(node->measured_w),
+            static_cast<double>(node->builder_child_height));
     // Slivers are consumed by the ancestor scroll view; do not wrap in a
     // YGNode (a ParentDataWidget under a sliver is invalid).
     return builder;
@@ -1001,11 +989,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     }
     node->swiper_p = Dart_NewPersistentHandle(swiper);
     InstallSwiperCallbacks(node);
-    std::fprintf(stderr,
-                 "[skyline-runtime] swiper #%u: vertical=%d current=%g "
-                 "items=%zu\n",
-                 node->id, vertical ? 1 : 0,
-                 AttrNumber(node, "current", 0.0), item_widgets.size());
+    SKY_LOG(kDebug, kLogRuntime, "swiper #%u: vertical=%d current=%g items=%zu",
+            node->id, vertical ? 1 : 0, AttrNumber(node, "current", 0.0),
+            item_widgets.size());
     inner = swiper;
   } else if (IsPickerViewColumnNode(node)) {
     auto* newPickerColumn =
@@ -1065,10 +1051,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
     }
     node->picker_column_p = Dart_NewPersistentHandle(column);
     InstallPickerColumnCallbacks(node);
-    std::fprintf(stderr,
-                 "[skyline-runtime] picker column #%u: current=%g items=%zu\n",
-                 node->id, AttrNumber(node, "value", 0.0),
-                 item_widgets.size());
+    SKY_LOG(kDebug, kLogRuntime, "picker column #%u: current=%g items=%zu",
+            node->id, AttrNumber(node, "value", 0.0), item_widgets.size());
     inner = column;
   } else if (IsSelectionNode(node)) {
     auto* newSelection = g_page != nullptr && g_page->holder != nullptr
@@ -1182,15 +1166,13 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       inner = sliver;
 
       const bool inside_scroll = InsideSliverContext(node);
-      if (config::Flag(config::kAppServiceDebug)) {
+      if (SKY_LOG_ENABLED(kDebug)) {
         const float first_h = items.empty() ? -1.0f : items[0]->measured_h;
         const float first_w = items.empty() ? -1.0f : items[0]->measured_w;
-        std::fprintf(stderr,
-                     "[ops-debug] %s #%u: %zu items inside=%d first=%gx%g\n",
-                     is_list_view ? "listview" : "gridview", node->id,
-                     item_widgets.size(), inside_scroll ? 1 : 0,
-                     static_cast<double>(first_w),
-                     static_cast<double>(first_h));
+        SKY_LOG(kDebug, kLogOps, "%s #%u: %zu items inside=%d first=%gx%g",
+                is_list_view ? "listview" : "gridview", node->id,
+                item_widgets.size(), inside_scroll ? 1 : 0,
+                static_cast<double>(first_w), static_cast<double>(first_h));
       }
       if (inside_scroll) {
         // The parent scroll view consumes this widget as a sliver directly.
@@ -1271,15 +1253,14 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             HasStickyFlowChildren(child)) {
           std::vector<Dart_Handle> grandchildren;
           std::vector<AppNode*> flow = OrderedFlowChildren(child);
-          if (config::Flag(config::kAppServiceDebug)) {
-            std::fprintf(stderr,
-                         "[ops-debug] sticky section #%u flow=%zu children=",
-                         child->id, flow.size());
+          if (SKY_LOG_ENABLED(kDebug)) {
+            std::string names;
             for (AppNode* grand : flow) {
-              std::fprintf(stderr, "#%u/%s/%s ", grand->id, grand->tag.c_str(),
-                           grand->name.c_str());
+              names += "#" + std::to_string(grand->id) + "/" + grand->tag +
+                       "/" + grand->name + " ";
             }
-            std::fprintf(stderr, "\n");
+            SKY_LOG(kDebug, kLogOps, "sticky section #%u flow=%zu children=%s",
+                    child->id, flow.size(), names.c_str());
           }
           for (AppNode* grand : flow) {
             // Box children become SliverToBoxAdapters; Flutter stacks them at
@@ -1295,11 +1276,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                             newDirectRenderWidget, newListBuilder,
                             newGridBuilder, true);
             if (item == nullptr || Dart_IsError(item) || Dart_IsNull(item)) {
-              if (config::Flag(config::kAppServiceDebug)) {
-                std::fprintf(stderr,
-                             "[ops-debug] sticky grand #%u/%s build failed\n",
-                             grand->id, grand->name.c_str());
-              }
+              SKY_LOG(kDebug, kLogOps, "sticky grand #%u/%s build failed",
+                      grand->id, grand->name.c_str());
               continue;
             }
             if (grand->style.position == 3 || IsStickyHeaderNode(grand)) {
@@ -1325,11 +1303,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
               child->style.padding[1], child->style.padding[2],
               child->style.padding[3]);
           if (!Dart_IsError(section)) {
-            if (config::Flag(config::kAppServiceDebug)) {
-              std::fprintf(stderr,
-                           "[ops-debug] sticky section #%u ok n=%zu\n",
-                           child->id, grandchildren.size());
-            }
+            SKY_LOG(kDebug, kLogOps, "sticky section #%u ok n=%zu", child->id,
+                    grandchildren.size());
             child_widgets.push_back(section);
             child_nodes.push_back(nullptr);
             has_sticky_child = true;
@@ -1454,23 +1429,19 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
         const bool scroll_y_attr = AttrBool(node, "scrollY", false);
         // List/grid slivers require a CustomScrollView; plain box children are
         // wrapped in SliverToBoxAdapter by SkylineScrollView.
-        if (config::Flag(config::kAppServiceDebug)) {
-          std::fprintf(stderr,
-                       "[ops-debug] scrollview #%u scrollX=%d scrollY=%d "
-                       "scrollEnabled=%d type=%u (slivers=%d sticky=%d) "
-                       "children=%zu top=%g\n",
-                       node->id, scroll_x_attr ? 1 : 0, scroll_y_attr ? 1 : 0,
-                       AttrBool(node, "scrollEnabled", true) ? 1 : 0,
-                       static_cast<unsigned>(scroll_type),
-                       has_sliver_child ? 1 : 0, has_sticky_child ? 1 : 0,
-                       child_widgets.size(),
-                       AttrNumber(node, "scrollTop", 0.0));
-          for (size_t i = 0; i < child_nodes.size() && i < 8; i++) {
-            AppNode* child = child_nodes[i];
-            std::fprintf(stderr, "[ops-debug]   child[%zu]=%s/%s\n", i,
-                         child != nullptr ? child->tag.c_str() : "?",
-                         child != nullptr ? child->name.c_str() : "?");
-          }
+        SKY_LOG(kDebug, kLogOps,
+                "scrollview #%u scrollX=%d scrollY=%d scrollEnabled=%d type=%u "
+                "(slivers=%d sticky=%d) children=%zu top=%g",
+                node->id, scroll_x_attr ? 1 : 0, scroll_y_attr ? 1 : 0,
+                AttrBool(node, "scrollEnabled", true) ? 1 : 0,
+                static_cast<unsigned>(scroll_type), has_sliver_child ? 1 : 0,
+                has_sticky_child ? 1 : 0, child_widgets.size(),
+                AttrNumber(node, "scrollTop", 0.0));
+        for (size_t i = 0; i < child_nodes.size() && i < 8; i++) {
+          AppNode* child = child_nodes[i];
+          SKY_LOG(kDebug, kLogOps, "  child[%zu]=%s/%s", i,
+                  child != nullptr ? child->tag.c_str() : "?",
+                  child != nullptr ? child->name.c_str() : "?");
         }
         const std::string refresher_style =
             AttrText(node, "refresherDefaultStyle", "black");
@@ -1509,11 +1480,8 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
             if (header_widget != nullptr && !Dart_IsError(header_widget) &&
                 !Dart_IsNull(header_widget)) {
               refresher_header = header_widget;
-              if (config::Flag(config::kAppServiceDebug)) {
-                std::fprintf(stderr,
-                             "[ops-debug] scrollview #%u refresher header #%u\n",
-                             node->id, sibling->id);
-              }
+              SKY_LOG(kDebug, kLogOps, "scrollview #%u refresher header #%u",
+                      node->id, sibling->id);
             }
             break;
           }
@@ -1659,10 +1627,9 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
       node->address, buffer, is_root ? 1 : 0, 0, 0, 0, concrete_type,
       Dart_Null(), 0.0, 0.0, 0.0, 0.0, 1, 0,
       style.pointer_events_none ? 1 : 0, Dart_Null(), yoga_connector, inner);
-  if (style.pointer_events_none &&
-      config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] pointer-events:none id=%u addr=0x%lx\n",
-                 node->id, static_cast<long>(node->address));
+  if (style.pointer_events_none) {
+    SKY_LOG(kDebug, kLogRuntime, "pointer-events:none id=%u addr=0x%lx",
+            node->id, static_cast<long>(node->address));
   }
   if (Dart_IsError(yoga_node)) {
     ReportDartError("appservice NewYGNode", yoga_node);
@@ -1697,19 +1664,15 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                                &origin_x, &origin_y);
         origin(yoga_node, origin_x, origin_y, -1.0, -1.0);
       }
-      if (config::Flag(config::kAppServiceDebug)) {
-        std::fprintf(stderr,
-                     "[skyline-runtime] transform #%u matrix=[%g,%g,%g,%g "
-                     "%g,%g,%g,%g %g,%g,%g,%g %g,%g,%g,%g]\n",
-                     node->id, style.transform[0], style.transform[1],
-                     style.transform[2], style.transform[3],
-                     style.transform[4], style.transform[5],
-                     style.transform[6], style.transform[7],
-                     style.transform[8], style.transform[9],
-                     style.transform[10], style.transform[11],
-                     style.transform[12], style.transform[13],
-                     style.transform[14], style.transform[15]);
-      }
+      SKY_LOG(kDebug, kLogRuntime,
+              "transform #%u matrix=[%g,%g,%g,%g %g,%g,%g,%g %g,%g,%g,%g "
+              "%g,%g,%g,%g]",
+              node->id, style.transform[0], style.transform[1],
+              style.transform[2], style.transform[3], style.transform[4],
+              style.transform[5], style.transform[6], style.transform[7],
+              style.transform[8], style.transform[9], style.transform[10],
+              style.transform[11], style.transform[12], style.transform[13],
+              style.transform[14], style.transform[15]);
       node->transform_p = Dart_NewPersistentHandle(matrix);
     }
   }

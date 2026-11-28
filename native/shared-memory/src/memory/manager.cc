@@ -122,8 +122,8 @@ namespace SharedMemory {
         }
         // 计算实际需要分配的大小（包括头部）
         size_t total_size = sizeof(SharedMemoryHeader) + size;
-        logger->debug("Size of header: {}", sizeof(SharedMemoryHeader));
-        logger->debug("Size of header + size: {}", total_size);
+        logger->debug("Size of header: %zu", sizeof(SharedMemoryHeader));
+        logger->debug("Size of header + size: %zu", total_size);
         
 #ifdef _WIN32
         // Windows实现
@@ -136,7 +136,7 @@ namespace SharedMemory {
         if (is_wine) {
             // Wine环境下使用/dev/shm目录
             file_path = SKYLINE_SHM_DIR "/" SKYLINE_SHM_NAME_PREFIX + key + SKYLINE_SHM_NAME_SUFFIX;
-            logger->debug("Using Wine shared memory path: {}", file_path);
+            logger->debug("Using Wine shared memory path: %s", file_path.c_str());
             
             // 确保/dev/shm目录存在
             // 在Wine环境下，这个目录应该已经存在，但为了安全起见，我们检查一下
@@ -235,7 +235,7 @@ namespace SharedMemory {
                 SharedMemoryHeader* header = static_cast<SharedMemoryHeader*>(address_);
                 header->size = size;
                 header->version = SKYLINE_SHM_VERSION;
-                logger->debug("Initialized shared memory header: size={}, version={}", size, header->version);
+                logger->debug("Initialized shared memory header: size=%zu, version=%d", size, header->version);
             }
             else {
                 // 读取头部信息
@@ -248,7 +248,7 @@ namespace SharedMemory {
                     throw std::runtime_error("shared memory header exceeds file size");
                 }
                 size_ = size;
-                logger->debug("Read shared memory header: size={}, version={}", size, header->version);
+                logger->debug("Read shared memory header: size=%zu, version=%d", size, header->version);
                 
                 // 以头部信息为基准，重新映射
                 success = create_mapping(file_handle, size + sizeof(SharedMemoryHeader));
@@ -260,7 +260,7 @@ namespace SharedMemory {
             // 存储文件路径
             file_path_ = file_path;
             
-            logger->debug("Shared memory {}: key={}, size={}, address={}, file={}", 
+            logger->debug("Shared memory %s: key=%s, size=%zu, address=%p, file=%s",
                 create ? "created" : "opened", 
                 key.c_str(), 
                 size, 

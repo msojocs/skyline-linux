@@ -48,17 +48,15 @@ extern "C" double ScrollNoopContentSize(intptr_t, int32_t, int32_t, double,
 void DispatchScrollEvent(intptr_t ptr, int32_t phase, double top, double left,
                          double width, double height, double dx, double dy,
                          uint8_t drag, double velocity) {
-  if (config::Flag(config::kAppServiceDebug)) {
+  if (SKY_LOG_ENABLED(kDebug)) {
     if (phase == kScrollPhaseScroll) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] scroll: top=%g left=%g delta=(%g,%g) "
-                   "drag=%u velocity=%g\n",
-                   top, left, dx, dy, static_cast<unsigned>(drag), velocity);
+      SKY_LOG(kDebug, kLogRuntime,
+              "scroll: top=%g left=%g delta=(%g,%g) drag=%u velocity=%g", top,
+              left, dx, dy, static_cast<unsigned>(drag), velocity);
     } else {
-      std::fprintf(stderr,
-                   "[skyline-runtime] scroll start/end: top=%g left=%g "
-                   "size=%gx%g drag=%u\n",
-                   top, left, width, height, static_cast<unsigned>(drag));
+      SKY_LOG(kDebug, kLogRuntime,
+              "scroll start/end: top=%g left=%g size=%gx%g drag=%u", top, left,
+              width, height, static_cast<unsigned>(drag));
     }
   }
   uint32_t node_id = 0;
@@ -140,12 +138,9 @@ void InstallScrollCallbacks(AppNode* node) {
         handle, reinterpret_cast<void*>(&ScrollEndEvent));
     end = true;
   }
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] scroll callbacks installed #%u "
-                 "(start=%d scroll=%d end=%d)\n",
-                 node->id, start ? 1 : 0, scroll ? 1 : 0, end ? 1 : 0);
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "scroll callbacks installed #%u (start=%d scroll=%d end=%d)",
+          node->id, start ? 1 : 0, scroll ? 1 : 0, end ? 1 : 0);
 }
 
 // -- swiper / picker-view / input native widget channel ----------------------
@@ -164,11 +159,8 @@ uint32_t WidgetNodeId(const std::unordered_map<intptr_t, uint32_t>& map,
 
 extern "C" void SwiperOnChange(intptr_t ptr, uint32_t page, uint8_t reason) {
   const uint32_t id = WidgetNodeId(g_swiper_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] swiper change: id=%u page=%u reason=%u\n",
-                 id, page, static_cast<unsigned>(reason));
-  }
+  SKY_LOG(kDebug, kLogRuntime, "swiper change: id=%u page=%u reason=%u", id,
+          page, static_cast<unsigned>(reason));
   if (id != 0) {
     AppNode* node = FindNode(id);
     if (node != nullptr && !node->released) {
@@ -187,12 +179,9 @@ extern "C" void SwiperOnScroll(intptr_t ptr, double translate_pixels,
   // image response cannot replace the Swiper while the user is swiping it.
   SetSwiperGestureActive(state != 2);
   const uint32_t id = WidgetNodeId(g_swiper_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] swiper scroll: id=%u offset=%g state=%u "
-                 "current=%u\n",
-                 id, translate_pixels, static_cast<unsigned>(state), current);
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "swiper scroll: id=%u offset=%g state=%u current=%u", id,
+          translate_pixels, static_cast<unsigned>(state), current);
   EmitWidgetEvent(id, kWidgetSwiperScroll, translate_pixels,
                   static_cast<double>(state),
                   static_cast<uint8_t>(current > 255 ? 255 : current));
@@ -201,11 +190,8 @@ extern "C" void SwiperOnScroll(intptr_t ptr, double translate_pixels,
 extern "C" void PickerColumnOnChange(intptr_t ptr, int32_t index,
                                      int32_t reason) {
   const uint32_t id = WidgetNodeId(g_picker_column_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] picker change: id=%u index=%d reason=%d\n",
-                 id, index, reason);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "picker change: id=%u index=%d reason=%d", id,
+          index, reason);
   if (id != 0) {
     AppNode* node = FindNode(id);
     if (node != nullptr && !node->released) {
@@ -220,17 +206,13 @@ extern "C" void PickerColumnOnChange(intptr_t ptr, int32_t index,
 
 extern "C" void PickerColumnOnStart(intptr_t ptr) {
   const uint32_t id = WidgetNodeId(g_picker_column_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] picker start: id=%u\n", id);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "picker start: id=%u", id);
   EmitWidgetEvent(id, kWidgetPickerStart, 0.0, 0.0, 0);
 }
 
 extern "C" void PickerColumnOnEnd(intptr_t ptr) {
   const uint32_t id = WidgetNodeId(g_picker_column_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] picker end: id=%u\n", id);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "picker end: id=%u", id);
   EmitWidgetEvent(id, kWidgetPickerEnd, 0.0, 0.0, 0);
 }
 
@@ -254,12 +236,9 @@ void InstallSwiperCallbacks(AppNode* node) {
         handle, reinterpret_cast<void*>(&SwiperOnScroll));
     scroll = true;
   }
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] swiper callbacks installed #%u "
-                 "(onChange=%d onScroll=%d)\n",
-                 node->id, change ? 1 : 0, scroll ? 1 : 0);
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "swiper callbacks installed #%u (onChange=%d onScroll=%d)", node->id,
+          change ? 1 : 0, scroll ? 1 : 0);
 }
 
 void InstallPickerColumnCallbacks(AppNode* node) {
@@ -290,12 +269,9 @@ void InstallPickerColumnCallbacks(AppNode* node) {
         handle, reinterpret_cast<void*>(&PickerColumnOnEnd));
     end = true;
   }
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] picker callbacks installed #%u "
-                 "(onChange=%d onStart=%d onEnd=%d)\n",
-                 node->id, change ? 1 : 0, start ? 1 : 0, end ? 1 : 0);
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "picker callbacks installed #%u (onChange=%d onStart=%d onEnd=%d)",
+          node->id, change ? 1 : 0, start ? 1 : 0, end ? 1 : 0);
 }
 
 // UI-thread programmatic updates.  These run on the engine UI task runner
@@ -323,11 +299,8 @@ void AnimateSwiperTo(uint32_t node_id, uint32_t page, bool animated) {
   char buffer[32];
   std::snprintf(buffer, sizeof(buffer), "%u", page);
   node->attrs["current"] = buffer;
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] swiperTo #%u page=%u animated=%d\n", node_id,
-                 page, use_animation ? 1 : 0);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "swiperTo #%u page=%u animated=%d", node_id,
+          page, use_animation ? 1 : 0);
 }
 
 void SetPickerColumnCurrent(uint32_t node_id, uint32_t current) {
@@ -342,10 +315,7 @@ void SetPickerColumnCurrent(uint32_t node_id, uint32_t current) {
   char buffer[32];
   std::snprintf(buffer, sizeof(buffer), "%u", current);
   node->attrs["value"] = buffer;
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] pickerTo #%u current=%u\n",
-                 node_id, current);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "pickerTo #%u current=%u", node_id, current);
 }
 
 void SetInputFocus(uint32_t node_id, bool focus) {
@@ -358,11 +328,8 @@ void SetInputFocus(uint32_t node_id, bool focus) {
     g_page->focused_input_id = 0;
   }
   if (node->input_widget_p == nullptr) {
-    if (config::Flag(config::kAppServiceDebug)) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] input %s #%u: no input widget\n",
-                   focus ? "focus" : "blur", node_id);
-    }
+    SKY_LOG(kDebug, kLogRuntime, "input %s #%u: no input widget",
+            focus ? "focus" : "blur", node_id);
     return;
   }
   void* callback = FindCallback(
@@ -375,8 +342,8 @@ void SetInputFocus(uint32_t node_id, bool focus) {
   } else {
     reinterpret_cast<InputBlurManuallyFn>(callback)(handle);
   }
-  std::fprintf(stderr, "[skyline-runtime] Input%sManually: id=%u\n",
-               focus ? "Focus" : "Blur", node_id);
+  SKY_LOG(kDebug, kLogRuntime, "Input%sManually: id=%u",
+          focus ? "Focus" : "Blur", node_id);
   EmitWidgetEvent(node_id, focus ? kWidgetInputFocus : kWidgetInputBlur, 0.0,
                   0.0, 0);
 }
@@ -385,49 +352,33 @@ void SetInputFocus(uint32_t node_id, bool focus) {
 
 extern "C" void RefresherPulling(intptr_t ptr, double dy) {
   const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] refresher pulling: id=%u dy=%g\n",
-                 id, dy);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "refresher pulling: id=%u dy=%g", id, dy);
   EmitWidgetEvent(id, kWidgetRefresherPulling, dy, 0.0, 0);
 }
 extern "C" void RefresherWillRefresh(intptr_t ptr, double dy) {
   const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] refresher willRefresh: id=%u dy=%g\n",
-                 id, dy);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "refresher willRefresh: id=%u dy=%g", id, dy);
   EmitWidgetEvent(id, kWidgetRefresherWillRefresh, dy, 0.0, 0);
 }
 extern "C" void RefresherRefresh(intptr_t ptr, double dy) {
   const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
-  std::fprintf(stderr, "[skyline-runtime] refresher refresh: id=%u dy=%g\n", id,
-               dy);
+  SKY_LOG(kDebug, kLogRuntime, "refresher refresh: id=%u dy=%g", id, dy);
   EmitWidgetEvent(id, kWidgetRefresherRefresh, dy, 0.0, 0);
 }
 extern "C" void RefresherRestore(intptr_t ptr, double dy) {
   const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] refresher restore: id=%u dy=%g\n",
-                 id, dy);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "refresher restore: id=%u dy=%g", id, dy);
   EmitWidgetEvent(id, kWidgetRefresherRestore, dy, 0.0, 0);
 }
 extern "C" void RefresherAbort(intptr_t ptr, double dy) {
   const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] refresher abort: id=%u dy=%g\n", id,
-                 dy);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "refresher abort: id=%u dy=%g", id, dy);
   EmitWidgetEvent(id, kWidgetRefresherAbort, dy, 0.0, 0);
 }
 extern "C" void RefresherStatusChange(intptr_t ptr, int32_t mode, double yy) {
   const uint32_t id = WidgetNodeId(g_scroll_view_ids, ptr);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] refresher status: id=%u mode=%d dy=%g\n",
-                 id, mode, yy);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "refresher status: id=%u mode=%d dy=%g", id,
+          mode, yy);
   EmitWidgetEvent(id, kWidgetRefresherStatus, static_cast<double>(mode), yy, 0);
 }
 
@@ -446,9 +397,8 @@ void SetRefresherTriggered(uint32_t node_id, bool open, bool two_level) {
   char buffer[16];
   std::snprintf(buffer, sizeof(buffer), "%d", open ? 1 : 0);
   node->attrs["refresherTriggered"] = buffer;
-  std::fprintf(stderr,
-               "[skyline-runtime] refresher trigger: id=%u open=%d twoLevel=%d\n",
-               node_id, open ? 1 : 0, two_level ? 1 : 0);
+  SKY_LOG(kInfo, kLogRuntime, "refresher trigger: id=%u open=%d twoLevel=%d",
+          node_id, open ? 1 : 0, two_level ? 1 : 0);
 }
 
 // -- IntersectionObserver ----------------------------------------------------
@@ -460,9 +410,7 @@ void RegisterIntersectionObserver(uint32_t node_id, uint32_t unique_id,
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   if (node == nullptr || node->yoga_node_p == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] intersection add: no yoga node #%u\n",
-                 node_id);
+    SKY_LOG(kInfo, kLogRuntime, "intersection add: no yoga node #%u", node_id);
     return;
   }
   void* callback = FindCallback(g_page->holder->ffi_table,
@@ -482,10 +430,9 @@ void RegisterIntersectionObserver(uint32_t node_id, uint32_t unique_id,
       yoga, unique_id, root, top, right, bottom, left, list);
   g_intersection_unique_nodes[unique_id] = node_id;
   g_intersection_node_observers[node_id].insert(unique_id);
-  std::fprintf(stderr,
-               "[skyline-runtime] intersection add: node=#%u id=%u root=#%u "
-               "thresholds=%zu\n",
-               node_id, unique_id, root_node_id, thresholds.size());
+  SKY_LOG(kInfo, kLogRuntime,
+          "intersection add: node=#%u id=%u root=#%u thresholds=%zu", node_id,
+          unique_id, root_node_id, thresholds.size());
 }
 
 void UnregisterIntersectionObserver(uint32_t node_id, uint32_t unique_id) {
@@ -503,9 +450,8 @@ void UnregisterIntersectionObserver(uint32_t node_id, uint32_t unique_id) {
     found->second.erase(unique_id);
     if (found->second.empty()) g_intersection_node_observers.erase(found);
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] intersection remove: node=#%u id=%u\n",
-               node_id, unique_id);
+  SKY_LOG(kInfo, kLogRuntime, "intersection remove: node=#%u id=%u", node_id,
+          unique_id);
 }
 
 void EmitIntersection(uint32_t node_id, uint32_t unique_id, double b_top,
@@ -526,12 +472,9 @@ void EmitIntersection(uint32_t node_id, uint32_t unique_id, double b_top,
       node_id, unique_id, b_top, b_right, b_bottom, b_left, i_top, i_right,
       i_bottom, i_left, root_top, root_right, root_bottom, root_left, ratio,
       intersecting ? "true" : "false");
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] intersection trigger: node=#%u id=%u "
-                 "ratio=%g intersecting=%d\n",
-                 node_id, unique_id, ratio, intersecting ? 1 : 0);
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "intersection trigger: node=#%u id=%u ratio=%g intersecting=%d",
+          node_id, unique_id, ratio, intersecting ? 1 : 0);
   EmitJsonEvent(buffer);
 }
 
@@ -578,10 +521,9 @@ extern "C" void SelectionOnChangeCallback(intptr_t ptr, double left, double top,
 #else
   (void)selected;
 #endif
-  std::fprintf(stderr,
-               "[skyline-runtime] selection change: id=%u rect=(%g,%g,%g,%g) "
-               "text=\"%s\"\n",
-               id, left, top, right, bottom, text.c_str());
+  SKY_LOG(kDebug, kLogRuntime,
+          "selection change: id=%u rect=(%g,%g,%g,%g) text=\"%s\"", id, left,
+          top, right, bottom, text.c_str());
   std::string json =
       "{\"type\":\"selection\",\"nodeId\":" + std::to_string(id) +
       ",\"left\":" + std::to_string(left) + ",\"top\":" + std::to_string(top) +
@@ -604,8 +546,7 @@ void InstallSelectionCallbacks(AppNode* node) {
         Dart_HandleFromPersistent(node->selection_p), node->address,
         reinterpret_cast<void*>(&SelectionOnChangeCallback));
   }
-  std::fprintf(stderr, "[skyline-runtime] selection callbacks installed #%u\n",
-               node->id);
+  SKY_LOG(kInfo, kLogRuntime, "selection callbacks installed #%u", node->id);
 }
 
 void SetSelectionRange(uint32_t selection_id, uint32_t start_id,
@@ -617,10 +558,10 @@ void SetSelectionRange(uint32_t selection_id, uint32_t start_id,
   AppNode* end = FindNode(end_id != 0 ? end_id : start_id);
   if (selection == nullptr || selection->selection_p == nullptr ||
       start == nullptr || end == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] selection setRange: missing node "
-                 "(selection=#%u start=#%u end=#%u)\n",
-                 selection_id, start_id, end_id);
+    SKY_LOG(
+        kWarning, kLogRuntime,
+        "selection setRange: missing node (selection=#%u start=#%u end=#%u)",
+        selection_id, start_id, end_id);
     return;
   }
   void* callback =
@@ -629,12 +570,10 @@ void SetSelectionRange(uint32_t selection_id, uint32_t start_id,
   reinterpret_cast<SelectionSetRangeFn>(callback)(
       Dart_HandleFromPersistent(selection->selection_p), start->address,
       start_offset, end->address, end_offset);
-  std::fprintf(stderr,
-               "[skyline-runtime] selection setRange: selection=#%u start=#%u:%d "
-               "end=#%u:%d\n",
-               selection_id, start_id, start_offset, end_id != 0 ? end_id
-                                                                 : start_id,
-               end_offset);
+  SKY_LOG(kDebug, kLogRuntime,
+          "selection setRange: selection=#%u start=#%u:%d end=#%u:%d",
+          selection_id, start_id, start_offset, end_id != 0 ? end_id : start_id,
+          end_offset);
 }
 
 // -- navigate-back interception ---------------------------------------------
@@ -649,19 +588,16 @@ void SetPageNavigateBackInterception(int32_t page_id, bool enabled) {
           page_id, enabled ? 1 : 0);
     }
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] navigate back interception: page=%d "
-               "enabled=%d\n",
-               page_id, enabled ? 1 : 0);
+  SKY_LOG(kInfo, kLogRuntime, "navigate back interception: page=%d enabled=%d",
+          page_id, enabled ? 1 : 0);
 }
 
 void TriggerNavigateBackIntercept(int32_t page_id) {
   bool enabled = false;
   const auto found = g_navigate_back_interception.find(page_id);
   if (found != g_navigate_back_interception.end()) enabled = found->second;
-  std::fprintf(stderr,
-               "[skyline-runtime] OnNavigateBackIntercept: page=%d enabled=%d\n",
-               page_id, enabled ? 1 : 0);
+  SKY_LOG(kInfo, kLogRuntime, "OnNavigateBackIntercept: page=%d enabled=%d",
+          page_id, enabled ? 1 : 0);
   char buffer[256];
   std::snprintf(buffer, sizeof(buffer),
                 "{\"type\":\"navigateBack\",\"pageId\":%d,\"enabled\":%s}",

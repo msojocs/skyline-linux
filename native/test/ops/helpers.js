@@ -41,7 +41,9 @@ function checkOpsBuild(prefix) {
 }
 
 // Replays `opsPath` at 320x240 (`options.dpr` scales the frame) and returns
-// `{ result, logs, details, pixels }`.
+// `{ result, logs, details, pixels }`.  `options.debugLogs` turns on the
+// runtime's debug-level traces (per-batch, per-event and per-item messages)
+// for tests that assert on them.
 function runOps(opsPath, options = {}) {
   return runHost({
     key: 'skyline_ops',
@@ -52,7 +54,7 @@ function runOps(opsPath, options = {}) {
     timeoutMs: options.timeoutMs || 20000,
     frames: options.frames,
     args: options.args,
-    env: options.env,
+    env: options.debugLogs ? { SKYLINE_LOG_LEVEL: 'debug', ...options.env } : options.env,
   });
 }
 

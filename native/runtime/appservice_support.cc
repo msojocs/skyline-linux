@@ -3,10 +3,11 @@
 #include "internal/skyline_runtime_module.hh"
 #include "internal/skyline_runtime_support.hh"
 
+// `what` names the Dart call (and the replay step that made it).
 void ReportDartError(const char* what, Dart_Handle handle) {
   const char* error = Dart_IsError(handle) ? Dart_GetError(handle) : "<not an error>";
-  std::fprintf(stderr, "[skyline-runtime] demo page: %s failed: %s\n", what,
-               error != nullptr ? error : "<no message>");
+  SKY_LOG(kWarning, kLogRuntime, "%s failed: %s", what,
+          error != nullptr ? error : "<no message>");
 #ifdef SKYLINE_EMBEDDED
   if (!Dart_IsError(handle)) return;
   Dart_Handle exception = Dart_ErrorGetException(handle);
@@ -16,8 +17,7 @@ void ReportDartError(const char* what, Dart_Handle handle) {
       const char* message = nullptr;
       if (!Dart_IsError(Dart_StringToCString(text, &message)) &&
           message != nullptr) {
-        std::fprintf(stderr, "[skyline-runtime] demo page: exception: %s\n",
-                     message);
+        SKY_LOG(kWarning, kLogRuntime, "%s exception: %s", what, message);
       }
     }
   }
@@ -28,8 +28,7 @@ void ReportDartError(const char* what, Dart_Handle handle) {
       const char* message = nullptr;
       if (!Dart_IsError(Dart_StringToCString(text, &message)) &&
           message != nullptr) {
-        std::fprintf(stderr, "[skyline-runtime] demo page: stack:\n%s\n",
-                     message);
+        SKY_LOG(kWarning, kLogRuntime, "%s stack:\n%s", what, message);
       }
     }
   }

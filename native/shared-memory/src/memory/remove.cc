@@ -28,7 +28,7 @@ namespace SharedMemory {
         std::string key = info[0].As<Napi::String>().Utf8Value();
         
         try {
-            logger->info("Remove memory call. {}", key);
+            logger->info("Remove memory call. %s", key.c_str());
             
             if (!validate_key(key)) {
                 throw Napi::TypeError::New(env, "invalid shared memory key");

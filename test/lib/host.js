@@ -182,6 +182,9 @@ function hostInvocation(options) {
   const key = `${options.key || 'skyline_test'}_${process.pid}_${Date.now().toString(36)}_` +
     Math.random().toString(36).slice(2, 8);
   const env = {
+    // Tests assert on info-level runtime and host messages; set
+    // SKYLINE_LOG_LEVEL=debug (or SKYLINE_APP_SERVICE_DEBUG=1) for traces.
+    SKYLINE_LOG_LEVEL: 'info',
     ...process.env,
     ...(options.env || {}),
     LD_LIBRARY_PATH: [options.libraryPath || paths.engineDir(mode), process.env.LD_LIBRARY_PATH]

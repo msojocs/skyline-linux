@@ -14,30 +14,29 @@ void DebugDumpNode(const AppNode* node, int depth) {
       if (c == '\n' || c == '\r') c = ' ';
     }
   }
-  std::fprintf(stderr,
-               "[ops-debug] %*s#%u tag=%s name=%s classes=%zu style(w=%g h=%g "
-               "pctw=%g pcth=%g pad=%g,%g,%g,%g margin=%g,%g,%g,%g row=%d "
-               "justify=%d align=%d bg=%08x border=%g font=%g) measured=%gx%g "
-               "address=0x%lx text=\"%s\"\n",
-               depth * 2, "", node->id, node->tag.c_str(), node->name.c_str(),
-               node->classes.size(), static_cast<double>(node->style.width),
-               static_cast<double>(node->style.height),
-               static_cast<double>(node->style.width_percent),
-               static_cast<double>(node->style.height_percent),
-               static_cast<double>(node->style.padding[0]),
-               static_cast<double>(node->style.padding[1]),
-               static_cast<double>(node->style.padding[2]),
-               static_cast<double>(node->style.padding[3]),
-               static_cast<double>(node->style.margin[0]),
-               static_cast<double>(node->style.margin[1]),
-               static_cast<double>(node->style.margin[2]),
-               static_cast<double>(node->style.margin[3]), node->style.row,
-               node->style.justify, node->style.align,
-               node->style.has_background ? node->style.background : 0u,
-               static_cast<double>(node->style.border_width),
-               node->style.font_size, static_cast<double>(node->measured_w),
-               static_cast<double>(node->measured_h),
-               static_cast<long>(node->address), dump_text.c_str());
+  SKY_LOG(kDebug, kLogOps,
+          "%*s#%u tag=%s name=%s classes=%zu style(w=%g h=%g pctw=%g pcth=%g "
+          "pad=%g,%g,%g,%g margin=%g,%g,%g,%g row=%d justify=%d align=%d "
+          "bg=%08x border=%g font=%g) measured=%gx%g address=0x%lx text=\"%s\"",
+          depth * 2, "", node->id, node->tag.c_str(), node->name.c_str(),
+          node->classes.size(), static_cast<double>(node->style.width),
+          static_cast<double>(node->style.height),
+          static_cast<double>(node->style.width_percent),
+          static_cast<double>(node->style.height_percent),
+          static_cast<double>(node->style.padding[0]),
+          static_cast<double>(node->style.padding[1]),
+          static_cast<double>(node->style.padding[2]),
+          static_cast<double>(node->style.padding[3]),
+          static_cast<double>(node->style.margin[0]),
+          static_cast<double>(node->style.margin[1]),
+          static_cast<double>(node->style.margin[2]),
+          static_cast<double>(node->style.margin[3]), node->style.row,
+          node->style.justify, node->style.align,
+          node->style.has_background ? node->style.background : 0u,
+          static_cast<double>(node->style.border_width), node->style.font_size,
+          static_cast<double>(node->measured_w),
+          static_cast<double>(node->measured_h),
+          static_cast<long>(node->address), dump_text.c_str());
   for (const AppNode* child : node->children) {
     if (child->released) continue;
     DebugDumpNode(child, depth + 1);
@@ -628,9 +627,8 @@ bool ApplyTargetedUpdates(RuntimeHolder* holder) {
   for (Dart_Handle widget : yoga_nodes) mark_needs_layout(widget);
   Dart_Handle root_handle = Dart_HandleFromPersistent(g_page->root_node);
   mark_needs_layout(root_handle);
-  std::fprintf(stderr,
-               "[skyline-runtime] appservice targeted update: %zu nodes\n",
-               yoga_nodes.size());
+  SKY_LOG(kDebug, kLogRuntime, "appservice targeted update: %zu nodes",
+          yoga_nodes.size());
   return true;
 }
 
@@ -705,7 +703,7 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
   if (newYGNode == nullptr || newYGConnector == nullptr || newText == nullptr ||
       newTextSpan == nullptr || newDecoratedBox == nullptr ||
       newOpacity == nullptr || updateChildren == nullptr) {
-    std::fprintf(stderr, "[skyline-runtime] appservice flush: callbacks missing\n");
+    SKY_LOG(kWarning, kLogRuntime, "appservice flush: callbacks missing");
     return;
   }
 
@@ -771,11 +769,9 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
                     newDecoratedBox, newOpacity, newScrollView, newListView,
                     newGridView, newDirectRenderWidget, newListBuilder,
                     newGridBuilder, false);
-    if (config::Flag(config::kAppServiceDebug)) {
-      std::fprintf(stderr, "[ops-debug] rebuild fixed #%u/%s widget=%s\n",
-                   fixed->id, fixed->name.c_str(),
-                   widget != nullptr && !Dart_IsError(widget) ? "ok" : "failed");
-    }
+    SKY_LOG(kDebug, kLogOps, "rebuild fixed #%u/%s widget=%s", fixed->id,
+            fixed->name.c_str(),
+            widget != nullptr && !Dart_IsError(widget) ? "ok" : "failed");
     if (widget != nullptr && !Dart_IsError(widget)) widgets.push_back(widget);
   }
   g_collect_fixed_nodes = false;
@@ -793,28 +789,26 @@ void RebuildAppServicePage(RuntimeHolder* holder) {
   }
   PublishNodeRects();
   SnapshotNode(root);
-  if (config::Flag(config::kAppServiceDebug)) {
+  if (SKY_LOG_ENABLED(kDebug)) {
     DebugDumpNode(root, 0);
     for (const NodeMetric& metric : metrics) {
-      std::fprintf(stderr, "[ops-debug] rebuild metric #%u -> top=%g left=%g "
-                           "w=%g h=%g\n",
-                   metric.node->id, static_cast<double>(metric.y),
-                   static_cast<double>(metric.x),
-                   static_cast<double>(metric.w),
-                   static_cast<double>(metric.h));
+      SKY_LOG(kDebug, kLogOps, "rebuild metric #%u -> top=%g left=%g w=%g h=%g",
+              metric.node->id, static_cast<double>(metric.y),
+              static_cast<double>(metric.x), static_cast<double>(metric.w),
+              static_cast<double>(metric.h));
     }
   }
-  std::fprintf(stderr, "[skyline-runtime] appservice flush: %zu children\n",
-               widgets.size());
+  SKY_LOG(kDebug, kLogRuntime, "appservice flush: %zu children",
+          widgets.size());
   if (widgets.empty()) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] flush root=%u children=%zu connector=%p\n",
-                 g_page->root_id, root->children.size(),
-                 static_cast<void*>(g_page->root_connector));
+    SKY_LOG(kDebug, kLogRuntime, "flush root=%u children=%zu connector=%p",
+            g_page->root_id, root->children.size(),
+            static_cast<void*>(g_page->root_connector));
     for (AppNode* child : root->children) {
-      std::fprintf(stderr, "  child #%u tag=%s released=%d display_none=%d\n",
-                   child->id, child->tag.c_str(), child->released ? 1 : 0,
-                   child->style.display_none ? 1 : 0);
+      SKY_LOG(kDebug, kLogRuntime,
+              "  child #%u tag=%s released=%d display_none=%d", child->id,
+              child->tag.c_str(), child->released ? 1 : 0,
+              child->style.display_none ? 1 : 0);
     }
   }
 }
@@ -1055,11 +1049,9 @@ void StartTransitions(uint32_t root_id) {
     ResetTransitionProperties(&node->animation_override, before, mask);
     node->animation_override_active = true;
     g_active_transitions.push_back(transition);
-    std::fprintf(stderr,
-                 "[skyline-runtime] transition #%u start: mask=0x%x "
-                 "duration=%gms delay=%gms\n",
-                 node->id, mask, after.transition_duration,
-                 after.transition_delay);
+    SKY_LOG(kDebug, kLogRuntime,
+            "transition #%u start: mask=0x%x duration=%gms delay=%gms",
+            node->id, mask, after.transition_duration, after.transition_delay);
   }
   if (!g_active_transitions.empty() && g_page->holder != nullptr) {
     ScheduleTransitionTick(g_page->holder);
@@ -1102,16 +1094,13 @@ void AdvanceTransitions(RuntimeHolder* holder) {
         InterpolateTransition(transition, eased);
     transition.node->animation_override_active = true;
     applied = true;
-    if (config::Flag(config::kAppServiceDebug)) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] transition #%u t=%.3f opacity=%.3f "
-                   "background=%08x\n",
-                   transition.node->id, raw,
-                   transition.node->animation_override.opacity,
-                   transition.node->animation_override.has_background
-                       ? transition.node->animation_override.background
-                       : 0u);
-    }
+    SKY_LOG(kDebug, kLogRuntime,
+            "transition #%u t=%.3f opacity=%.3f background=%08x",
+            transition.node->id, raw,
+            transition.node->animation_override.opacity,
+            transition.node->animation_override.has_background
+                ? transition.node->animation_override.background
+                : 0u);
     if (raw >= 1.0) {
       finished.push_back(transition.node);
     } else {
@@ -1132,7 +1121,7 @@ void AdvanceTransitions(RuntimeHolder* holder) {
         g_active_transitions.end());
     for (AppNode* node : finished) {
       if (node != nullptr && !node->released) {
-        std::fprintf(stderr, "[skyline-runtime] transition #%u done\n", node->id);
+        SKY_LOG(kDebug, kLogRuntime, "transition #%u done", node->id);
       }
     }
     FlushAppServicePage(holder, false);
@@ -1159,14 +1148,12 @@ void SchedulePendingAnimatedStyles(RuntimeHolder* holder) {
           node->animation_override = style;
           node->animation_override_active = true;
           FlushAppServicePage(holder, false);
-          std::fprintf(stderr,
-                       "[skyline-runtime] animated style #%u at %dms: %s\n",
-                       entry.node_id, entry.at_ms, entry.declarations.c_str());
+          SKY_LOG(kDebug, kLogRuntime, "animated style #%u at %dms: %s",
+                  entry.node_id, entry.at_ms, entry.declarations.c_str());
         },
         fml::TimeDelta::FromMilliseconds(std::max(0, entry.at_ms)));
-    std::fprintf(stderr,
-                 "[skyline-runtime] animated style scheduled: #%u in %dms\n",
-                 entry.node_id, entry.at_ms);
+    SKY_LOG(kDebug, kLogRuntime, "animated style scheduled: #%u in %dms",
+            entry.node_id, entry.at_ms);
   }
   g_page->scheduled_animated_styles = g_page->animated_styles.size();
 }

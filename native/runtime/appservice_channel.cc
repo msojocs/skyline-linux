@@ -76,10 +76,9 @@ SKYLINE_EXPORT extern "C" Dart_Handle LoadResourceSync(void* /*runtime_ptr*/,
   std::vector<uint8_t> bytes;
   bool from_cache = false;
   const bool ok = LoadResourceBytes(resolved, &bytes, &from_cache);
-  std::fprintf(stderr,
-               "[skyline-runtime] LoadResourceSync: %s -> %s (%s, %zu bytes%s)\n",
-               requested.c_str(), resolved.c_str(), ok ? "ok" : "missing",
-               bytes.size(), from_cache ? ", cache" : "");
+  SKY_LOG(kDebug, kLogRuntime, "LoadResourceSync: %s -> %s (%s, %zu bytes%s)",
+          requested.c_str(), resolved.c_str(), ok ? "ok" : "missing",
+          bytes.size(), from_cache ? ", cache" : "");
   return NewResourceData(bytes);
 }
 
@@ -105,12 +104,11 @@ SKYLINE_EXPORT extern "C" void LoadResourceAsync(void* runtime_ptr,
       reinterpret_cast<NotifyResourceLoadFn>(callback)(
           static_cast<uint8_t>(callback_id), payload);
     }
-    std::fprintf(stderr,
-                 "[skyline-runtime] LoadResourceAsync: %s -> %s (%s, %zu bytes, "
-                 "id=%d, notified=%s%s)\n",
-                 requested.c_str(), resolved.c_str(), ok ? "ok" : "missing",
-                 bytes.size(), callback_id, callback != nullptr ? "yes" : "no",
-                 from_cache ? ", cache" : "");
+    SKY_LOG(kDebug, kLogRuntime,
+            "LoadResourceAsync: %s -> %s (%s, %zu bytes, id=%d, notified=%s%s)",
+            requested.c_str(), resolved.c_str(), ok ? "ok" : "missing",
+            bytes.size(), callback_id, callback != nullptr ? "yes" : "no",
+            from_cache ? ", cache" : "");
   });
 }
 
@@ -163,9 +161,8 @@ void RelayoutTextForFont(RuntimeHolder* holder, const std::string& family) {
       mark_needs_layout(Dart_HandleFromPersistent(node->yoga_node_p));
     }
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] font relayout: %s (%zu text node(s))\n",
-               family.c_str(), relaid_out);
+  SKY_LOG(kInfo, kLogRuntime, "font relayout: %s (%zu text node(s))",
+          family.c_str(), relaid_out);
 }
 
 SKYLINE_EXPORT extern "C" void AddPendingFont(void* /*runtime_ptr*/,
@@ -178,9 +175,8 @@ SKYLINE_EXPORT extern "C" void AddPendingFont(void* /*runtime_ptr*/,
   const std::string family(text);
   appservice::g_pending_fonts.insert(family);
   appservice::g_font_status[family] = -1;
-  std::fprintf(stderr,
-               "[skyline-runtime] AddPendingFont: %s (pending=%zu)\n",
-               family.c_str(), appservice::g_pending_fonts.size());
+  SKY_LOG(kInfo, kLogRuntime, "AddPendingFont: %s (pending=%zu)",
+          family.c_str(), appservice::g_pending_fonts.size());
 }
 
 SKYLINE_EXPORT extern "C" void RemovePendingFont(void* /*runtime_ptr*/,
@@ -196,11 +192,10 @@ SKYLINE_EXPORT extern "C" void RemovePendingFont(void* /*runtime_ptr*/,
   const auto status_it = appservice::g_font_status.find(family);
   const int last_status =
       status_it != appservice::g_font_status.end() ? status_it->second : -2;
-  std::fprintf(stderr,
-               "[skyline-runtime] RemovePendingFont: %s (pending=%zu, used=%d, "
-               "status=%d)\n",
-               family.c_str(), appservice::g_pending_fonts.size(),
-               used ? 1 : 0, last_status);
+  SKY_LOG(kInfo, kLogRuntime,
+          "RemovePendingFont: %s (pending=%zu, used=%d, status=%d)",
+          family.c_str(), appservice::g_pending_fonts.size(), used ? 1 : 0,
+          last_status);
   if (!used || appservice::g_page == nullptr ||
       appservice::g_page->holder == nullptr) {
     return;
@@ -225,11 +220,10 @@ SKYLINE_EXPORT extern "C" void NotifyFontFaceLoad(void* /*runtime_ptr*/,
     appservice::g_font_status[family] = status;
     appservice::g_font_callback_families.erase(found);
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] NotifyFontFaceLoad: id=%d status=%d family=%s "
-               "(pending=%zu)\n",
-               callback_id, status, family.c_str(),
-               appservice::g_pending_fonts.size());
+  SKY_LOG(kInfo, kLogRuntime,
+          "NotifyFontFaceLoad: id=%d status=%d family=%s (pending=%zu)",
+          callback_id, status, family.c_str(),
+          appservice::g_pending_fonts.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -272,9 +266,8 @@ void IssueDartHttpGet(RuntimeHolder* holder, uint32_t request_id,
       holder != nullptr ? holder->ffi_table : nullptr,
       kRequestHttpResourceHash);
   if (request == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] ForwardHttpGet: RequestHttpResource "
-                 "callback missing\n");
+    SKY_LOG(kWarning, kLogRuntime,
+            "ForwardHttpGet: RequestHttpResource callback missing");
     DeliverPendingHttpGet(request_id, {});
     return;
   }
@@ -322,10 +315,9 @@ void DeliverPendingHttpGet(uint32_t request_id, std::vector<uint8_t> bytes) {
   if (bytes.empty() && pending.via_shell) {
     pending.via_shell = false;
     g_pending_http_gets[request_id] = pending;
-    std::fprintf(stderr,
-                 "[skyline-runtime] ForwardHttpGet %u: shell fetch empty, "
-                 "falling back to dart:io\n",
-                 request_id);
+    SKY_LOG(kInfo, kLogRuntime,
+            "ForwardHttpGet %u: shell fetch empty, falling back to dart:io",
+            request_id);
     StartDartHttpGet(pending.holder, request_id, pending.url);
     return;
   }
@@ -417,10 +409,8 @@ SKYLINE_EXPORT extern "C" void ForwardHttpGet(void* runtime_ptr,
     Dart_DeletePersistentHandle(pending.callback);
     return;
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] ForwardHttpGet: id=%u url=%s%s\n",
-               request_id, requested.c_str(),
-               via_shell ? " (shell)" : "");
+  SKY_LOG(kDebug, kLogRuntime, "ForwardHttpGet: id=%u url=%s%s", request_id,
+          requested.c_str(), via_shell ? " (shell)" : "");
   runner->PostTask([holder, request_id, requested, via_shell, runner]() {
     if (via_shell) {
       RequestShellHttp(request_id, requested);
@@ -432,10 +422,9 @@ SKYLINE_EXPORT extern "C" void ForwardHttpGet(void* runtime_ptr,
               return;
             }
             found->second.via_shell = false;
-            std::fprintf(stderr,
-                         "[skyline-runtime] ForwardHttpGet %u: shell timeout, "
-                         "falling back to dart:io\n",
-                         request_id);
+            SKY_LOG(kWarning, kLogRuntime,
+                    "ForwardHttpGet %u: shell timeout, falling back to dart:io",
+                    request_id);
             StartDartHttpGet(holder, request_id, requested);
           },
           fml::TimeDelta::FromMilliseconds(2000));
@@ -452,10 +441,7 @@ SKYLINE_EXPORT extern "C" void HandleGestureEvent(void* /*runtime_ptr*/,
                                                   int32_t gesture_type,
                                                   void* /*data*/,
                                                   int32_t /*bytes*/) {
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] HandleGestureEvent: handler=%d type=%d\n",
-                 handler_id, gesture_type);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "HandleGestureEvent: handler=%d type=%d",
+          handler_id, gesture_type);
 }
 #endif

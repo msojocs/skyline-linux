@@ -38,6 +38,12 @@
 - 引擎启动与关闭、platform 线程循环（vsync baton、platform task、无障碍请求、
   `FlushPendingTasks`）、BGRA→RGBA 拷贝、帧头发布、语义树日志与 AOT 资源查找在
   `native/host/embedder/` 中实现，独立 `skyline_host` 共用同一份代码。
+- 日志与配置：runtime、skyline.node、两个宿主与 sharedMemory.node 共用
+  `include/skyline/log.h`（`SKY_LOG(level, category, fmt, ...)`，默认只输出
+  warning 及以上，`SKYLINE_LOG_LEVEL` 调整）与 `include/skyline/config.h`
+  （环境变量在 `tools/env-vars.json` 登记，参考见 `docs/env.md`）。skyline.node
+  另把 info 及以上写入 `SKYLINE_ADDON_LOG`（默认 `/tmp/skyline-addon.log`，
+  超过 1 MiB 轮转）。
 - CMake 会自动设置 `rpath` 指向 `native/engine/out/linux-x64-debug`；引擎缺失时
   仍生成 StubWindowBackend 版本。
 - `createWindow` 运行 bundle 的默认 `main`（官方契约没有 entrypoint 参数）；需要

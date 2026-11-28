@@ -274,9 +274,8 @@ void CollectAnimatedStyles(const rapidjson::Value& op, AppNode* node) {
       g_page->animated_styles.push_back(entry);
     }
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] addAnimatedStyle: #%u (%zu timeline frame(s))\n",
-               node->id, g_page->animated_styles.size());
+  SKY_LOG(kDebug, kLogRuntime, "addAnimatedStyle: #%u (%zu timeline frame(s))",
+          node->id, g_page->animated_styles.size());
 }
 
 // -- synthetic input state ---------------------------------------------------
@@ -372,10 +371,9 @@ void NotifyInputState(AppNode* node) {
   if (node == nullptr || node->input_widget_p == nullptr || g_page == nullptr ||
       g_page->holder == nullptr) {
     if (node != nullptr) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] InputHoldKeyboard: id=%u hold=%d "
-                   "(no native input widget)\n",
-                   node->id, node->input_hold_keyboard ? 1 : 0);
+      SKY_LOG(kInfo, kLogRuntime,
+              "InputHoldKeyboard: id=%u hold=%d (no native input widget)",
+              node->id, node->input_hold_keyboard ? 1 : 0);
     }
     return;
   }
@@ -402,9 +400,8 @@ void NotifyInputState(AppNode* node) {
   if (selection_end != nullptr) selection_end(widget, node->input_selection_end);
   if (hold != nullptr) {
     hold(widget, node->input_hold_keyboard ? 1 : 0);
-    std::fprintf(stderr,
-                 "[skyline-runtime] InputHoldKeyboard: id=%u hold=%d\n",
-                 node->id, node->input_hold_keyboard ? 1 : 0);
+    SKY_LOG(kInfo, kLogRuntime, "InputHoldKeyboard: id=%u hold=%d", node->id,
+            node->input_hold_keyboard ? 1 : 0);
   }
 }
 
@@ -503,11 +500,10 @@ void OnAppSnapshotResult(intptr_t ptr, int32_t width, int32_t height,
       bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
     format = "png";
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] app snapshot: request=%ld %dx%d format=%s "
-               "bytes=%zu ok=%d\n",
-               static_cast<long>(ptr), width, height, format, bytes.size(),
-               ok ? 1 : 0);
+  SKY_LOG(kInfo, kLogRuntime,
+          "app snapshot: request=%ld %dx%d format=%s bytes=%zu ok=%d",
+          static_cast<long>(ptr), width, height, format, bytes.size(),
+          ok ? 1 : 0);
   if (!ok) return;
   WriteSnapshotFile("snapshot-app", static_cast<uint32_t>(ptr),
                     std::strcmp(format, "png") == 0 ? "png" : "rgba", bytes);
@@ -524,10 +520,9 @@ void OnNodeSnapshotResult(intptr_t ptr, Dart_Handle data) {
       bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
     format = "png";
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] node snapshot: request=%ld format=%s "
-               "bytes=%zu ok=%d\n",
-               static_cast<long>(ptr), format, bytes.size(), ok ? 1 : 0);
+  SKY_LOG(kInfo, kLogRuntime,
+          "node snapshot: request=%ld format=%s bytes=%zu ok=%d",
+          static_cast<long>(ptr), format, bytes.size(), ok ? 1 : 0);
   if (!ok) return;
   WriteSnapshotFile("snapshot-node", static_cast<uint32_t>(ptr),
                     std::strcmp(format, "png") == 0 ? "png" : "rgba", bytes);
@@ -545,27 +540,25 @@ void DumpTree(bool elements) {
     dump = reinterpret_cast<DumpTreeFn>(
         FindCallback(table, kDumpRenderTreeHash));
   }
-  std::fprintf(stderr, "[skyline-runtime] %s requested (callback=%s)\n",
-               elements ? "DumpElementTree" : "DumpRenderTree",
-               dump != nullptr ? "yes" : "no");
+  SKY_LOG(kInfo, kLogRuntime, "%s requested (callback=%s)",
+          elements ? "DumpElementTree" : "DumpRenderTree",
+          dump != nullptr ? "yes" : "no");
   if (dump != nullptr) dump();
 }
 
 void CollectGarbage() {
   auto* collect = reinterpret_cast<CollectGarbageFn>(
       FindCallback(ActiveFfiTable(), kCollectGarbageHash));
-  std::fprintf(stderr, "[skyline-runtime] CollectGarbage requested "
-                       "(callback=%s)\n",
-               collect != nullptr ? "yes" : "no");
+  SKY_LOG(kInfo, kLogRuntime, "CollectGarbage requested (callback=%s)",
+          collect != nullptr ? "yes" : "no");
   if (collect != nullptr) collect();
 }
 
 void SendMessageToRunner(const std::string& message) {
   auto* send = reinterpret_cast<SendMessageToRunnerFn>(
       FindCallback(ActiveFfiTable(), kSendMessageToRunnerHash));
-  std::fprintf(stderr,
-               "[skyline-runtime] SendMessageToRunner: \"%s\" (callback=%s)\n",
-               message.c_str(), send != nullptr ? "yes" : "no");
+  SKY_LOG(kInfo, kLogRuntime, "SendMessageToRunner: \"%s\" (callback=%s)",
+          message.c_str(), send != nullptr ? "yes" : "no");
   if (send != nullptr) {
     Dart_Handle text = Dart_NewStringFromCString(message.c_str());
     if (!Dart_IsError(text)) send(text);
@@ -575,11 +568,10 @@ void SendMessageToRunner(const std::string& message) {
 void TakeAppSnapshot(uint32_t request_id, double scale, bool compressed) {
   auto* take = reinterpret_cast<TakeAppSnapshotFn>(
       FindCallback(ActiveFfiTable(), kTakeAppSnapshotHash));
-  std::fprintf(stderr,
-               "[skyline-runtime] TakeAppSnapshot: request=%u scale=%g "
-               "compressed=%d (callback=%s)\n",
-               request_id, scale, compressed ? 1 : 0,
-               take != nullptr ? "yes" : "no");
+  SKY_LOG(kInfo, kLogRuntime,
+          "TakeAppSnapshot: request=%u scale=%g compressed=%d (callback=%s)",
+          request_id, scale, compressed ? 1 : 0,
+          take != nullptr ? "yes" : "no");
   if (take == nullptr) return;
   take(static_cast<intptr_t>(request_id), scale, compressed ? 1 : 0,
        &OnAppSnapshotResult);
@@ -588,9 +580,8 @@ void TakeAppSnapshot(uint32_t request_id, double scale, bool compressed) {
 void SnapshotNode(uint32_t node_id, uint8_t format, uint32_t request_id) {
   AppNode* node = FindNode(node_id);
   if (node == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] node snapshot: node #%u not found\n",
-                 node_id);
+    SKY_LOG(kWarning, kLogRuntime, "node snapshot: node #%u not found",
+            node_id);
     return;
   }
   // `<snapshot>` elements carry a SkylineSnapshot widget; SnapshotTakeSnapshot
@@ -598,34 +589,31 @@ void SnapshotNode(uint32_t node_id, uint8_t format, uint32_t request_id) {
   if (node->snapshot_p != nullptr) {
     auto* take = reinterpret_cast<SnapshotTakeSnapshotFn>(FindCallback(
         ActiveFfiTable(), kSnapshotTakeSnapshotHash));
-    std::fprintf(stderr,
-                 "[skyline-runtime] snapshot widget request: node=#%u "
-                 "format=%u request=%u (callback=%s)\n",
-                 node_id, static_cast<unsigned>(format), request_id,
-                 take != nullptr ? "yes" : "no");
+    SKY_LOG(
+        kInfo, kLogRuntime,
+        "snapshot widget request: node=#%u format=%u request=%u (callback=%s)",
+        node_id, static_cast<unsigned>(format), request_id,
+        take != nullptr ? "yes" : "no");
     if (take == nullptr) return;
     g_pending_node_snapshot_request.store(static_cast<int32_t>(request_id));
     const uint8_t ok = take(Dart_HandleFromPersistent(node->snapshot_p), format,
                             reinterpret_cast<intptr_t>(&OnNodeSnapshotResult));
     g_pending_node_snapshot_request.store(0);
-    std::fprintf(stderr,
-                 "[skyline-runtime] snapshot widget: node=#%u accepted=%u\n",
-                 node_id, static_cast<unsigned>(ok));
+    SKY_LOG(kInfo, kLogRuntime, "snapshot widget: node=#%u accepted=%u",
+            node_id, static_cast<unsigned>(ok));
     return;
   }
   if (node->yoga_node_p == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] node snapshot: node #%u not materialized\n",
-                 node_id);
+    SKY_LOG(kInfo, kLogRuntime, "node snapshot: node #%u not materialized",
+            node_id);
     return;
   }
   auto* take = reinterpret_cast<YGNodeTakeSnapshotFn>(
       FindCallback(ActiveFfiTable(), kYGNodeTakeSnapshotHash));
-  std::fprintf(stderr,
-               "[skyline-runtime] node snapshot request: node=#%u format=%u "
-               "request=%u (callback=%s)\n",
-               node_id, static_cast<unsigned>(format), request_id,
-               take != nullptr ? "yes" : "no");
+  SKY_LOG(kInfo, kLogRuntime,
+          "node snapshot request: node=#%u format=%u request=%u (callback=%s)",
+          node_id, static_cast<unsigned>(format), request_id,
+          take != nullptr ? "yes" : "no");
   if (take == nullptr) return;
   // YGNodeRenderObject.takeSnapshotAsync asserts that the render object is a
   // repaint boundary; DevTools asks for snapshots lazily, so enable it now.
@@ -647,10 +635,8 @@ void SetUserGesture(bool in_progress) {
     callback = reinterpret_cast<UserGestureFn>(
         FindCallback(table, kStopUserGestureHash));
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] user gesture: %s (callback=%s)\n",
-               in_progress ? "start" : "stop",
-               callback != nullptr ? "yes" : "no");
+  SKY_LOG(kInfo, kLogRuntime, "user gesture: %s (callback=%s)",
+          in_progress ? "start" : "stop", callback != nullptr ? "yes" : "no");
   if (callback != nullptr) callback();
   char buffer[96];
   std::snprintf(buffer, sizeof(buffer),
@@ -662,19 +648,16 @@ void SetUserGesture(bool in_progress) {
 void RelaunchApp(uint8_t open_type) {
   auto* relaunch = reinterpret_cast<AppCommandFn>(
       FindCallback(ActiveFfiTable(), kRelaunchAppHash));
-  std::fprintf(stderr,
-               "[skyline-runtime] RelaunchApp: openType=%u (callback=%s)\n",
-               static_cast<unsigned>(open_type),
-               relaunch != nullptr ? "yes" : "no");
+  SKY_LOG(kInfo, kLogRuntime, "RelaunchApp: openType=%u (callback=%s)",
+          static_cast<unsigned>(open_type), relaunch != nullptr ? "yes" : "no");
   if (relaunch != nullptr) relaunch(open_type);
 }
 
 void ShutdownApplication() {
   auto* shutdown = reinterpret_cast<VoidCommandFn>(
       FindCallback(ActiveFfiTable(), kShutdownApplicationHash));
-  std::fprintf(stderr, "[skyline-runtime] ShutdownApplication requested "
-                       "(callback=%s)\n",
-               shutdown != nullptr ? "yes" : "no");
+  SKY_LOG(kInfo, kLogRuntime, "ShutdownApplication requested (callback=%s)",
+          shutdown != nullptr ? "yes" : "no");
   if (shutdown != nullptr) shutdown();
 }
 
@@ -765,16 +748,14 @@ void ApplyAttachCustomRoute(const rapidjson::Value& op) {
   config.can_transition_from = as_bool(9, true);
   config.animation_hash = as_string(10);
   config.secondary_animation_hash = as_string(11);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] attachCustomRoute custom=%d opaque=%d "
-                 "transition=%d/%d barrier=%08x anim=%s secondary=%s\n",
-                 config.is_custom ? 1 : 0, config.opaque ? 1 : 0,
-                 config.transition_ms, config.reverse_transition_ms,
-                 config.has_barrier_color ? config.barrier_color : 0u,
-                 config.animation_hash.c_str(),
-                 config.secondary_animation_hash.c_str());
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "attachCustomRoute custom=%d opaque=%d transition=%d/%d barrier=%08x "
+          "anim=%s secondary=%s",
+          config.is_custom ? 1 : 0, config.opaque ? 1 : 0, config.transition_ms,
+          config.reverse_transition_ms,
+          config.has_barrier_color ? config.barrier_color : 0u,
+          config.animation_hash.c_str(),
+          config.secondary_animation_hash.c_str());
 }
 
 void ApplyOperation(const rapidjson::Value& op) {
@@ -815,8 +796,7 @@ void ApplyOperation(const rapidjson::Value& op) {
       NotifyInputState(node);
       SetInputFocus(id, true);
     }
-    std::fprintf(stderr, "[skyline-runtime] focus input: id=%u\n",
-                 g_page->focused_input_id);
+    SKY_LOG(kInfo, kLogRuntime, "focus input: id=%u", g_page->focused_input_id);
   } else if (std::strcmp(kind, "blurInput") == 0) {
     const uint32_t id = MemberUint(op, "id", g_page->focused_input_id);
     if (id != 0) {
@@ -825,7 +805,7 @@ void ApplyOperation(const rapidjson::Value& op) {
       SetInputFocus(g_page->focused_input_id, false);
     }
     g_page->focused_input_id = 0;
-    std::fprintf(stderr, "[skyline-runtime] blur input: id=%u\n", id);
+    SKY_LOG(kInfo, kLogRuntime, "blur input: id=%u", id);
   } else if (std::strcmp(kind, "setSelection") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
     if (node != nullptr) {
@@ -840,11 +820,10 @@ void ApplyOperation(const rapidjson::Value& op) {
       node->input_selection_end = end;
       ClampInputState(node);
       NotifyInputState(node);
-      std::fprintf(stderr,
-                   "[skyline-runtime] setSelection: id=%u selection=[%d,%d] "
-                   "cursor=%d\n",
-                   node->id, node->input_selection_start,
-                   node->input_selection_end, node->input_cursor);
+      SKY_LOG(kDebug, kLogRuntime,
+              "setSelection: id=%u selection=[%d,%d] cursor=%d", node->id,
+              node->input_selection_start, node->input_selection_end,
+              node->input_cursor);
     }
   } else if (std::strcmp(kind, "compositionStart") == 0 ||
              std::strcmp(kind, "compositionUpdate") == 0 ||
@@ -882,14 +861,14 @@ void ApplyOperation(const rapidjson::Value& op) {
           CollapseInputSelection(node);
         }
         NotifyInputState(node);
-        std::fprintf(stderr,
-                     "[skyline-runtime] %s: id=%u text=\"%s\" cursor=%d "
-                     "selection=[%d,%d] value=\"%s\"\n",
-                     start ? "composition start"
-                           : (end ? "composition end" : "composition update"),
-                     node->id, value.c_str(), node->input_cursor,
-                     node->input_selection_start, node->input_selection_end,
-                     node->text.c_str());
+        SKY_LOG(
+            kDebug, kLogRuntime,
+            "%s: id=%u text=\"%s\" cursor=%d selection=[%d,%d] value=\"%s\"",
+            start ? "composition start"
+                  : (end ? "composition end" : "composition update"),
+            node->id, value.c_str(), node->input_cursor,
+            node->input_selection_start, node->input_selection_end,
+            node->text.c_str());
       }
     }
   } else if (std::strcmp(kind, "dispatchKey") == 0) {
@@ -898,9 +877,8 @@ void ApplyOperation(const rapidjson::Value& op) {
     if (input != nullptr && text[0] != '\0') {
       InsertInputText(input, text);
       NotifyInputState(input);
-      std::fprintf(stderr,
-                   "[skyline-runtime] dispatchKey: id=%u text=%s cursor=%d\n",
-                   input->id, input->text.c_str(), input->input_cursor);
+      SKY_LOG(kDebug, kLogRuntime, "dispatchKey: id=%u text=%s cursor=%d",
+              input->id, input->text.c_str(), input->input_cursor);
     }
   } else if (std::strcmp(kind, "keyboardStatus") == 0) {
     g_page->keyboard_height = MemberNumber(op, "height", 0.0);
@@ -912,9 +890,8 @@ void ApplyOperation(const rapidjson::Value& op) {
     if (callback != nullptr) {
       reinterpret_cast<UpdateKeyboardStatusFn>(callback)(
           input_key, g_page->keyboard_height);
-      std::fprintf(stderr,
-                   "[skyline-runtime] UpdateKeyboardStatus: key=%d height=%g\n",
-                   input_key, g_page->keyboard_height);
+      SKY_LOG(kInfo, kLogRuntime, "UpdateKeyboardStatus: key=%d height=%g",
+              input_key, g_page->keyboard_height);
     }
   } else if (std::strcmp(kind, "setScrollTop") == 0) {
     AppNode* node = FindNode(MemberUint(op, "id", 0));
@@ -930,9 +907,8 @@ void ApplyOperation(const rapidjson::Value& op) {
       node->attrs["scrollTop"] = buffer;
       reinterpret_cast<ScrollViewUpdateScrollTopFn>(callback)(
           Dart_HandleFromPersistent(node->scroll_view_p), value);
-      std::fprintf(stderr,
-                   "[skyline-runtime] appservice setScrollTop: id=%u value=%g\n",
-                   node->id, value);
+      SKY_LOG(kDebug, kLogRuntime, "appservice setScrollTop: id=%u value=%g",
+              node->id, value);
     }
   } else if (std::strcmp(kind, "swiperTo") == 0) {
     bool animated = true;
@@ -1004,22 +980,16 @@ void ApplyOperation(const rapidjson::Value& op) {
       const uint8_t type =
           static_cast<uint8_t>(MemberUint(op, "type", 0));
       reinterpret_cast<DispatchTouchEventFn>(callback)(type, x, y);
-      if (config::Flag(config::kAppServiceDebug)) {
+      if (SKY_LOG_ENABLED(kDebug)) {
         using GetNodeFromPointFn = intptr_t (*)(double, double, uint8_t);
         auto* hit = reinterpret_cast<GetNodeFromPointFn>(
             FindCallback(g_page->holder->ffi_table, kGetNodeFromPointHash));
         const intptr_t address = hit != nullptr
                                      ? hit(x, y, 1)
                                      : static_cast<intptr_t>(0);
-        std::fprintf(stderr,
-                     "[skyline-runtime] appservice dispatchTouch: type=%u (%g,%g) "
-                     "hit=0x%lx\n",
-                     static_cast<unsigned>(type), x, y,
-                     static_cast<long>(address));
-      } else {
-        std::fprintf(stderr,
-                     "[skyline-runtime] appservice dispatchTouch: type=%u (%g,%g)\n",
-                     static_cast<unsigned>(type), x, y);
+        SKY_LOG(kDebug, kLogRuntime,
+                "appservice dispatchTouch: type=%u (%g,%g) hit=0x%lx",
+                static_cast<unsigned>(type), x, y, static_cast<long>(address));
       }
     }
   } else if (std::strcmp(kind, "createElement") == 0) {
@@ -1067,12 +1037,12 @@ void ApplyOperation(const rapidjson::Value& op) {
       if (g_page->root_id != 0 && g_page->root_connector != nullptr) {
         g_page->force_rebuild = true;
       }
-      std::fprintf(stderr,
-                   "[skyline-runtime] navigateBack restore root=%u stack=%zu "
-                   "root_node=%p connector=%p\n",
-                   g_page->root_id, g_page->page_stack.size(),
-                   static_cast<void*>(g_page->root_node),
-                   static_cast<void*>(g_page->root_connector));
+      SKY_LOG(
+          kInfo, kLogRuntime,
+          "navigateBack restore root=%u stack=%zu root_node=%p connector=%p",
+          g_page->root_id, g_page->page_stack.size(),
+          static_cast<void*>(g_page->root_node),
+          static_cast<void*>(g_page->root_connector));
     }
   } else if (std::strcmp(kind, "createContext") == 0) {
     // Every appservice flush starts with this op so the native replay knows
@@ -1298,9 +1268,8 @@ void ApplyOperation(const rapidjson::Value& op) {
   } else if (std::strcmp(kind, "accessibility") == 0) {
     const bool enabled = MemberNumber(op, "enabled", 0.0f) != 0.0f;
     g_accessibility_enabled.store(enabled ? 1 : 0);
-    std::fprintf(stderr,
-                 "[skyline-runtime] accessibility: enabled=%d (automation)\n",
-                 enabled ? 1 : 0);
+    SKY_LOG(kInfo, kLogRuntime, "accessibility: enabled=%d (automation)",
+            enabled ? 1 : 0);
     // Enable the semantics tree before the accessibility feature flag: the
     // page's root `ExcludeSemantics` wrapper rebuilds when MediaQuery reports
     // accessibleNavigation, and it must observe semanticsEnabled == true then.

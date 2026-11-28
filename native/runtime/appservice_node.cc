@@ -525,21 +525,16 @@ bool AttachDetachedPortalContent(AppNode* root) {
       if (node->parent->name == "root") {
         DetachFromParent(node);
       } else {
-        if (config::Flag(config::kAppServiceDebug)) {
-          std::fprintf(stderr,
-                       "[skyline-runtime] portal #%u kept under #%u/%s%s\n",
-                       node->id, node->parent->id, node->parent->name.c_str(),
-                       node->parent->released ? " (released)" : "");
-        }
+        SKY_LOG(kDebug, kLogRuntime, "portal #%u kept under #%u/%s%s", node->id,
+                node->parent->id, node->parent->name.c_str(),
+                node->parent->released ? " (released)" : "");
         continue;
       }
     }
     AppendChild(root, node);
     changed = true;
-    if (config::Flag(config::kAppServiceDebug)) {
-      std::fprintf(stderr, "[skyline-runtime] attached detached portal #%u (%s)\n",
-                   node->id, node->name.c_str());
-    }
+    SKY_LOG(kDebug, kLogRuntime, "attached detached portal #%u (%s)", node->id,
+            node->name.c_str());
   }
   return changed;
 }
@@ -634,11 +629,8 @@ void ResetNodeHandlesSelf(AppNode* node, bool include_layout) {
     node->texture_widget = nullptr;
   }
   if (node->texture_view_id >= 0) {
-    if (config::Flag(config::kAppServiceDebug)) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] native view dispose: viewId=%d\n",
-                   node->texture_view_id);
-    }
+    SKY_LOG(kDebug, kLogRuntime, "native view dispose: viewId=%d",
+            node->texture_view_id);
     g_texture_nodes.erase(node->texture_view_id);
     node->texture_view_id = -1;
   }

@@ -136,7 +136,7 @@ void CreateDemoPage(RuntimeHolder* holder) {
     return;
   }
   if (Dart_CurrentIsolate() == nullptr && g_isolate == nullptr) {
-    std::fprintf(stderr, "[skyline-runtime] demo page: no isolate available\n");
+    SKY_LOG(kWarning, kLogRuntime, "demo page: no isolate available");
     return;
   }
   DemoPageApiScope scope;
@@ -148,12 +148,11 @@ void CreateDemoPage(RuntimeHolder* holder) {
       FindCallback(holder->ffi_table, kCreatePageRouteHash));
   if (newDecoratedBox == nullptr || newYGNode == nullptr ||
       createPageRoute == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] demo page callbacks not registered "
-                 "(decorated=%p yg=%p route=%p)\n",
-                 reinterpret_cast<void*>(newDecoratedBox),
-                 reinterpret_cast<void*>(newYGNode),
-                 reinterpret_cast<void*>(createPageRoute));
+    SKY_LOG(kWarning, kLogRuntime,
+            "demo page callbacks not registered (decorated=%p yg=%p route=%p)",
+            reinterpret_cast<void*>(newDecoratedBox),
+            reinterpret_cast<void*>(newYGNode),
+            reinterpret_cast<void*>(createPageRoute));
     return;
   }
   g_demo_page_created = true;
@@ -190,7 +189,7 @@ void CreateDemoPage(RuntimeHolder* holder) {
   auto* newYGConnector = reinterpret_cast<NewYGConnectorFn>(
       FindCallback(holder->ffi_table, kNewYGConnectorHash));
   if (newYGConnector == nullptr) {
-    std::fprintf(stderr, "[skyline-runtime] demo page: NewYGConnector not registered\n");
+    SKY_LOG(kWarning, kLogRuntime, "demo page: NewYGConnector not registered");
     return;
   }
 
@@ -261,7 +260,7 @@ void CreateDemoPage(RuntimeHolder* holder) {
       // YGNode keeps the Float32List alive and typed-data memory does not move.
       Dart_TypedDataReleaseData(yoga_layout);
     } else {
-      std::fprintf(stderr, "[skyline-runtime] demo page: bad child yoga buffer\n");
+      SKY_LOG(kInfo, kLogRuntime, "demo page: bad child yoga buffer");
     }
     g_demo_nodes.push_back(DemoNode{child_address, i + 1});
   }
@@ -299,7 +298,7 @@ void CreateDemoPage(RuntimeHolder* holder) {
       g_yoga_metrics[root_address] = static_cast<float*>(data);
       Dart_TypedDataReleaseData(root_layout);
     } else {
-      std::fprintf(stderr, "[skyline-runtime] demo page: bad root yoga buffer\n");
+      SKY_LOG(kInfo, kLogRuntime, "demo page: bad root yoga buffer");
     }
   }
   g_demo_nodes.push_back(DemoNode{root_address, 0});
@@ -309,7 +308,7 @@ void CreateDemoPage(RuntimeHolder* holder) {
   config.backgroundColorContent = 0xFFFFFFFFu;
   config.pageUrl = page_url;
 
-  std::fprintf(stderr, "[skyline-runtime] demo page -> CreatePageRoute\n");
+  SKY_LOG(kInfo, kLogRuntime, "demo page -> CreatePageRoute");
   createPageRoute(
       0, 4, 0, 0, 1,
       1, 1, 0, 0,
@@ -337,7 +336,7 @@ void CreateTextPage(RuntimeHolder* holder) {
       createPageRoute == nullptr || newText == nullptr ||
       newTextSpan == nullptr ||
       (g_demo_mode == DemoMode::kCard && newDecoratedBox == nullptr)) {
-    std::fprintf(stderr, "[skyline-runtime] text page: callbacks not registered\n");
+    SKY_LOG(kWarning, kLogRuntime, "text page: callbacks not registered");
     return;
   }
 
@@ -346,7 +345,7 @@ void CreateTextPage(RuntimeHolder* holder) {
   Dart_Handle text_handle = Dart_NewStringFromCString("Skyline on Linux");
   Dart_Handle no_children = Dart_NewList(0);
   if (Dart_IsError(text_handle) || Dart_IsError(no_children)) {
-    std::fprintf(stderr, "[skyline-runtime] text page: cannot create strings\n");
+    SKY_LOG(kWarning, kLogRuntime, "text page: cannot create strings");
     return;
   }
 
@@ -360,7 +359,7 @@ void CreateTextPage(RuntimeHolder* holder) {
       Dart_Null(), nan, nan, nan,
       0 /* WordBreak.normal */, Dart_Null(), no_children);
   if (Dart_IsError(span)) {
-    std::fprintf(stderr, "[skyline-runtime] text page: NewTextSpan failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "text page: NewTextSpan failed");
     return;
   }
   Dart_Handle spans = Dart_NewList(1);
@@ -373,7 +372,7 @@ void CreateTextPage(RuntimeHolder* holder) {
       1 /* softWrap */, 0 /* maxLines */, 0 /* userSelect */,
       0 /* selectOnGesture */, 0 /* enableNativeParagraph */, spans);
   if (Dart_IsError(text_widget)) {
-    std::fprintf(stderr, "[skyline-runtime] text page: NewText failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "text page: NewText failed");
     return;
   }
 
@@ -396,7 +395,7 @@ void CreateTextPage(RuntimeHolder* holder) {
         nullptr, nullptr, nullptr, nullptr,
         text_widget);
     if (Dart_IsError(node_child)) {
-      std::fprintf(stderr, "[skyline-runtime] card page: NewDecoratedBox failed\n");
+      SKY_LOG(kWarning, kLogRuntime, "card page: NewDecoratedBox failed");
       return;
     }
   }
@@ -409,7 +408,7 @@ void CreateTextPage(RuntimeHolder* holder) {
       1, 0, 0,
       Dart_Null(), Dart_Null(), node_child);
   if (Dart_IsError(text_node)) {
-    std::fprintf(stderr, "[skyline-runtime] text page: text YGNode failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "text page: text YGNode failed");
     return;
   }
   {
@@ -430,7 +429,7 @@ void CreateTextPage(RuntimeHolder* holder) {
   Dart_ListSetAt(children, 0, text_node);
   Dart_Handle connector = newYGConnector(0, children);
   if (Dart_IsError(connector)) {
-    std::fprintf(stderr, "[skyline-runtime] text page: NewYGConnector failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "text page: NewYGConnector failed");
     return;
   }
 
@@ -443,7 +442,7 @@ void CreateTextPage(RuntimeHolder* holder) {
       1, 0, 0,
       Dart_Null(), Dart_Null(), connector);
   if (Dart_IsError(root)) {
-    std::fprintf(stderr, "[skyline-runtime] text page: root YGNode failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "text page: root YGNode failed");
     return;
   }
   {
@@ -466,8 +465,8 @@ void CreateTextPage(RuntimeHolder* holder) {
   config.backgroundColorContent = 0xFFFFFFFFu;
   config.pageUrl = g_demo_mode == DemoMode::kCard ? page_url_card : page_url_text;
 
-  std::fprintf(stderr, "[skyline-runtime] %s page -> CreatePageRoute\n",
-               g_demo_mode == DemoMode::kCard ? "card" : "text");
+  SKY_LOG(kInfo, kLogRuntime, "%s page -> CreatePageRoute",
+          g_demo_mode == DemoMode::kCard ? "card" : "text");
   createPageRoute(
       0, 4, 0, 0, 1,
       1, 1, 0, 0,
@@ -714,14 +713,14 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
     const rapidjson::Value& entries = children_member->value;
     Dart_Handle list = Dart_NewList(static_cast<intptr_t>(entries.Size()));
     if (Dart_IsError(list)) {
-      std::fprintf(stderr, "[skyline-runtime] json page: Dart_NewList failed\n");
+      SKY_LOG(kWarning, kLogRuntime, "json page: Dart_NewList failed");
       return BuiltJsonNode();
     }
     for (rapidjson::SizeType i = 0; i < entries.Size(); i++) {
       const rapidjson::Value& child_entry = entries[i];
       if (!child_entry.IsObject()) {
-        std::fprintf(stderr, "[skyline-runtime] json page: child %u is not an object\n",
-                     static_cast<unsigned>(i));
+        SKY_LOG(kInfo, kLogRuntime, "json page: child %u is not an object",
+                static_cast<unsigned>(i));
         return BuiltJsonNode();
       }
       const intptr_t child_address = *next_address;
@@ -748,13 +747,13 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
               ? static_cast<float>(size_member->value.GetDouble())
               : std::nan("");
       if (Dart_IsError(Dart_ListSetAt(list, static_cast<intptr_t>(i), child.widget))) {
-        std::fprintf(stderr, "[skyline-runtime] json page: Dart_ListSetAt failed\n");
+        SKY_LOG(kWarning, kLogRuntime, "json page: Dart_ListSetAt failed");
         return BuiltJsonNode();
       }
     }
     connector = newYGConnector(0, list);
     if (Dart_IsError(connector)) {
-      std::fprintf(stderr, "[skyline-runtime] json page: NewYGConnector failed\n");
+      SKY_LOG(kWarning, kLogRuntime, "json page: NewYGConnector failed");
       return BuiltJsonNode();
     }
     if (depth == 0) {
@@ -767,7 +766,7 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
   if (std::strcmp(type, "opacity") == 0) {
     inner = newOpacity(MemberNumber(entry, "opacity", 1.0f), inner);
     if (Dart_IsError(inner)) {
-      std::fprintf(stderr, "[skyline-runtime] json page: NewOpacity failed\n");
+      SKY_LOG(kWarning, kLogRuntime, "json page: NewOpacity failed");
       return BuiltJsonNode();
     }
     const auto opacity_update = entry.FindMember("updateOpacity");
@@ -790,7 +789,7 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
         0.0, 0.0, 0.0, 0.0,
         inner);
     if (Dart_IsError(inner)) {
-      std::fprintf(stderr, "[skyline-runtime] json page: NewClipRRect failed\n");
+      SKY_LOG(kWarning, kLogRuntime, "json page: NewClipRRect failed");
       return BuiltJsonNode();
     }
   } else if (std::strcmp(type, "text") == 0) {
@@ -810,7 +809,7 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
         static_cast<int>(MemberNumber(entry, "maxLines", 0.0f)), 0, true,
         false, families);
     if (Dart_IsError(inner)) {
-      std::fprintf(stderr, "[skyline-runtime] json page: text widget failed\n");
+      SKY_LOG(kWarning, kLogRuntime, "json page: text widget failed");
       return BuiltJsonNode();
     }
   } else {
@@ -855,7 +854,7 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
             -1.0, -1.0 /* FittingSize.none -> fill the box */, 0, 0, 0, 0,
             0.0, 0.0, 0.0, 0.0, 0);
         if (Dart_IsError(gradient_handle)) {
-          std::fprintf(stderr, "[skyline-runtime] json page: NewLinearGradient failed\n");
+          SKY_LOG(kWarning, kLogRuntime, "json page: NewLinearGradient failed");
           return BuiltJsonNode();
         }
       }
@@ -874,7 +873,7 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
           MemberNumber(shadow, "spread", 0.0f),
           MemberNumber(shadow, "inset", 0.0f) > 0 ? 1 : 0);
       if (Dart_IsError(box_shadow)) {
-        std::fprintf(stderr, "[skyline-runtime] json page: NewBoxShadow failed\n");
+        SKY_LOG(kWarning, kLogRuntime, "json page: NewBoxShadow failed");
         return BuiltJsonNode();
       }
       Dart_Handle shadow_list = Dart_NewList(1);
@@ -907,7 +906,7 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
           nullptr, nullptr, nullptr, nullptr,
           inner);
       if (Dart_IsError(inner)) {
-        std::fprintf(stderr, "[skyline-runtime] json page: DecoratedBox failed\n");
+        SKY_LOG(kWarning, kLogRuntime, "json page: DecoratedBox failed");
         return BuiltJsonNode();
       }
       const auto update_member = entry.FindMember("updateColor");
@@ -934,14 +933,14 @@ BuiltJsonNode BuildJsonNode(const rapidjson::Value& entry,
 
   Dart_Handle buffer = Dart_NewTypedData(Dart_TypedData_kFloat32, 9);
   if (Dart_IsError(buffer)) {
-    std::fprintf(stderr, "[skyline-runtime] json page: typed data failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "json page: typed data failed");
     return BuiltJsonNode();
   }
   Dart_Handle node = newYGNode(
       address, buffer, depth == 0 ? 1 : 0, 0, 0, 0, 1, Dart_Null(), 0.0, 0.0,
       0.0, 0.0, 1, 0, 0, Dart_Null(), Dart_Null(), inner);
   if (Dart_IsError(node)) {
-    std::fprintf(stderr, "[skyline-runtime] json page: NewYGNode failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "json page: NewYGNode failed");
     return BuiltJsonNode();
   }
 
@@ -1051,7 +1050,7 @@ void CreateJsonPage(RuntimeHolder* holder, const char* descriptor) {
       newTextSpan == nullptr || newDecoratedBox == nullptr ||
       newOpacity == nullptr || newClipRRect == nullptr ||
       newLinearGradient == nullptr || newBoxShadow == nullptr) {
-    std::fprintf(stderr, "[skyline-runtime] json page: callbacks not registered\n");
+    SKY_LOG(kWarning, kLogRuntime, "json page: callbacks not registered");
     return;
   }
 
@@ -1062,14 +1061,14 @@ void CreateJsonPage(RuntimeHolder* holder, const char* descriptor) {
 
   std::string json;
   if (!ReadDescriptor(descriptor, &json)) {
-    std::fprintf(stderr, "[skyline-runtime] json page: cannot read %s\n", descriptor);
+    SKY_LOG(kWarning, kLogRuntime, "json page: cannot read %s", descriptor);
     return;
   }
   rapidjson::Document doc;
   doc.Parse(json.c_str());
   if (doc.HasParseError() || !doc.IsObject()) {
-    std::fprintf(stderr, "[skyline-runtime] json page: parse error at %zu\n",
-                 static_cast<size_t>(doc.GetErrorOffset()));
+    SKY_LOG(kWarning, kLogRuntime, "json page: parse error at %zu",
+            static_cast<size_t>(doc.GetErrorOffset()));
     return;
   }
 
@@ -1079,7 +1078,7 @@ void CreateJsonPage(RuntimeHolder* holder, const char* descriptor) {
                                      newOpacity, newClipRRect, newLinearGradient,
                                      newBoxShadow, &next_address);
   if (root.widget == nullptr) {
-    std::fprintf(stderr, "[skyline-runtime] json page: build failed\n");
+    SKY_LOG(kWarning, kLogRuntime, "json page: build failed");
     return;
   }
   g_json_root = root.layout;
@@ -1091,7 +1090,7 @@ void CreateJsonPage(RuntimeHolder* holder, const char* descriptor) {
   config.pageUrl = page_url;
   Dart_Handle empty = Dart_NewStringFromCString("");
 
-  std::fprintf(stderr, "[skyline-runtime] json page -> CreatePageRoute\n");
+  SKY_LOG(kInfo, kLogRuntime, "json page -> CreatePageRoute");
   createPageRoute(0, 4, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, empty, 1, 1, 0, 0, 0, 0,
                   0, 0, empty, empty, Dart_Null(), root.widget, &config);
   SchedulePendingStyleUpdates();
@@ -1103,9 +1102,8 @@ void CreateJsonPage(RuntimeHolder* holder, const char* descriptor) {
 #pragma GCC diagnostic pop
     if (task_runner) {
       for (const PendingColorUpdate& update : g_pending_color_updates) {
-        std::fprintf(stderr,
-                     "[skyline-runtime] json page: color update in %d ms\n",
-                     update.delay_ms);
+        SKY_LOG(kInfo, kLogRuntime, "json page: color update in %d ms",
+                update.delay_ms);
         task_runner->PostDelayedTask(
             [updateColor, update]() {
               if (Dart_CurrentIsolate() == nullptr && g_isolate == nullptr) {
@@ -1156,8 +1154,7 @@ void CreateJsonPage(RuntimeHolder* holder, const char* descriptor) {
                 rapidjson::Document doc;
                 doc.Parse(child_json.c_str());
                 if (doc.HasParseError() || !doc.IsObject()) {
-                  std::fprintf(stderr,
-                               "[skyline-runtime] append op: bad child json\n");
+                  SKY_LOG(kInfo, kLogRuntime, "append op: bad child json");
                   return;
                 }
                 const intptr_t address = g_json_next_address;
@@ -1204,9 +1201,8 @@ void CreateJsonPage(RuntimeHolder* holder, const char* descriptor) {
                 }
               },
               fml::TimeDelta::FromMilliseconds(delay_ms));
-          std::fprintf(stderr,
-                       "[skyline-runtime] json page: append child in %d ms\n",
-                       delay_ms);
+          SKY_LOG(kInfo, kLogRuntime, "json page: append child in %d ms",
+                  delay_ms);
         } else if (std::strcmp(kind, "remove") == 0 &&
                    updateChildren != nullptr) {
           const int index =
@@ -1265,9 +1261,8 @@ void CreateJsonPage(RuntimeHolder* holder, const char* descriptor) {
                 }
               },
               fml::TimeDelta::FromMilliseconds(delay_ms));
-          std::fprintf(stderr,
-                       "[skyline-runtime] json page: remove child in %d ms\n",
-                       delay_ms);
+          SKY_LOG(kInfo, kLogRuntime, "json page: remove child in %d ms",
+                  delay_ms);
         }
       }
     }

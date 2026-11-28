@@ -110,7 +110,7 @@ test('appservice ops: ScrollViewUpdateScrollTop scrolls the content', {
   timeout: 60000,
 }, () => {
   const fixture = path.join(repoRoot, 'test', 'fixtures', 'appservice-scroll.ops.json');
-  const { result, logs, pixels } = runOps(fixture, { timeoutMs: 2000, frames: 0 });
+  const { result, logs, pixels } = runOps(fixture, { debugLogs: true, timeoutMs: 2000, frames: 0 });
 
   assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
   assert.match(logs, /appservice setScrollTop: id=3 value=80/);
@@ -533,6 +533,7 @@ test('appservice ops: list-builder mounts items on demand', {
   const fixture = path.join(
     repoRoot, 'test', 'fixtures', 'appservice-builder.ops.json');
   const { result, logs, pixels } = runOps(fixture, {
+    debugLogs: true,
     timeoutMs: 1800,
     frames: 0,
   });
@@ -563,6 +564,7 @@ test('appservice ops: fixed nodes stay pinned inside a scrollview', {
   const fixture = path.join(
     repoRoot, 'test', 'fixtures', 'appservice-fixed-scroll.ops.json');
   const { result, logs, pixels } = runOps(fixture, {
+    debugLogs: true,
     timeoutMs: 2800,
     frames: 0,
   });
@@ -583,6 +585,7 @@ test('appservice ops: builder updates use fine-grained callbacks', {
   const fixture = path.join(
     repoRoot, 'test', 'fixtures', 'appservice-builder-update.ops.json');
   const { result, logs, pixels } = runOps(fixture, {
+    debugLogs: true,
     timeoutMs: 3600,
     frames: 0,
   });

@@ -68,6 +68,7 @@ test('appservice ops: post-attach updates rebuild through the runtime', {
 }, () => {
   const fixture = path.join(repoRoot, 'test', 'fixtures', 'appservice-update.ops.json');
   const { result, logs, pixels, details } = runOps(fixture, {
+    debugLogs: true,
     timeoutMs: 2500,
     frames: 0,
   });
@@ -98,6 +99,7 @@ test('appservice ops: targeted text updates use TextSpanUpdate* callbacks', {
 }, () => {
   const fixture = path.join(repoRoot, 'test', 'fixtures', 'appservice-text-update.ops.json');
   const { result, logs, pixels, details } = runOps(fixture, {
+    debugLogs: true,
     timeoutMs: 2000,
     frames: 0,
   });
@@ -268,6 +270,7 @@ test('appservice ops: addAnimatedStyle timelines replay', {
   const fixture = path.join(
     repoRoot, 'test', 'fixtures', 'appservice-animated-style.ops.json');
   const { result, logs, pixels } = runOps(fixture, {
+    debugLogs: true,
     timeoutMs: 3000,
     frames: 0,
   });

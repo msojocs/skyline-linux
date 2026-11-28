@@ -61,6 +61,7 @@ add_library(skyline_node MODULE
   src/napi_binding.cc
   src/window_backend_stub.cc
   common/config.cc
+  common/log.cc
 )
 target_include_directories(skyline_node PRIVATE
   "${NODE_INCLUDE_DIR}"
@@ -131,6 +132,7 @@ else()
     "${SKYLINE_SHARED_MEMORY_DIR}/src/memory/manager.cc"
     "${SKYLINE_SHARED_MEMORY_DIR}/src/memory/compat.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/common/config.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/common/log.cc"
   )
   target_include_directories(shared_memory PRIVATE
     "${NODE_INCLUDE_DIR}"
@@ -243,6 +245,7 @@ if(SKYLINE_BUILD_HOST)
       host/frame_writer.cc
       host/embedder/embedder.cc
       common/config.cc
+      common/log.cc
     )
     target_include_directories(skyline_host PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}/host"

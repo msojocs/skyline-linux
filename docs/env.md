@@ -31,6 +31,7 @@ skyline.node（native/src 与 native/host/flutter_window_backend.cc）
 
 | 变量 | 类型 | 默认值 | 组件 | 说明 |
 | --- | --- | --- | --- | --- |
+| `SKYLINE_ADDON_LOG` | path | `/tmp/skyline-addon.log` | addon | skyline.node 把 info 及以上的日志追加到该文件（DevTools 的 appservice 渲染进程没有可用的控制台），超过 1 MiB 时轮转为 `.1`；设为空字符串关闭。 |
 | `SKYLINE_ASSETS` | path | — | addon | 覆盖 createWindow 使用的 flutter_assets 目录。 |
 | `SKYLINE_AOT_LIBRARY` | path | — | addon | createWindow 强制使用的 AOT 快照（libapp.so），即使 bundle 中有 kernel_blob.bin。 |
 | `SKYLINE_ICU` | path | — | addon | bundle 中没有 icudtl.dat 时使用的 ICU 数据文件。 |
@@ -51,7 +52,7 @@ sharedMemory.node（native/shared-memory）
 
 | 变量 | 类型 | 默认值 | 组件 | 说明 |
 | --- | --- | --- | --- | --- |
-| `SKYLINE_SHARED_MEMORY_LOG` | flag | — | shared-memory | 输出 sharedMemory.node 的调试日志。 |
+| `SKYLINE_SHARED_MEMORY_LOG` | flag | — | shared-memory | 输出 sharedMemory.node 的全部日志（不受 SKYLINE_LOG_LEVEL 限制）。 |
 | `SKYLINE_SHARED_MEMORY_HANDLE` | flag | — | shared-memory | 强制 Electron 句柄模式：setMemory 返回 16 字节指针/长度描述符（appservice 删除了 `process`，自动检测会退回 UA 判断）。 |
 
 ## native
@@ -60,7 +61,8 @@ sharedMemory.node（native/shared-memory）
 
 | 变量 | 类型 | 默认值 | 组件 | 说明 |
 | --- | --- | --- | --- | --- |
-| `SKYLINE_APP_SERVICE_DEBUG` | flag | — | native | 调试开关：输出回放、手势、滚动与语义树等调试日志。 |
+| `SKYLINE_LOG_LEVEL` | enum: debug / info / warning / error / off | `warning` | native | 原生日志（SKY_LOG）输出到 stderr 的最低级别。测试 harness 启动 skyline_host 时默认设为 info。 |
+| `SKYLINE_APP_SERVICE_DEBUG` | flag | — | native | 调试开关：日志级别降到 debug（回放、手势、滚动、布局与语义树等调试日志），等价于 SKYLINE_LOG_LEVEL=debug。 |
 
 ## dart
 

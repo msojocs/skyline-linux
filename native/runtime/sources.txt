@@ -25,6 +25,8 @@ include/skyline/runtime_api.h
 include/skyline/config.h
 include/skyline/config_vars.inc
 common/config.cc
+include/skyline/log.h
+common/log.cc
 
 [embedded]
 internal/skyline_runtime_ffi.hh

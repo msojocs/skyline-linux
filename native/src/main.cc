@@ -7,8 +7,6 @@
 #include <node_api.h>
 
 #include <atomic>
-#include <cstdarg>
-#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -16,7 +14,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <unistd.h>
 
 #include "bootstrap_js.h"
 #include "napi_binding.hh"
@@ -28,8 +25,9 @@
 // type-checked but are never made, and the weak references stay null.
 #define SKYLINE_RUNTIME_API_WEAK
 #endif
-#include "skyline/runtime_api.h"
 #include "skyline/config.h"
+#include "skyline/log.h"
+#include "skyline/runtime_api.h"
 
 // RUNTIME(call) calls into the embedded runtime; RUNTIME_OR(call, fallback)
 // yields `fallback` when skyline.node is built without an engine.
@@ -50,7 +48,13 @@ using skyline::napi::NewObject;
 using skyline::napi::SetNumber;
 using skyline::napi::ThreadsafeSink;
 
-void AddonLog(const char* format, ...);
+namespace config = skyline::config;
+
+constexpr char kLog[] = "skyline-addon";
+// The DevTools' appservice renderer has no accessible console, so lifecycle
+// messages also go to SKYLINE_ADDON_LOG: it tells a failed require() apart
+// from a failure later in createWindow.
+constexpr size_t kLogFileBytes = 1 << 20;
 
 // -- Events delivered to the bootstrap ------------------------------------------
 
@@ -352,16 +356,16 @@ napi_value CreateWindow(const Args& args) {
   if (!state.backend) throw Error("Skyline engine is unavailable");
   const skyline::CreateWindowArgs window =
       ParseCreateWindow(args.env(), args[0]);
-  AddonLog("createWindow id=%g bundle=%s addon=%s buffer=%p size=%zu",
-           window.window_id, window.bundle_path.c_str(),
-           window.skyline_addon_path.c_str(), window.frame_buffer,
-           window.frame_buffer_size);
+  SKY_LOG(kInfo, kLog,
+          "createWindow id=%g bundle=%s addon=%s buffer=%p size=%zu",
+          window.window_id, window.bundle_path.c_str(),
+          window.skyline_addon_path.c_str(), window.frame_buffer,
+          window.frame_buffer_size);
   state.backend->CreateWindow(window);
   // DevTools integration demo: render a static page while the private
   // appservice JS bridge is unavailable.  The page ops use the same schema as
   // the recorded fixtures.
-  const std::string& demo =
-      skyline::config::String(skyline::config::kDevtoolsDemoOps);
+  const std::string& demo = config::String(config::kDevtoolsDemoOps);
   if (!demo.empty()) {
     std::ifstream file(demo);
     if (file) {
@@ -433,10 +437,8 @@ napi_value DispatchTouch(const Args& args) {
   } else if (kind == "cancel") {
     phase = Phase::kCancel;
   }
-  if (skyline::config::Flag(skyline::config::kAppServiceDebug)) {
-    AddonLog("dispatchTouch kind=%s window=%g x=%g y=%g", kind.c_str(),
-             window_id, x, y);
-  }
+  SKY_LOG(kDebug, kLog, "dispatchTouch kind=%s window=%g x=%g y=%g",
+          kind.c_str(), window_id, x, y);
   state.backend->DispatchPointer(window_id, phase, x, y);
   return nullptr;
 }
@@ -449,10 +451,8 @@ napi_value DispatchWheel(const Args& args) {
   const double y = args.Number(2);
   const double delta_x = args.Number(3);
   const double delta_y = args.Number(4);
-  if (skyline::config::Flag(skyline::config::kAppServiceDebug)) {
-    AddonLog("dispatchWheel window=%g x=%g y=%g dx=%g dy=%g", window_id, x, y,
-             delta_x, delta_y);
-  }
+  SKY_LOG(kDebug, kLog, "dispatchWheel window=%g x=%g y=%g dx=%g dy=%g",
+          window_id, x, y, delta_x, delta_y);
   state.backend->DispatchWheel(window_id, x, y, delta_x, delta_y);
   return nullptr;
 }
@@ -531,7 +531,8 @@ napi_value ApplyPageOps(const Args& args) {
   }
   const double window_id = args.Number(0);
   const std::string json = args.String(1);
-  AddonLog("applyPageOps window=%g bytes=%zu", window_id, json.size());
+  SKY_LOG(kDebug, kLog, "applyPageOps window=%g bytes=%zu", window_id,
+          json.size());
   RUNTIME(SkylineApplyLiveOps(json.c_str(), window_id));
   return nullptr;
 }
@@ -769,7 +770,7 @@ napi_value DebugInfo(const Args& args) {
 }
 
 napi_value LogFromJs(const Args& args) {
-  AddonLog("js: %s", args.String(0).c_str());
+  SKY_LOG(kInfo, kLog, "js: %s", args.String(0).c_str());
   return nullptr;
 }
 
@@ -838,31 +839,10 @@ const Binding kBindings[] = {
     {"log", LogFromJs},
 };
 
-// Module lifecycle diagnostics.  The DevTools' appservice renderer has no
-// accessible console, so a small append-only file makes it possible to tell a
-// failed `require()` apart from a failure later in `createWindow`.
-void AddonLog(const char* format, ...) {
-  va_list args;
-  va_start(args, format);
-  std::fprintf(stderr, "[skyline-addon] ");
-  std::vfprintf(stderr, format, args);
-  std::fprintf(stderr, "\n");
-  va_end(args);
-
-  std::FILE* file = std::fopen("/tmp/skyline-addon.log", "a");
-  if (file != nullptr) {
-    std::fprintf(file, "[pid %d] ", static_cast<int>(::getpid()));
-    va_start(args, format);
-    std::vfprintf(file, format, args);
-    va_end(args);
-    std::fprintf(file, "\n");
-    std::fclose(file);
-  }
-  std::fflush(stderr);
-}
-
 napi_value Init(napi_env env) {
-  AddonLog("init begin");
+  skyline::log::SetFileSink(config::String(config::kAddonLog).c_str(),
+                            kLogFileBytes, skyline::log::Level::kInfo);
+  SKY_LOG(kInfo, kLog, "init begin");
   auto* state = new AddonState();
 #ifdef SKYLINE_HAVE_ENGINE
   state->backend = skyline::CreateFlutterWindowBackend();
@@ -914,7 +894,7 @@ napi_value Init(napi_env env) {
     // Surface the cause to require() instead of an empty module.
     throw Error("skyline.node bootstrap failed: " + message);
   }
-  AddonLog("init ok");
+  SKY_LOG(kInfo, kLog, "init ok");
 
   // The official module has no named exports.
   return NewObject(env);
@@ -926,7 +906,7 @@ NAPI_MODULE_INIT() {
   try {
     return Init(env);
   } catch (const std::exception& error) {
-    AddonLog("init failed: %s", error.what());
+    SKY_LOG(kError, kLog, "init failed: %s", error.what());
     bool pending = false;
     if (napi_is_exception_pending(env, &pending) != napi_ok || !pending) {
       napi_throw_error(env, nullptr, error.what());

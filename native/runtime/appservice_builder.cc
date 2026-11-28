@@ -170,26 +170,23 @@ void MaterializeBuilderItem(RuntimeHolder* holder, intptr_t address,
                              : kListBuilderInsertBeforeHash));
   if (pivot != nullptr && insert_before != nullptr) {
     insert_before(builder_widget, item_widget, pivot);
-    std::fprintf(stderr,
-                 "[skyline-runtime] %s: #%u index=%d before=%d\n",
-                 builder->builder_kind == 1 ? "GridBuilderInsertBefore"
-                                            : "ListBuilderInsertBefore",
-                 builder->id, index, pivot_index);
+    SKY_LOG(kDebug, kLogRuntime, "%s: #%u index=%d before=%d",
+            builder->builder_kind == 1 ? "GridBuilderInsertBefore"
+                                       : "ListBuilderInsertBefore",
+            builder->id, index, pivot_index);
   } else {
     append(builder_widget, item_widget);
-    std::fprintf(stderr,
-                 "[skyline-runtime] %s: #%u index=%d\n",
-                 builder->builder_kind == 1 ? "GridBuilderAppendChild"
-                                            : "ListBuilderAppendChild",
-                 builder->id, index);
+    SKY_LOG(kDebug, kLogRuntime, "%s: #%u index=%d",
+            builder->builder_kind == 1 ? "GridBuilderAppendChild"
+                                       : "ListBuilderAppendChild",
+            builder->id, index);
   }
   builder->builder_items[index] = Dart_NewPersistentHandle(item_widget);
   builder->builder_item_nodes[index] = item;
   builder->builder_item_signatures[index] = NodeContentSignature(item);
-  std::fprintf(stderr,
-               "[skyline-runtime] builder mount: #%u index=%d (%gx%g)\n",
-               builder->id, index, static_cast<double>(item->measured_w),
-               static_cast<double>(item->measured_h));
+  SKY_LOG(kDebug, kLogRuntime, "builder mount: #%u index=%d (%gx%g)",
+          builder->id, index, static_cast<double>(item->measured_w),
+          static_cast<double>(item->measured_h));
 }
 
 void OnBuilderBuildChild(intptr_t address, int32_t index) {
@@ -238,8 +235,8 @@ void OnBuilderDisposeChild(intptr_t address, int32_t index) {
     builder->builder_items.erase(item);
     builder->builder_item_nodes.erase(index);
     builder->builder_item_signatures.erase(index);
-    std::fprintf(stderr, "[skyline-runtime] builder dispose: #%u index=%d\n",
-                 builder->id, index);
+    SKY_LOG(kDebug, kLogRuntime, "builder dispose: #%u index=%d", builder->id,
+            index);
   });
 }
 
@@ -329,11 +326,10 @@ Dart_Handle RebuildBuilderItemContent(RuntimeHolder* holder, AppNode* builder,
   if (update_children != nullptr) update_children(updated, children);
   if (mark_needs_layout != nullptr) mark_needs_layout(updated);
   builder->builder_item_signatures[index] = NodeContentSignature(item);
-  std::fprintf(stderr,
-               "[skyline-runtime] %s: #%u index=%d\n",
-               builder->builder_kind == 1 ? "GridBuilderItemUpdateChildren"
-                                          : "ListBuilderItemUpdateChildren",
-               builder->id, index);
+  SKY_LOG(kDebug, kLogRuntime, "%s: #%u index=%d",
+          builder->builder_kind == 1 ? "GridBuilderItemUpdateChildren"
+                                     : "ListBuilderItemUpdateChildren",
+          builder->id, index);
   return updated;
 }
 
@@ -372,11 +368,10 @@ bool SyncAppServiceBuilders(RuntimeHolder* holder) {
         builder->builder_child_count = child_count;
         builder->builder_synced_child_count = child_count;
         changed = true;
-        std::fprintf(stderr,
-                     "[skyline-runtime] %s: #%u childCount=%d\n",
-                     grid ? "GridBuilderUpdateChildCount"
-                          : "ListBuilderUpdateChildCount",
-                     builder->id, child_count);
+        SKY_LOG(kDebug, kLogRuntime, "%s: #%u childCount=%d",
+                grid ? "GridBuilderUpdateChildCount"
+                     : "ListBuilderUpdateChildCount",
+                builder->id, child_count);
       }
     }
 
@@ -391,10 +386,9 @@ bool SyncAppServiceBuilders(RuntimeHolder* holder) {
           builder->builder_cross_axis_count = cross;
           builder->builder_synced_cross_axis_count = cross;
           changed = true;
-          std::fprintf(stderr,
-                       "[skyline-runtime] GridBuilderUpdateCrossAxisCount: "
-                       "#%u count=%d\n",
-                       builder->id, cross);
+          SKY_LOG(kDebug, kLogRuntime,
+                  "GridBuilderUpdateCrossAxisCount: #%u count=%d", builder->id,
+                  cross);
         }
       }
       const float main_spacing =
@@ -447,10 +441,9 @@ bool SyncAppServiceBuilders(RuntimeHolder* holder) {
           builder->builder_child_height = child_height;
           builder->builder_synced_child_height = child_height;
           changed = true;
-          std::fprintf(stderr,
-                       "[skyline-runtime] ListBuilderUpdateChildHeight: "
-                       "#%u height=%g\n",
-                       builder->id, child_height);
+          SKY_LOG(kDebug, kLogRuntime,
+                  "ListBuilderUpdateChildHeight: #%u height=%g", builder->id,
+                  child_height);
         }
       }
     }
@@ -502,11 +495,10 @@ bool SyncAppServiceBuilders(RuntimeHolder* holder) {
         if (update_index != nullptr) {
           update_index(Dart_HandleFromPersistent(item_handle->second),
                        declared_index);
-          std::fprintf(stderr,
-                       "[skyline-runtime] %s: #%u index %d -> %d\n",
-                       grid ? "GridBuilderItemUpdateIndex"
-                            : "ListBuilderItemUpdateIndex",
-                       builder->id, index, declared_index);
+          SKY_LOG(kDebug, kLogRuntime, "%s: #%u index %d -> %d",
+                  grid ? "GridBuilderItemUpdateIndex"
+                       : "ListBuilderItemUpdateIndex",
+                  builder->id, index, declared_index);
         }
       }
       const uint64_t signature = NodeContentSignature(item);
@@ -538,10 +530,9 @@ bool SyncAppServiceBuilders(RuntimeHolder* holder) {
       builder->builder_item_nodes.erase(index);
       builder->builder_item_signatures.erase(index);
       changed = true;
-      std::fprintf(stderr,
-                   "[skyline-runtime] %s: #%u remove index=%d\n",
-                   grid ? "GridBuilderRemoveChild" : "ListBuilderRemoveChild",
-                   builder->id, index);
+      SKY_LOG(kDebug, kLogRuntime, "%s: #%u remove index=%d",
+              grid ? "GridBuilderRemoveChild" : "ListBuilderRemoveChild",
+              builder->id, index);
     }
     if (content_updates > 0) {
       // Hand Flutter one consistent item list; this is the callback that makes
@@ -564,12 +555,11 @@ bool SyncAppServiceBuilders(RuntimeHolder* holder) {
           Dart_ListSetAt(list, static_cast<intptr_t>(i), handles[i]);
         }
         update_children(builder_widget, list);
-        std::fprintf(stderr,
-                     "[skyline-runtime] %s: #%u (%d item(s), %zu updated)\n",
-                     grid ? "GridBuilderUpdateChildren"
-                          : "ListBuilderUpdateChildren",
-                     builder->id, static_cast<int>(handles.size()),
-                     static_cast<size_t>(content_updates));
+        SKY_LOG(
+            kDebug, kLogRuntime, "%s: #%u (%d item(s), %zu updated)",
+            grid ? "GridBuilderUpdateChildren" : "ListBuilderUpdateChildren",
+            builder->id, static_cast<int>(handles.size()),
+            static_cast<size_t>(content_updates));
       }
     }
   }

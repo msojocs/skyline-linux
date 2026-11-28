@@ -7,13 +7,11 @@
 #include <cstring>
 #include <stdexcept>
 
-#include "skyline/config.h"
+#include "skyline/log.h"
 #include "skyline/runtime_api.h"
 
 namespace skyline::embedder {
 namespace {
-
-namespace config = skyline::config;
 
 void PutU32(uint8_t* out, uint32_t value) {
   out[0] = static_cast<uint8_t>(value);
@@ -83,28 +81,33 @@ void WriteFrameHeader(void* data_area, uint32_t frame_id,
   PutU32(header, frame_id);
 }
 
-void LogSemanticsUpdate(const char* prefix,
+void LogSemanticsUpdate(const char* category,
                         const FlutterSemanticsUpdate2* update) {
-  if (update == nullptr || !config::Flag(config::kAppServiceDebug)) {
-    return;
-  }
+  if (update == nullptr || !SKY_LOG_ENABLED(kDebug)) return;
   for (size_t i = 0; i < update->node_count; i++) {
     const FlutterSemanticsNode2* node = update->nodes[i];
     if (node == nullptr) continue;
     const FlutterSemanticsFlags* flags = node->flags2;
-    std::fprintf(stderr,
-                 "%s semantics node: id=%d label=\"%s\" value=\"%s\" "
-                 "button=%d textField=%d header=%d children=%zu "
-                 "rect=(%g,%g %gx%g)\n",
-                 prefix, node->id, node->label != nullptr ? node->label : "",
-                 node->value != nullptr ? node->value : "",
-                 flags != nullptr && flags->is_button ? 1 : 0,
-                 flags != nullptr && flags->is_text_field ? 1 : 0,
-                 flags != nullptr && flags->is_header ? 1 : 0,
-                 node->child_count, node->rect.left, node->rect.top,
-                 node->rect.right - node->rect.left,
-                 node->rect.bottom - node->rect.top);
+    SKY_LOG(kDebug, category,
+            "semantics node: id=%d label=\"%s\" value=\"%s\" button=%d "
+            "textField=%d header=%d children=%zu rect=(%g,%g %gx%g)",
+            node->id, node->label != nullptr ? node->label : "",
+            node->value != nullptr ? node->value : "",
+            flags != nullptr && flags->is_button ? 1 : 0,
+            flags != nullptr && flags->is_text_field ? 1 : 0,
+            flags != nullptr && flags->is_header ? 1 : 0, node->child_count,
+            node->rect.left, node->rect.top, node->rect.right - node->rect.left,
+            node->rect.bottom - node->rect.top);
   }
+}
+
+void LogEngineMessage(const char* category, const char* tag,
+                      const char* message) {
+  if (!SKY_LOG_ENABLED(kWarning)) return;
+  const std::string full_category =
+      std::string(category) + ":" + (tag != nullptr ? tag : "?");
+  skyline::log::Write(skyline::log::Level::kWarning, full_category.c_str(),
+                      "%s", message != nullptr ? message : "");
 }
 
 // -- RunningEngine ---------------------------------------------------------------
@@ -258,15 +261,14 @@ bool PlatformLoop::RunOnce(FlutterEngine engine,
                      : static_cast<FlutterAccessibilityFeature>(0);
       const FlutterEngineResult result =
           FlutterEngineUpdateAccessibilityFeatures(engine, features);
-      std::fprintf(stderr, "%s accessibility features: %d (result=%d)\n",
-                   log_prefix_.c_str(), static_cast<int>(features),
-                   static_cast<int>(result));
+      SKY_LOG(kInfo, category_, "%saccessibility features: %d (result=%d)",
+              label_.c_str(), static_cast<int>(features),
+              static_cast<int>(result));
     } else {
       const FlutterEngineResult result =
           FlutterEngineUpdateSemanticsEnabled(engine, value != 0);
-      std::fprintf(stderr, "%s semantics enabled: %d (result=%d)\n",
-                   log_prefix_.c_str(), value != 0 ? 1 : 0,
-                   static_cast<int>(result));
+      SKY_LOG(kInfo, category_, "%ssemantics enabled: %d (result=%d)",
+              label_.c_str(), value != 0 ? 1 : 0, static_cast<int>(result));
     }
   }
   for (auto& task : tasks) task();

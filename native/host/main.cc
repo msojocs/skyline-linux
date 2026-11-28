@@ -23,6 +23,7 @@
 #include "embedder/embedder.hh"
 #include "frame_writer.hh"
 #include "skyline/config.h"
+#include "skyline/log.h"
 
 // Weak references keep the host usable with an engine built without the
 // embedded Skyline runtime: every runtime function is then null.
@@ -30,6 +31,8 @@
 #include "skyline/runtime_api.h"
 
 namespace {
+
+constexpr char kLog[] = "host";
 
 constexpr int kExitOk = 0;
 constexpr int kExitEngineRunFailed = 70;
@@ -43,7 +46,7 @@ using skyline::embedder::JoinPath;
 struct HostState {
   // Vsync batons, platform tasks and accessibility requests; serviced by the
   // main thread, which runs FlutterEngineRun.
-  skyline::embedder::PlatformLoop loop{"[host]"};
+  skyline::embedder::PlatformLoop loop{kLog, ""};
 
   std::mutex mutex;
   // `presented` becomes true once `captured_frames` reaches `target_frames`.
@@ -65,7 +68,7 @@ struct HostState {
 // SKYLINE_APP_SERVICE_DEBUG each node is logged so automation/tests can assert
 // labels/roles without a platform accessibility service.
 void OnSemanticsUpdate(const FlutterSemanticsUpdate2* update, void* /*data*/) {
-  skyline::embedder::LogSemanticsUpdate("[host]", update);
+  skyline::embedder::LogSemanticsUpdate(kLog, update);
 }
 
 struct Options {
@@ -124,8 +127,7 @@ struct Options {
 };
 
 void OnLogMessage(const char* tag, const char* message, void* /*user_data*/) {
-  std::fprintf(stderr, "[flutter:%s] %s\n", tag ? tag : "?",
-               message ? message : "");
+  skyline::embedder::LogEngineMessage("flutter", tag, message);
 }
 
 void OnVsync(void* user_data, intptr_t baton) {
@@ -465,7 +467,7 @@ bool ParseOptions(int argc, char** argv, Options* opts) {
 }
 
 void OnKeyEvent(bool handled, void* /*user_data*/) {
-  std::fprintf(stderr, "[host] key event handled=%d\n", handled ? 1 : 0);
+  SKY_LOG(kInfo, kLog, "key event handled=%d", handled ? 1 : 0);
 }
 
 }  // namespace
@@ -526,7 +528,7 @@ int main(int argc, char** argv) {
     return kExitEngineRunFailed;
   }
   if (use_aot) {
-    std::fprintf(stderr, "[host] AOT snapshot: %s\n", aot_library.c_str());
+    SKY_LOG(kInfo, kLog, "AOT snapshot: %s", aot_library.c_str());
   }
   // The embedded runtime (linked into libflutter_engine.so) may have queued an
   // accessibility state before the host existed.  Install the sink now; its
@@ -648,11 +650,11 @@ int main(int argc, char** argv) {
                        static_cast<int>(message_result));
         }
       } else {
-        std::fprintf(stderr, "[host] DispatchSkylineKeyEvent unavailable\n");
+        SKY_LOG(kWarning, kLog, "DispatchSkylineKeyEvent unavailable");
       }
-      std::fprintf(stderr, "[host] key event sent: at=%d type=%d logical=%llu\n",
-                   scripted.at_ms, static_cast<int>(scripted.type),
-                   static_cast<unsigned long long>(scripted.logical));
+      SKY_LOG(kInfo, kLog, "key event sent: at=%d type=%d logical=%llu",
+              scripted.at_ms, static_cast<int>(scripted.type),
+              static_cast<unsigned long long>(scripted.logical));
       ++next_key;
     }
 
@@ -668,10 +670,10 @@ int main(int argc, char** argv) {
                      "FlutterEngineSendWindowMetricsEvent (resize) failed: %d\n",
                      static_cast<int>(resize_result));
       }
-      std::fprintf(stderr, "[host] resize: at=%d %gx%g dpr=%g -> %zux%zu\n",
-                   scripted.at_ms, scripted.width, scripted.height, dpr,
-                   skyline::embedder::PhysicalPixels(scripted.width, dpr),
-                   skyline::embedder::PhysicalPixels(scripted.height, dpr));
+      SKY_LOG(kInfo, kLog, "resize: at=%d %gx%g dpr=%g -> %zux%zu",
+              scripted.at_ms, scripted.width, scripted.height, dpr,
+              skyline::embedder::PhysicalPixels(scripted.width, dpr),
+              skyline::embedder::PhysicalPixels(scripted.height, dpr));
       ++next_resize;
     }
 

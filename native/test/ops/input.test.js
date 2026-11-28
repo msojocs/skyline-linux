@@ -268,6 +268,7 @@ test('appservice ops: host key events drive the keyboard channel', {
   ].join('\n'));
   try {
     const { result, logs, details } = runOps(ops, {
+      debugLogs: true,
       timeoutMs: 2600,
       frames: 0,
       args: ['--key-script', script],
@@ -317,6 +318,7 @@ test('appservice ops: editing keys move the cursor and replace selections', {
   ].join('\n'));
   try {
     const { result, logs } = runOps(ops, {
+      debugLogs: true,
       timeoutMs: 2600,
       frames: 0,
       args: ['--key-script', script],
@@ -370,6 +372,7 @@ test('appservice ops: composition replaces the selected range', {
   }));
   try {
     const { result, logs } = runOps(ops, {
+      debugLogs: true,
       timeoutMs: 2200,
       frames: 0,
     });

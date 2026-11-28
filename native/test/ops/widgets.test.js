@@ -274,7 +274,7 @@ test('appservice ops: programmatic input focus and blur', {
     ],
   }));
   try {
-    const { result, logs } = runOps(ops, { timeoutMs: 2500, frames: 0 });
+    const { result, logs } = runOps(ops, { debugLogs: true, timeoutMs: 2500, frames: 0 });
     assert.equal(result.status, 0, `skyline_host failed (status ${result.status}):\n${logs}`);
     // InputFocusManually/BlurManually run against the real NewInput handle.
     assert.match(logs, /InputFocusManually: id=3/);

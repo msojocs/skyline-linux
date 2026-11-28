@@ -90,6 +90,7 @@ test('appservice ops: @font-face drives the resource-loading channel', {
 
   try {
     const { result, logs } = runOps(fixture, {
+      debugLogs: true,
       timeoutMs: 2000,
       frames: 0,
       env: { SKYLINE_RESOURCE_ROOT: resourceRoot },
@@ -154,6 +155,7 @@ test('appservice ops: loaded fonts refresh pending text in place', {
   }));
   try {
     const { result, logs } = runOps(ops, {
+      debugLogs: true,
       timeoutMs: 2500,
       frames: 0,
       env: { SKYLINE_RESOURCE_ROOT: dir },
@@ -203,6 +205,7 @@ test('appservice ops: repeated font resources hit the native cache', {
   }));
   try {
     const { result, logs } = runOps(ops, {
+      debugLogs: true,
       timeoutMs: 2500,
       frames: 0,
       env: { SKYLINE_RESOURCE_ROOT: dir },

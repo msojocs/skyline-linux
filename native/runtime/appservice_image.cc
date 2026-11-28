@@ -128,14 +128,11 @@ void DirectRenderImagePaint(intptr_t ptr, Dart_Handle canvas_handle,
   if (!node->image_dl) return;
 
   auto* canvas = tonic::DartConverter<flutter::Canvas*>::FromDart(canvas_handle);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] image paint: ptr=0x%lx canvas=%p %dx%d "
-                 "size=%gx%g at (%g,%g)\n",
-                 static_cast<long>(ptr), static_cast<void*>(canvas),
-                 node->image_dl->width(), node->image_dl->height(), width, height,
-                 offset_x, offset_y);
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "image paint: ptr=0x%lx canvas=%p %dx%d size=%gx%g at (%g,%g)",
+          static_cast<long>(ptr), static_cast<void*>(canvas),
+          node->image_dl->width(), node->image_dl->height(), width, height,
+          offset_x, offset_y);
   if (canvas == nullptr || canvas->builder() == nullptr) {
     return;
   }
@@ -312,9 +309,9 @@ void AssignNodeImage(AppNode* node, const sk_sp<flutter::DlImage>& image,
   target = image;
   node->image_loaded = true;
   node->image_pending = false;
-  std::fprintf(stderr, "[skyline-runtime] image #%u: %s (%dx%d)\n", node->id,
-               background ? "background image" : "image",
-               image ? image->width() : 0, image ? image->height() : 0);
+  SKY_LOG(kDebug, kLogRuntime, "image #%u: %s (%dx%d)", node->id,
+          background ? "background image" : "image", image ? image->width() : 0,
+          image ? image->height() : 0);
 }
 
 void RebuildAppServicePage(RuntimeHolder* holder);
@@ -387,9 +384,8 @@ void CancelNetworkImage(AppNode* node) {
     auto& nodes = found->second.nodes;
     nodes.erase(std::remove(nodes.begin(), nodes.end(), node), nodes.end());
     if (nodes.empty()) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] image request %u cancelled (%s)\n",
-                   node->image_request_id, found->second.source.c_str());
+      SKY_LOG(kDebug, kLogRuntime, "image request %u cancelled (%s)",
+              node->image_request_id, found->second.source.c_str());
       g_pending_image_by_source.erase(found->second.source);
       RuntimeHolder* holder = found->second.holder;
       if (holder != nullptr) {
@@ -438,10 +434,9 @@ void OnSvgToRgbaResponse(intptr_t /*runtime_ptr*/, intptr_t /*ptr*/, int32_t id,
   sk_sp<flutter::DlImage> image =
       DecodeRgbaImage(bytes.data(), bytes.size(), width, height);
   if (!image) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] image #%u: SVG payload unusable (%dx%d, "
-                 "%zu bytes)\n",
-                 node->id, width, height, bytes.size());
+    SKY_LOG(kInfo, kLogRuntime,
+            "image #%u: SVG payload unusable (%dx%d, %zu bytes)", node->id,
+            width, height, bytes.size());
     node->image_failed = true;
     node->image_pending = false;
     return;
@@ -461,9 +456,8 @@ bool StartSvgDecode(AppNode* node, const std::string& source,
   auto* svg = reinterpret_cast<SvgToRgbaFn>(
       FindCallback(holder->ffi_table, kSvgToRgbaHash));
   if (svg == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] image #%u: SvgToRgba callback missing\n",
-                 node->id);
+    SKY_LOG(kWarning, kLogRuntime, "image #%u: SvgToRgba callback missing",
+            node->id);
     return false;
   }
   Dart_Handle raw =
@@ -485,8 +479,8 @@ bool StartSvgDecode(AppNode* node, const std::string& source,
   node->image_pending = true;
   node->image_source = source;
   node->image_target_background = background;
-  std::fprintf(stderr, "[skyline-runtime] image #%u: SVG %s (request=%d)\n",
-               node->id, source.c_str(), id);
+  SKY_LOG(kDebug, kLogRuntime, "image #%u: SVG %s (request=%d)", node->id,
+          source.c_str(), id);
   svg(node->address, 1.0, id, url, raw, 0.0, 0.0,
       reinterpret_cast<void*>(&OnSvgToRgbaResponse));
   return true;
@@ -521,16 +515,14 @@ void IssueDartImageRequest(RuntimeHolder* holder, uint32_t request_id,
       holder != nullptr ? holder->ffi_table : nullptr,
       kRequestHttpResourceHash);
   if (request == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] image request %u: "
-                 "RequestHttpResource missing\n",
-                 request_id);
+    SKY_LOG(kWarning, kLogRuntime,
+            "image request %u: RequestHttpResource missing", request_id);
     DeliverImagePayload(request_id, {});
     return;
   }
   Dart_Handle url = Dart_NewStringFromCString(source.c_str());
-  std::fprintf(stderr, "[skyline-runtime] image request %u starting (dart:io)\n",
-               request_id);
+  SKY_LOG(kDebug, kLogRuntime, "image request %u starting (dart:io)",
+          request_id);
   reinterpret_cast<RequestHttpResourceFn>(request)(
       request_id, url, reinterpret_cast<void*>(&OnImageResourceResponse));
 }
@@ -553,9 +545,8 @@ void StartDartImageRequest(RuntimeHolder* holder, uint32_t request_id,
 void DeliverImagePayload(uint32_t request_id, std::vector<uint8_t> bytes) {
   auto found = g_pending_image_requests.find(request_id);
   if (found == g_pending_image_requests.end()) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] image response for unknown request %u\n",
-                 request_id);
+    SKY_LOG(kWarning, kLogRuntime, "image response for unknown request %u",
+            request_id);
     return;
   }
   PendingImageRequest pending = found->second;
@@ -564,10 +555,9 @@ void DeliverImagePayload(uint32_t request_id, std::vector<uint8_t> bytes) {
     // in-engine dart:io client so images still render.
     pending.via_shell = false;
     g_pending_image_requests[request_id] = pending;
-    std::fprintf(stderr,
-                 "[skyline-runtime] image request %u: shell fetch empty, "
-                 "falling back to dart:io\n",
-                 request_id);
+    SKY_LOG(kInfo, kLogRuntime,
+            "image request %u: shell fetch empty, falling back to dart:io",
+            request_id);
     StartDartImageRequest(pending.holder, request_id, pending.source);
     return;
   }
@@ -607,9 +597,8 @@ void DeliverImagePayload(uint32_t request_id, std::vector<uint8_t> bytes) {
         node->image_pending = false;
       }
     }
-    std::fprintf(stderr,
-                 "[skyline-runtime] network payload unusable (%zu bytes)\n",
-                 bytes.size());
+    SKY_LOG(kInfo, kLogRuntime, "network payload unusable (%zu bytes)",
+            bytes.size());
     return;
   }
   CacheImage(pending.source, image);
@@ -632,10 +621,9 @@ void DeliverImagePayload(uint32_t request_id, std::vector<uint8_t> bytes) {
       MarkNodeImageDirty(node->address, pending.holder);
     }
   }
-  std::fprintf(stderr,
-               "[skyline-runtime] network image (%zu bytes) for %zu node(s), "
-               "rebuilding page\n",
-               bytes.size(), pending.nodes.size());
+  SKY_LOG(kInfo, kLogRuntime,
+          "network image (%zu bytes) for %zu node(s), rebuilding page",
+          bytes.size(), pending.nodes.size());
   if (any) RepaintAfterImage(pending.holder, any_background, decorated);
 }
 
@@ -646,9 +634,8 @@ bool StartNetworkImage(AppNode* node, const std::string& source,
   if (!via_shell &&
       FindCallback(holder != nullptr ? holder->ffi_table : nullptr,
                    kRequestHttpResourceHash) == nullptr) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] image #%u: RequestHttpResource missing\n",
-                 node->id);
+    SKY_LOG(kWarning, kLogRuntime, "image #%u: RequestHttpResource missing",
+            node->id);
     node->image_failed = true;
     return false;
   }
@@ -664,10 +651,9 @@ bool StartNetworkImage(AppNode* node, const std::string& source,
       entry.nodes.push_back(node);
     }
     node->image_request_id = pending->second;
-    std::fprintf(stderr,
-                 "[skyline-runtime] image #%u: join pending fetch %s "
-                 "(request=%u)\n",
-                 node->id, source.c_str(), pending->second);
+    SKY_LOG(kDebug, kLogRuntime,
+            "image #%u: join pending fetch %s (request=%u)", node->id,
+            source.c_str(), pending->second);
     return false;
   }
 
@@ -680,8 +666,8 @@ bool StartNetworkImage(AppNode* node, const std::string& source,
   entry.via_shell = via_shell;
   g_pending_image_requests[request_id] = entry;
   g_pending_image_by_source[source] = request_id;
-  std::fprintf(stderr, "[skyline-runtime] image #%u: fetch %s (request=%u)\n",
-               node->id, source.c_str(), request_id);
+  SKY_LOG(kDebug, kLogRuntime, "image #%u: fetch %s (request=%u)", node->id,
+          source.c_str(), request_id);
   // Start the request from a follow-up UI task: the Dart-side
   // `RequestHttpResource` is an async callback and must not be entered from
   // the middle of page construction.
@@ -690,9 +676,8 @@ bool StartNetworkImage(AppNode* node, const std::string& source,
   if (runner) {
     runner->PostTask([holder, request_id, source, via_shell, runner]() {
       if (via_shell) {
-        std::fprintf(stderr,
-                     "[skyline-runtime] image request %u via DevTools shell\n",
-                     request_id);
+        SKY_LOG(kDebug, kLogRuntime, "image request %u via DevTools shell",
+                request_id);
         RequestShellHttp(request_id, source);
         // The DevTools fetch callback has no error return path; if it never
         // completes (CORS, pageframe teardown), fall back to the in-engine
@@ -705,10 +690,10 @@ bool StartNetworkImage(AppNode* node, const std::string& source,
                 return;
               }
               found->second.via_shell = false;
-              std::fprintf(stderr,
-                           "[skyline-runtime] image request %u: shell timeout, "
-                           "falling back to dart:io\n",
-                           request_id);
+              SKY_LOG(
+                  kWarning, kLogRuntime,
+                  "image request %u: shell timeout, falling back to dart:io",
+                  request_id);
               StartDartImageRequest(holder, request_id, source);
             },
             fml::TimeDelta::FromMilliseconds(2000));
@@ -781,15 +766,15 @@ bool DecodeDataUri(const std::string& uri, std::vector<uint8_t>* out) {
 bool LoadImageSource(AppNode* node, const std::string& source, bool background,
                      RuntimeHolder* holder) {
   if (source.empty()) {
-    std::fprintf(stderr, "[skyline-runtime] image #%u: no source\n", node->id);
+    SKY_LOG(kInfo, kLogRuntime, "image #%u: no source", node->id);
     node->image_failed = true;
     return false;
   }
   auto cached = ImageCache().find(source);
   if (cached != ImageCache().end() && cached->second) {
     AssignNodeImage(node, cached->second, background);
-    std::fprintf(stderr, "[skyline-runtime] image #%u: cache hit %s\n",
-                 node->id, source.c_str());
+    SKY_LOG(kDebug, kLogRuntime, "image #%u: cache hit %s", node->id,
+            source.c_str());
     return true;
   }
 
@@ -800,8 +785,7 @@ bool LoadImageSource(AppNode* node, const std::string& source, bool background,
   if (StartsWith(source, "data:")) {
     std::vector<uint8_t> bytes;
     if (!DecodeDataUri(source, &bytes)) {
-      std::fprintf(stderr, "[skyline-runtime] image #%u: bad data URI\n",
-                   node->id);
+      SKY_LOG(kInfo, kLogRuntime, "image #%u: bad data URI", node->id);
       node->image_failed = true;
       return false;
     }
@@ -811,8 +795,8 @@ bool LoadImageSource(AppNode* node, const std::string& source, bool background,
     sk_sp<flutter::DlImage> image =
         DecodeEncodedImage(bytes.data(), bytes.size());
     if (!image) {
-      std::fprintf(stderr, "[skyline-runtime] image #%u: cannot decode data URI\n",
-                   node->id);
+      SKY_LOG(kWarning, kLogRuntime, "image #%u: cannot decode data URI",
+              node->id);
       node->image_failed = true;
       return false;
     }
@@ -828,14 +812,14 @@ bool LoadImageSource(AppNode* node, const std::string& source, bool background,
     // route them through the shell resource loader (the JS side reads the
     // project file and completes the same request id).
     if (ShellHttpAvailable()) {
-      std::fprintf(stderr,
-                   "[skyline-runtime] image #%u: %s not on disk; requesting "
-                   "through the DevTools resource loader\n",
-                   node->id, source.c_str());
+      SKY_LOG(kInfo, kLogRuntime,
+              "image #%u: %s not on disk; requesting through the DevTools "
+              "resource loader",
+              node->id, source.c_str());
       return StartNetworkImage(node, source, background, holder);
     }
-    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot read %s\n",
-                 node->id, resolved.c_str());
+    SKY_LOG(kWarning, kLogRuntime, "image #%u: cannot read %s", node->id,
+            resolved.c_str());
     node->image_failed = true;
     return false;
   }
@@ -844,24 +828,22 @@ bool LoadImageSource(AppNode* node, const std::string& source, bool background,
   }
   sk_sp<flutter::DlImage> image = DecodeEncodedImage(bytes.data(), bytes.size());
   if (!image) {
-    std::fprintf(stderr, "[skyline-runtime] image #%u: cannot decode %s\n",
-                 node->id, source.c_str());
+    SKY_LOG(kWarning, kLogRuntime, "image #%u: cannot decode %s", node->id,
+            source.c_str());
     node->image_failed = true;
     return false;
   }
   CacheImage(source, image);
   AssignNodeImage(node, image, background);
   if (background) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] background image #%u: %s -> %s (%zu bytes, "
-                 "%dx%d)\n",
-                 node->id, source.c_str(), resolved.c_str(), bytes.size(),
-                 image->width(), image->height());
+    SKY_LOG(kDebug, kLogRuntime,
+            "background image #%u: %s -> %s (%zu bytes, %dx%d)", node->id,
+            source.c_str(), resolved.c_str(), bytes.size(), image->width(),
+            image->height());
   } else {
-    std::fprintf(stderr,
-                 "[skyline-runtime] image #%u: %s -> %s (%zu bytes, %dx%d)\n",
-                 node->id, source.c_str(), resolved.c_str(), bytes.size(),
-                 image->width(), image->height());
+    SKY_LOG(kDebug, kLogRuntime, "image #%u: %s -> %s (%zu bytes, %dx%d)",
+            node->id, source.c_str(), resolved.c_str(), bytes.size(),
+            image->width(), image->height());
   }
   return true;
 }
@@ -880,8 +862,7 @@ bool LoadImageForNode(AppNode* node) {
     }
   }
   if (source.empty()) {
-    std::fprintf(stderr, "[skyline-runtime] image #%u: no src attribute\n",
-                 node->id);
+    SKY_LOG(kInfo, kLogRuntime, "image #%u: no src attribute", node->id);
     node->image_failed = true;
     return false;
   }

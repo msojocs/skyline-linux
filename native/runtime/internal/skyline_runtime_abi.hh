@@ -73,6 +73,10 @@
 // Environment variables, read once (tools/env-vars.json).
 #include "skyline/config.h"
 namespace config = skyline::config;
+// SKY_LOG; the categories keep the prefixes of the runtime's earlier output.
+#include "skyline/log.h"
+inline constexpr char kLogRuntime[] = "skyline-runtime";
+inline constexpr char kLogOps[] = "ops-debug";
 
 // Global-scope ABI value types returned/consumed by the exported C API.
 struct SkylineLayoutSize {
@@ -144,7 +148,8 @@ extern Dart_Isolate g_isolate;
 #endif
 
 RuntimeHolder* HolderOrFallback(void* pointer);
-void LogTwo(const char* level, SkylineHandle tag, SkylineHandle message);
+void LogTwo(skyline::log::Level level, const char* category, SkylineHandle tag,
+            SkylineHandle message);
 void* FindCallback(FfiTable* table, uint32_t hash);
 
 template <typename T>

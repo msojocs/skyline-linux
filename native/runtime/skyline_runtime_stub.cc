@@ -52,29 +52,35 @@ double g_viewport_height = 0.0;
 #ifdef SKYLINE_EMBEDDED
 Dart_Isolate g_isolate = nullptr;
 
-void LogTwo(const char* level, SkylineHandle tag, SkylineHandle message) {
-  std::fprintf(stderr, "[skyline-runtime:%s] ", level);
-  if (tag != nullptr && Dart_IsString(tag)) {
-    const char* text = nullptr;
-    if (!Dart_IsError(Dart_StringToCString(tag, &text)) && text != nullptr) {
-      std::fprintf(stderr, "%s: ", text);
-    }
+void LogTwo(skyline::log::Level level, const char* category, SkylineHandle tag,
+            SkylineHandle message) {
+  if (!skyline::log::Enabled(level)) return;
+  const char* tag_text = nullptr;
+  if (tag != nullptr && Dart_IsString(tag) &&
+      Dart_IsError(Dart_StringToCString(tag, &tag_text))) {
+    tag_text = nullptr;
   }
-  if (message != nullptr && Dart_IsString(message)) {
-    const char* text = nullptr;
-    if (!Dart_IsError(Dart_StringToCString(message, &text)) && text != nullptr) {
-      std::fprintf(stderr, "%s\n", text);
-      return;
-    }
+  const char* message_text = nullptr;
+  if (message != nullptr && Dart_IsString(message) &&
+      Dart_IsError(Dart_StringToCString(message, &message_text))) {
+    message_text = nullptr;
   }
-  std::fprintf(stderr, "<message>\n");
+  if (message_text == nullptr) message_text = "<message>";
+  if (tag_text != nullptr) {
+    skyline::log::Write(level, category, "%s: %s", tag_text, message_text);
+  } else {
+    skyline::log::Write(level, category, "%s", message_text);
+  }
 }
 #else
 // The Dart API DL table does not expose string conversion, so log lines only
 // carry the level.  Message text is still visible through
 // `--entrypoint-arg` diagnostics / the Flutter host's own log callback.
-void LogTwo(const char* level, SkylineHandle /*tag*/, SkylineHandle /*message*/) {
-  std::fprintf(stderr, "[skyline-runtime:%s] <message>\n", level);
+void LogTwo(skyline::log::Level level, const char* category,
+            SkylineHandle /*tag*/, SkylineHandle /*message*/) {
+  if (skyline::log::Enabled(level)) {
+    skyline::log::Write(level, category, "<message>");
+  }
 }
 #endif
 
@@ -93,15 +99,15 @@ SKYLINE_EXPORT extern "C" intptr_t InitDartAPIDLSkyline(void* data) {
   // The full Dart API is linked in; nothing to initialize.
   (void)data;
   g_dart_api_initialized = true;
-  std::fprintf(stderr, "[skyline-runtime] embedded Dart API ready (build %s)\n",
-               SKYLINE_RUNTIME_BUILD_ID);
+  SKY_LOG(kInfo, kLogRuntime, "embedded Dart API ready (build %s)",
+          SKYLINE_RUNTIME_BUILD_ID);
   return 0;
 #else
 #if __has_include(<dart_api_dl.h>)
   const intptr_t result = Dart_InitializeApiDL(data);
   g_dart_api_initialized = (result == 0);
-  std::fprintf(stderr, "[skyline-runtime] Dart_InitializeApiDL -> %lld\n",
-               static_cast<long long>(result));
+  SKY_LOG(kInfo, kLogRuntime, "Dart_InitializeApiDL -> %lld",
+          static_cast<long long>(result));
   return result;
 #else
   (void)data;
@@ -199,14 +205,15 @@ SKYLINE_EXPORT extern "C" void NotifyFlutterReady(void* holder_ptr) {
   RuntimeHolder* holder = HolderOrFallback(holder_ptr);
   void* callback = FindCallback(holder->ffi_table, kRunApplicationHash);
   if (callback != nullptr) {
-    std::fprintf(stderr, "[skyline-runtime] NotifyFlutterReady -> RunApplication\n");
+    SKY_LOG(kInfo, kLogRuntime, "NotifyFlutterReady -> RunApplication");
     reinterpret_cast<void (*)()>(callback)();
 #ifdef SKYLINE_EMBEDDED
     ScheduleCreateDemoPage(holder);
     ApplyPendingLiveOpsOnUi();
 #endif
   } else {
-    std::fprintf(stderr, "[skyline-runtime] NotifyFlutterReady: RunApplication not registered\n");
+    SKY_LOG(kWarning, kLogRuntime,
+            "NotifyFlutterReady: RunApplication not registered");
   }
 }
 
@@ -215,20 +222,26 @@ SKYLINE_EXPORT extern "C" void NotifyFlutterReady(void* holder_ptr) {
 // Logging
 // ---------------------------------------------------------------------------
 
+// package:skyline's logger; the category keeps the Dart level letter.
 SKYLINE_EXPORT extern "C" void LogVerbose(void* tag, void* message) {
-  LogTwo("V", static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
+  LogTwo(skyline::log::Level::kDebug, "skyline-runtime:V",
+         static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
 }
 SKYLINE_EXPORT extern "C" void LogDebug(void* tag, void* message) {
-  LogTwo("D", static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
+  LogTwo(skyline::log::Level::kDebug, "skyline-runtime:D",
+         static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
 }
 SKYLINE_EXPORT extern "C" void LogInfo(void* tag, void* message) {
-  LogTwo("I", static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
+  LogTwo(skyline::log::Level::kInfo, "skyline-runtime:I",
+         static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
 }
 SKYLINE_EXPORT extern "C" void LogWarning(void* tag, void* message) {
-  LogTwo("W", static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
+  LogTwo(skyline::log::Level::kWarning, "skyline-runtime:W",
+         static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
 }
 SKYLINE_EXPORT extern "C" void LogError(void* tag, void* message) {
-  LogTwo("E", static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
+  LogTwo(skyline::log::Level::kError, "skyline-runtime:E",
+         static_cast<SkylineHandle>(tag), static_cast<SkylineHandle>(message));
 }
 
 // ---------------------------------------------------------------------------
@@ -236,16 +249,11 @@ SKYLINE_EXPORT extern "C" void LogError(void* tag, void* message) {
 //
 // Dart reports mouse/touch events and page-route transitions to the native
 // runtime; the official implementation forwards them to the appservice JS.
-// The replay has no JS peer, so these log the payload under
-// SKYLINE_APP_SERVICE_DEBUG and otherwise keep the channel wired (the Dart
-// side calls them unconditionally).
+// The replay has no JS peer, so these log the payload at debug level and
+// otherwise keep the channel wired (the Dart side calls them unconditionally).
 // ---------------------------------------------------------------------------
 
 namespace {
-
-bool DebugChannels() {
-  return config::Flag(config::kAppServiceDebug);
-}
 
 const char* DartStringOrNull(SkylineHandle value) {
 #ifdef SKYLINE_EMBEDDED
@@ -333,32 +341,31 @@ struct NativePointerEventLayout {
 
 SKYLINE_EXPORT extern "C" void HandleMouseEvent(void* /*runtime_ptr*/,
                                                 void* event) {
-  if (!DebugChannels() || event == nullptr) return;
+  if (!SKY_LOG_ENABLED(kDebug) || event == nullptr) return;
   const auto* mouse = static_cast<const NativeMouseEventLayout*>(event);
-  std::fprintf(stderr,
-               "[skyline-runtime] HandleMouseEvent: target=0x%lx type=%s "
-               "client=(%g,%g) screen=(%g,%g)\n",
-               static_cast<long>(mouse->target),
-               mouse->type != nullptr ? mouse->type : "?",
-               mouse->client_x, mouse->client_y, mouse->screen_x,
-               mouse->screen_y);
+  SKY_LOG(
+      kDebug, kLogRuntime,
+      "HandleMouseEvent: target=0x%lx type=%s client=(%g,%g) screen=(%g,%g)",
+      static_cast<long>(mouse->target),
+      mouse->type != nullptr ? mouse->type : "?", mouse->client_x,
+      mouse->client_y, mouse->screen_x, mouse->screen_y);
 }
 
 SKYLINE_EXPORT extern "C" void HandleTouchEvent(void* /*runtime_ptr*/,
                                                 void* event) {
-  if (!DebugChannels() || event == nullptr) return;
+  if (!SKY_LOG_ENABLED(kDebug) || event == nullptr) return;
   const auto* batch = static_cast<const NativeTouchEventLayout*>(event);
   const NativeTouchLayout* first =
       batch->touches != nullptr && batch->touch_length > 0 ? batch->touches
                                                            : nullptr;
-  std::fprintf(stderr,
-               "[skyline-runtime] HandleTouchEvent: type=%s target=0x%lx "
-               "touches=%d first=(id=%ld client=(%g,%g))\n",
-               batch->type != nullptr ? batch->type : "?",
-               static_cast<long>(batch->target), batch->touch_length,
-               first != nullptr ? static_cast<long>(first->identifier) : -1L,
-               first != nullptr ? first->client_x : 0.0,
-               first != nullptr ? first->client_y : 0.0);
+  SKY_LOG(kDebug, kLogRuntime,
+          "HandleTouchEvent: type=%s target=0x%lx touches=%d first=(id=%ld "
+          "client=(%g,%g))",
+          batch->type != nullptr ? batch->type : "?",
+          static_cast<long>(batch->target), batch->touch_length,
+          first != nullptr ? static_cast<long>(first->identifier) : -1L,
+          first != nullptr ? first->client_x : 0.0,
+          first != nullptr ? first->client_y : 0.0);
 }
 
 #ifdef SKYLINE_EMBEDDED
@@ -369,20 +376,18 @@ SKYLINE_EXPORT extern "C" void HandleNativeViewPointerEvent(
   appservice::AppNode* node = nullptr;
   auto found = appservice::g_texture_nodes.find(static_cast<int>(view_id));
   if (found != appservice::g_texture_nodes.end()) node = found->second;
-  if (!DebugChannels()) return;
+  if (!SKY_LOG_ENABLED(kDebug)) return;
   static const char* const kTypes[] = {"down", "move", "up", "cancel"};
   const char* type =
       pointer->type < 4 ? kTypes[pointer->type] : "unknown";
-  std::fprintf(stderr,
-               "[skyline-runtime] HandleNativeViewPointerEvent: viewId=%ld "
-               "node=%u type=%s pointer=%d kind=%d down=%u pos=(%g,%g) "
-               "delta=(%g,%g) pressure=%g time=%ld\n",
-               static_cast<long>(view_id), node != nullptr ? node->id : 0u,
-               type, pointer->pointer, pointer->kind,
-               static_cast<unsigned>(pointer->down), pointer->position_x,
-               pointer->position_y, pointer->delta_x, pointer->delta_y,
-               pointer->pressure,
-               static_cast<long>(pointer->time_stamp_microseconds));
+  SKY_LOG(kDebug, kLogRuntime,
+          "HandleNativeViewPointerEvent: viewId=%ld node=%u type=%s pointer=%d "
+          "kind=%d down=%u pos=(%g,%g) delta=(%g,%g) pressure=%g time=%ld",
+          static_cast<long>(view_id), node != nullptr ? node->id : 0u, type,
+          pointer->pointer, pointer->kind, static_cast<unsigned>(pointer->down),
+          pointer->position_x, pointer->position_y, pointer->delta_x,
+          pointer->delta_y, pointer->pressure,
+          static_cast<long>(pointer->time_stamp_microseconds));
 }
 #else
 // Native views only exist in the embedded runtime; keep the export for the
@@ -396,10 +401,9 @@ SKYLINE_EXPORT extern "C" void HandlePageRoute(void* /*runtime_ptr*/,
                                                uint8_t route_type) {
   const char* text = DartStringOrNull(static_cast<SkylineHandle>(name));
   if (text == nullptr || text[0] == '\0') return;
-  if (DebugChannels()) {
-    std::fprintf(
-        stderr, "[skyline-runtime] HandlePageRoute: name=%s duration=%g type=%u\n",
-        text, duration, static_cast<unsigned>(route_type));
+  if (SKY_LOG_ENABLED(kDebug)) {
+    SKY_LOG(kDebug, kLogRuntime, "HandlePageRoute: name=%s duration=%g type=%u",
+            text, duration, static_cast<unsigned>(route_type));
   }
   // The custom-route builder registered a worklet for `<eventName>-<viewTag>`
   // (`onAnimationChange-…` / `onSecondaryAnimationChange-…`, with a `status-`
@@ -454,10 +458,9 @@ SKYLINE_EXPORT extern "C" void NotifyNavigateBackByGesture(
   const int32_t window_id = window != nullptr ? window->id : 0;
 #ifdef SKYLINE_EMBEDDED
   const bool popped = PopPageEntryForGesture(page_id);
-  std::fprintf(stderr,
-               "[skyline-runtime] NotifyNavigateBackByGesture: window=%d "
-               "page=%d popped=%d\n",
-               window_id, page_id, popped ? 1 : 0);
+  SKY_LOG(kDebug, kLogRuntime,
+          "NotifyNavigateBackByGesture: window=%d page=%d popped=%d", window_id,
+          page_id, popped ? 1 : 0);
   char buffer[128];
   std::snprintf(
       buffer, sizeof(buffer),
@@ -465,10 +468,8 @@ SKYLINE_EXPORT extern "C" void NotifyNavigateBackByGesture(
       window_id, page_id);
   appservice::EmitJsonEvent(buffer);
 #else
-  std::fprintf(stderr,
-               "[skyline-runtime] NotifyNavigateBackByGesture: window=%d "
-               "page=%d\n",
-               window_id, page_id);
+  SKY_LOG(kDebug, kLogRuntime, "NotifyNavigateBackByGesture: window=%d page=%d",
+          window_id, page_id);
 #endif
 }
 
@@ -476,10 +477,9 @@ SKYLINE_EXPORT extern "C" void NotifyNavigateBackDoneByGesture(
     void* /*runtime_ptr*/, void* window_ptr, int32_t page_id) {
   auto* window = static_cast<Window*>(window_ptr);
   const int32_t window_id = window != nullptr ? window->id : 0;
-  std::fprintf(stderr,
-               "[skyline-runtime] NotifyNavigateBackDoneByGesture: window=%d "
-               "page=%d\n",
-               window_id, page_id);
+  SKY_LOG(kInfo, kLogRuntime,
+          "NotifyNavigateBackDoneByGesture: window=%d page=%d", window_id,
+          page_id);
 #ifdef SKYLINE_EMBEDDED
   char buffer[128];
   std::snprintf(
@@ -492,18 +492,16 @@ SKYLINE_EXPORT extern "C" void NotifyNavigateBackDoneByGesture(
 
 SKYLINE_EXPORT extern "C" void HandlePageRouteDone(void* /*runtime_ptr*/,
                                                    int32_t page_id) {
-  if (!DebugChannels()) return;
-  std::fprintf(stderr, "[skyline-runtime] HandlePageRouteDone: pageId=%d\n",
-               page_id);
+  if (!SKY_LOG_ENABLED(kDebug)) return;
+  SKY_LOG(kDebug, kLogRuntime, "HandlePageRouteDone: pageId=%d", page_id);
 }
 
 SKYLINE_EXPORT extern "C" void NotifyUserGestureInProgressChange(
     void* /*runtime_ptr*/, void* name, uint8_t in_progress) {
-  if (!DebugChannels()) return;
+  if (!SKY_LOG_ENABLED(kDebug)) return;
   const char* text = DartStringOrNull(static_cast<SkylineHandle>(name));
-  std::fprintf(stderr,
-               "[skyline-runtime] NotifyUserGestureInProgressChange: %s=%d\n",
-               text != nullptr ? text : "?", static_cast<int>(in_progress));
+  SKY_LOG(kDebug, kLogRuntime, "NotifyUserGestureInProgressChange: %s=%d",
+          text != nullptr ? text : "?", static_cast<int>(in_progress));
 }
 
 // ---------------------------------------------------------------------------
@@ -615,10 +613,7 @@ SKYLINE_EXPORT extern "C" double AdjustDecelerationVelocity(
 
 SKYLINE_EXPORT extern "C" int32_t ShouldAcceptGesture(void* /*runtime*/,
                                                      int32_t handler_id) {
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] ShouldAcceptGesture: %d -> 1\n",
-                 handler_id);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "ShouldAcceptGesture: %d -> 1", handler_id);
   // `worklet:should-accept-gesture` is not replayed: accept the recognizer.
   return 1;
 }
@@ -692,14 +687,11 @@ bool ScrollViewYieldsToSwiper(int32_t handler_id, double dx, double dy) {
   const bool yield =
       (delta > 0.0 && at_start && can_previous) ||
       (delta < 0.0 && at_end && can_next);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] ShouldGestureResponse: scroll #%u -> "
-                 "swiper #%u offset=%g total=%g viewport=%g delta=%g "
-                 "page=%d/%d yield=%d\n",
-                 scroll->id, swiper->id, offset, total, viewport, delta,
-                 current, pages, yield ? 1 : 0);
-  }
+  SKY_LOG(kDebug, kLogRuntime,
+          "ShouldGestureResponse: scroll #%u -> swiper #%u offset=%g total=%g "
+          "viewport=%g delta=%g page=%d/%d yield=%d",
+          scroll->id, swiper->id, offset, total, viewport, delta, current,
+          pages, yield ? 1 : 0);
   return yield;
 }
 
@@ -720,10 +712,7 @@ SKYLINE_EXPORT extern "C" int32_t ShouldGestureResponse(
   (void)handler_id;
   (void)native_event;
 #endif
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr, "[skyline-runtime] ShouldGestureResponse: %d -> 1\n",
-                 handler_id);
-  }
+  SKY_LOG(kDebug, kLogRuntime, "ShouldGestureResponse: %d -> 1", handler_id);
   return 1;
 }
 
@@ -809,12 +798,8 @@ SKYLINE_EXPORT extern "C" SkylineNativeRect HandleHeroOnFrame(
   json.reserve(320);
   json += "{\"type\":\"heroFrame\",\"hash\":\"";
   json += appservice::JsonEscapeString(hash);
-  if (config::Flag(config::kAppServiceDebug)) {
-    std::fprintf(stderr,
-                 "[skyline-runtime] hero frame hash=%s progress=%.3f "
-                 "direction=%d\n",
-                 hash, progress, static_cast<int>(direction));
-  }
+  SKY_LOG(kDebug, kLogRuntime, "hero frame hash=%s progress=%.3f direction=%d",
+          hash, progress, static_cast<int>(direction));
   char head[96];
   std::snprintf(head, sizeof(head), "\",\"direction\":%d,\"progress\":%.6f,",
                 static_cast<int>(direction), progress);

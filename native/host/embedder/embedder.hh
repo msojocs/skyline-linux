@@ -45,10 +45,16 @@ void CopyFrame(const void* source, size_t row_bytes, uint32_t width,
 // the size first, then the id, so a reader that sees the id sees its size.
 void WriteFrameHeader(void* data_area, uint32_t frame_id, uint32_t frame_size);
 
-// Logs every node of a semantics update as "<prefix> semantics node: ..."
-// when SKYLINE_APP_SERVICE_DEBUG is set.
-void LogSemanticsUpdate(const char* prefix,
+// Logs every node of a semantics update ("semantics node: ...") at debug
+// level under `category`.
+void LogSemanticsUpdate(const char* category,
                         const FlutterSemanticsUpdate2* update);
+
+// Forwards the engine's log callback (Dart print/debugPrint, which also
+// carries Flutter error reports) as "[<category>:<tag>] message".  It is
+// application output, so it is logged at warning level and shown by default.
+void LogEngineMessage(const char* category, const char* tag,
+                      const char* message);
 
 struct EngineConfig {
   std::string assets;
@@ -96,9 +102,10 @@ class RunningEngine {
 // the platform thread services it with RunOnce().
 class PlatformLoop {
  public:
-  // `log_prefix` starts the accessibility log lines ("[host]", ...).
-  explicit PlatformLoop(std::string log_prefix)
-      : log_prefix_(std::move(log_prefix)) {}
+  // Accessibility changes are logged under `category`, each message
+  // starting with `label` ("window 1 ", ...).
+  PlatformLoop(const char* category, std::string label)
+      : category_(category), label_(std::move(label)) {}
 
   // Engine vsync callback target; any thread.
   void OnVsync(intptr_t baton);
@@ -126,7 +133,8 @@ class PlatformLoop {
  private:
   void ReturnBatons(FlutterEngine engine, const std::deque<intptr_t>& batons);
 
-  const std::string log_prefix_;
+  const char* category_;
+  const std::string label_;
   mutable std::mutex mutex_;
   std::condition_variable cv_;
   std::deque<intptr_t> batons_;
