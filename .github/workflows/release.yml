@@ -68,7 +68,10 @@ jobs:
         run: |
           set -o pipefail
           npm test 2>&1 | tee /tmp/npm-test.log
-          npm run test:native
+          # Only the release build links an engine here (native/build has no
+          # debug engine and is the engine-less stub).
+          SKYLINE_LINUX_SKYLINE_ADDON=native/build-release/skyline.node \
+            node --test test/contract.test.js
           # The release engine + AOT bundle from build-deps run the appservice
           # replay for real; fail instead of skipping when they are missing.
           SKYLINE_REQUIRE_ENGINE=1 npm run test:skyline:aot
