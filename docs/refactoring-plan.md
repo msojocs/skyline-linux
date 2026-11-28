@@ -594,6 +594,67 @@ class OpsSession {
 的创建与释放成对出现，并有测试覆盖（加载 → cleanup → 进程能正常退出）；可选：在
 debug host 上用 ASan 运行 ops 测试，不出现新报告。
 
+**状态（2026-11-28）：已完成，个别条目有调整。**
+
+- 运行时 C ABI：`native/include/skyline/runtime_api.h` 声明 addon 与宿主使用的
+  36 个函数、sink 类型与事件枚举，逐个标注 `[any]` / `[any->ui]`；运行时经
+  `skyline_runtime_abi.hh` 包含它，定义与声明不一致时编译失败。skyline.node 与
+  `flutter_window_backend.cc` 直接包含，独立 host 以 `SKYLINE_RUNTIME_API_WEAK`
+  得到统一的 weak 声明。引擎导出表改为从 `SKYLINE_API` 声明生成并逐个校验。
+  `sources.txt` 新增 `[shared]` 段（相对 `native/`），引擎副本同路径存放；
+  `tools/lib/runtime-manifest.js` 供指纹、`gaps` 与清单测试共用。
+  `test/runtime-api.test.js` 检查声明都有定义、非 FFI 导出都已声明、
+  `native/src` 与 `native/host` 中没有 `extern "C"`。只给 Dart 调用的 FFI 符号仍由
+  `spec/kernel-symbols.json` 约束，留给 P4.1 生成。
+- `Engine` 改名 `WindowBackend`（`window_backend.hh`、`StubWindowBackend`、
+  `flutter_window_backend.cc`），只负责窗口生命周期、输入与出帧。
+- Addon：44 个 `native.*` 方法登记在 `kBindings` 表（名称、最少参数个数、缺参错误），
+  由统一的 `Dispatch` 解码参数并把 C++ 异常转成 JS Error（`src/napi_binding.*`）；
+  `main.cc` 从 1619 行降到 916 行。全部 TSFN 由 `ThreadsafeSink<Event, ToJs>` 管理，
+  Post/Install/Close 由同一把锁排序：`onWindowRasterized` 先替换引擎回调再关闭旧
+  sink，替换失败时新 sink 由 RAII 释放，cleanup 释放 HTTP TSFN 并清空 HTTP sink（A3）。
+  删除从未读取的 callbacks 表；bootstrap 失败时 `require()` 抛出原因（A8）。
+  `native/test/addon-lifecycle.test.js` 覆盖空闲加载、销毁窗口、替换回调、
+  worker 环境销毁（cleanup hook）与日志文件，进程都能自行退出。
+- 宿主公共层：`native/host/embedder/` 提供 `RunningEngine`、`PlatformLoop`
+  （vsync baton、platform task、无障碍请求、`FlushPendingTasks`）、无障碍 sink
+  路由、BGRA→RGBA、帧头发布、语义树日志与 AOT 查找（候选顺序统一为 bundle 优先），
+  `host/main.cc` 从 1012 行降到 758 行，窗口后端从 729 行降到 497 行。
+  `skyline/frame_protocol.h` 收拢 `/dev/shm/skyline_<key>.dat`、外层头、版本、
+  帧头与 4 帧预算，`frame_writer` 与 sharedMemory.node 改用它。
+- 配置：`tools/env-vars.json` 登记 56 个 `SKYLINE_*` 变量（类型、默认值、组件、
+  说明），`npm run env:doc` 生成 [docs/env.md](env.md)（取代附录 B）与只含名称、
+  类型、默认值的 `config_vars.inc`，修改说明不会让引擎过期。原生代码经
+  `skyline::config` 读取（首次访问时取快照）；`test/env-registry.test.js` 检查生成
+  文件最新、代码读取的变量都已登记、登记的变量都有人读取、原生代码不直接 getenv。
+  因为改为启动时读取，sharedMemory 句柄模式的用例改在新进程中设置环境。
+- 日志：`skyline/log.h` 的 `SKY_LOG(level, category, fmt, ...)` 由 runtime、
+  addon、两个宿主与 sharedMemory.node 共用，默认只输出 warning 及以上
+  （`SKYLINE_LOG_LEVEL`，`SKYLINE_APP_SERVICE_DEBUG` 降到 debug），输出前缀不变。
+  运行时 252 处 `fprintf(stderr)` 全部改写：原调试开关下的日志与每批 live op、每个
+  按键、每次图片请求、builder 条目、transition 帧等热路径为 debug，失败类为
+  warning；`ReportDartError` 去掉 `demo page:` 前缀。addon 把 info 及以上写入
+  `SKYLINE_ADDON_LOG`（默认 `/tmp/skyline-addon.log`，1 MiB 轮转）；Dart print 输出
+  （含 Flutter 错误）以 warning 级保留。sharedMemory 的 Logger 改为真正的 printf
+  格式化。测试 harness 默认 `SKYLINE_LOG_LEVEL=info`，断言 debug 级日志的 21 个
+  ops 用例改用 `runOps({ debugLogs: true })`。
+- 运行时全局状态：`RuntimeState` 持有 UI task runner 与 live-ops 交接（同一把锁）、
+  全部 sink 与安全区 inset（原子量）；`g_ui_task_runner` 与 `g_live_ui_runner` 合并，
+  跨线程读取改为加锁拷贝；`DispatchSkylineKeyEvent` 不再在调用线程读 `g_page`。
+  28 个 UI 线程专属入口加了 `SKY_DCHECK_UI_THREAD()`（debug 引擎生效），违例记录
+  error 日志，`test/lib/host.js` 发现即判失败；目前全量测试中没有违例。与计划的
+  差异：`g_page` 与节点表仍是 UI 线程独占的全局量，没有搬进 `RuntimeState`（P4.6
+  拆分数据模型时一并处理）；视口尺寸也仍在 `[common]` 的全局量中。
+- CI：契约测试改用链接了引擎的 `native/build-release/skyline.node`（CI 只有 release
+  引擎，`native/build` 是 stub，`test:native` 中 5 个 `create.*` 用例会失败）。
+- 未做：ASan 运行（引擎本身没有插桩，只能覆盖宿主代码）；A5 中 napi 返回值的
+  检查只在 helper 中统一，没有逐个调用审查。
+- 验证（两种模式重新嵌入运行时后）：`npm test` 共 347 个用例，323 pass、0 fail、
+  24 skip（与之前相同，均为契约用例在 JS 参考实现上没有引擎）；`test:ops` 114/114；
+  `test:native` 53 pass、10 skip；release addon 的契约测试 53 pass、10 skip；
+  `SKYLINE_REQUIRE_ENGINE=1 npm run test:skyline:aot` 2/2；无引擎的 stub 构建可编译，
+  契约结果与改动前相同。`build-deps` 仍需重新发布（运行时源码在 P3 中再次变化）。
+
 ### P4 运行时内核重构（15–25 人日）
 
 按以下顺序推进。每个子步骤都要求 golden 逐字节一致，`test:ops` 与 `test:l5` 的
@@ -761,5 +822,5 @@ P1 之后，`npm run build:status` 会根据实际过期的步骤给出这张表
 `SKYLINE_DEVTOOLS_DEMO_OPS`、`SKYLINE_POINTER_VIEW_ID`、
 `SKYLINE_SHARED_MEMORY_LOG`、`SKYLINE_SHARED_MEMORY_HANDLE`。
 
-其中 `SKYLINE_APP_SERVICE_DEBUG` 有 106 处读取点，大多位于各个调试分支中。P3 的
-`Config` 注册表落地后，这一附录由 `npm run env:doc` 生成。
+其中 `SKYLINE_APP_SERVICE_DEBUG` 有 106 处读取点，大多位于各个调试分支中。P3 之后
+完整参考见 [docs/env.md](env.md)（由 `npm run env:doc` 从 `tools/env-vars.json` 生成）。
