@@ -68,21 +68,19 @@ bool ReadResourceBytes(const std::string& path, std::vector<uint8_t>* out) {
 
 namespace appservice {
 
-namespace {
-float g_safe_area_insets[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-}  // namespace
-
-// Safe-area insets pushed by `SkylineShell.setSafeAreaEdgeInsets`.
+// Safe-area insets pushed by `SkylineShell.setSafeAreaEdgeInsets` (any
+// thread); CSS env() reads them during layout.
 void SetSafeAreaInsets(double top, double right, double bottom, double left) {
-  g_safe_area_insets[0] = static_cast<float>(top);
-  g_safe_area_insets[1] = static_cast<float>(right);
-  g_safe_area_insets[2] = static_cast<float>(bottom);
-  g_safe_area_insets[3] = static_cast<float>(left);
+  std::atomic<float>* insets = SharedState().safe_area;
+  insets[0].store(static_cast<float>(top));
+  insets[1].store(static_cast<float>(right));
+  insets[2].store(static_cast<float>(bottom));
+  insets[3].store(static_cast<float>(left));
 }
 
 float SafeAreaInset(int side) {
   if (side < 0 || side > 3) return 0.0f;
-  return g_safe_area_insets[side];
+  return SharedState().safe_area[side].load();
 }
 
 }  // namespace appservice

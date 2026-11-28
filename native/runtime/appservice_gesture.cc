@@ -82,7 +82,7 @@ void DispatchScrollEvent(intptr_t ptr, int32_t phase, double top, double left,
       PublishNodeRects();
     }
   }
-  SkylineScrollEventSink sink = g_scroll_event_sink.load();
+  SkylineScrollEventSink sink = SharedState().scroll_sink.load();
   if (sink != nullptr) {
     sink(node_id, phase, top, left, width, height, dx, dy, drag, velocity);
   }
@@ -147,7 +147,7 @@ void InstallScrollCallbacks(AppNode* node) {
 
 void EmitWidgetEvent(uint32_t node_id, int32_t kind, double value,
                      double extra, uint8_t flag) {
-  SkylineWidgetEventSink sink = g_widget_event_sink.load();
+  SkylineWidgetEventSink sink = SharedState().widget_sink.load();
   if (sink != nullptr) sink(node_id, kind, value, extra, flag);
 }
 
@@ -279,6 +279,7 @@ void InstallPickerColumnCallbacks(AppNode* node) {
 double AttrNumber(const AppNode* node, const char* key, double fallback);
 
 void AnimateSwiperTo(uint32_t node_id, uint32_t page, bool animated) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   if (node == nullptr || node->swiper_p == nullptr) return;
@@ -304,6 +305,7 @@ void AnimateSwiperTo(uint32_t node_id, uint32_t page, bool animated) {
 }
 
 void SetPickerColumnCurrent(uint32_t node_id, uint32_t current) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   if (node == nullptr || node->picker_column_p == nullptr) return;
@@ -319,6 +321,7 @@ void SetPickerColumnCurrent(uint32_t node_id, uint32_t current) {
 }
 
 void SetInputFocus(uint32_t node_id, bool focus) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   if (node == nullptr) return;
@@ -383,6 +386,7 @@ extern "C" void RefresherStatusChange(intptr_t ptr, int32_t mode, double yy) {
 }
 
 void SetRefresherTriggered(uint32_t node_id, bool open, bool two_level) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   if (node == nullptr || node->scroll_view_p == nullptr) return;
@@ -407,6 +411,7 @@ void RegisterIntersectionObserver(uint32_t node_id, uint32_t unique_id,
                                   uint32_t root_node_id, double top,
                                   double right, double bottom, double left,
                                   std::vector<double> thresholds) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   if (node == nullptr || node->yoga_node_p == nullptr) {
@@ -436,6 +441,7 @@ void RegisterIntersectionObserver(uint32_t node_id, uint32_t unique_id,
 }
 
 void UnregisterIntersectionObserver(uint32_t node_id, uint32_t unique_id) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   void* callback = FindCallback(g_page->holder->ffi_table,
@@ -552,6 +558,7 @@ void InstallSelectionCallbacks(AppNode* node) {
 void SetSelectionRange(uint32_t selection_id, uint32_t start_id,
                        int32_t start_offset, uint32_t end_id,
                        int32_t end_offset) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* selection = FindNode(selection_id);
   AppNode* start = FindNode(start_id);
@@ -579,6 +586,7 @@ void SetSelectionRange(uint32_t selection_id, uint32_t start_id,
 // -- navigate-back interception ---------------------------------------------
 
 void SetPageNavigateBackInterception(int32_t page_id, bool enabled) {
+  SKY_DCHECK_UI_THREAD();
   g_navigate_back_interception[page_id] = enabled;
   if (g_page != nullptr && g_page->holder != nullptr) {
     void* callback = FindCallback(g_page->holder->ffi_table,

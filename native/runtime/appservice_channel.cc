@@ -364,8 +364,8 @@ void DeliverPendingHttpGet(uint32_t request_id, std::vector<uint8_t> bytes) {
 
 SKYLINE_EXPORT extern "C" void SkylineSetHttpRequestSink(
     SkylineHttpRequestSink sink, SkylineHasHttpRequestCallbackFn has) {
-  g_shell_http_request.store(sink);
-  g_shell_http_available.store(has);
+  SharedState().http_request_sink.store(sink);
+  SharedState().http_available.store(has);
 }
 
 // Addon JS thread -> runtime: the DevTools pageframe finished a shell fetch.

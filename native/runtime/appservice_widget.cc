@@ -656,6 +656,7 @@ Dart_Handle BuildWidget(AppNode* node, NewYGNodeFn newYGNode,
                         NewDirectRenderWidgetFn newDirectRenderWidget,
                         NewListBuilderFn newListBuilder,
                         NewGridBuilderFn newGridBuilder, bool is_root) {
+  SKY_DCHECK_UI_THREAD();
   if (node->released || node->style.display_none) {
     return Dart_Null();
   }

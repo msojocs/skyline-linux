@@ -235,6 +235,7 @@ struct TextUpdateCallbacks {
 };
 
 bool ApplyTargetedUpdates(RuntimeHolder* holder) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->root_node == nullptr) return false;
   AppNode* root = FindNode(g_page->root_id);
   if (root == nullptr) return false;
@@ -660,6 +661,7 @@ void SetSwiperGestureActive(bool active) {
 }
 
 void RebuildAppServicePage(RuntimeHolder* holder) {
+  SKY_DCHECK_UI_THREAD();
   if (g_swiper_gesture_active) {
     g_rebuild_after_gesture = true;
     return;

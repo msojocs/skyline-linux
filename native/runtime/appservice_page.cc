@@ -75,6 +75,7 @@ bool MaterializeAttachedPage(RuntimeHolder* holder,
                              const PageBuilders& builders, uint32_t root_id,
                              uint8_t open_type, int32_t page_id,
                              int32_t callback_id) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || builders.create_route == nullptr) return false;
   AppNode* root = FindNode(root_id);
   if (root == nullptr) {
@@ -311,6 +312,7 @@ bool MaterializeAppBar(RuntimeHolder* holder, const PageBuilders& builders) {
 }
 
 void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
+  SKY_DCHECK_UI_THREAD();
   const PageBuilders builders = LoadPageBuilders(holder);
   if (builders.yg_node == nullptr || builders.yg_connector == nullptr ||
       builders.create_route == nullptr || builders.text == nullptr ||
@@ -347,7 +349,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
   g_page = new OpPage();
   ClearTransitions();
   g_page->holder = holder;
-  g_ui_task_runner = UiTaskRunner();
+  RememberUiRunner();
   g_next_rule_order = 0;
   g_next_address = 0x5000;
   g_builders_by_address.clear();
@@ -595,6 +597,7 @@ void ApplyOpsPage(RuntimeHolder* holder, const char* descriptor) {
 // page slot occupied, so keep `g_page` alive across calls and materialise the
 // route only when an `attach` op arrives.
 void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
+  SKY_DCHECK_UI_THREAD();
   const PageBuilders builders = LoadPageBuilders(holder);
   if (builders.yg_node == nullptr || builders.yg_connector == nullptr ||
       builders.create_route == nullptr || builders.text == nullptr ||
@@ -640,7 +643,7 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
     g_page = new OpPage();
     ClearTransitions();
     g_page->holder = holder;
-    g_ui_task_runner = UiTaskRunner();
+    RememberUiRunner();
     g_next_rule_order = 0;
     g_next_address = 0x5000;
     g_builders_by_address.clear();
@@ -785,6 +788,7 @@ void ApplyLiveOpsBatch(RuntimeHolder* holder, const char* descriptor) {
 // DevTools `scroll-into-view` bridge once the appservice component property
 // changes.
 void ScrollNodeTo(uint32_t node_id, double top) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* node = FindNode(node_id);
   if (node == nullptr || node->scroll_view_p == nullptr) {
@@ -815,6 +819,7 @@ void ScrollNodeTo(uint32_t node_id, double top) {
 void ScrollIntoView(uint32_t scroll_node_id, uint32_t target_node_id,
                     bool within_extent, bool animated, double offset,
                     uint8_t alignment) {
+  SKY_DCHECK_UI_THREAD();
   if (g_page == nullptr || g_page->holder == nullptr) return;
   AppNode* scroll = FindNode(scroll_node_id);
   AppNode* target = FindNode(target_node_id);
@@ -840,7 +845,9 @@ void ScrollIntoView(uint32_t scroll_node_id, uint32_t target_node_id,
 }
 
 void HandleKeyInput(RuntimeHolder* holder, int32_t kind, uint32_t logical,
-                    const std::string& text) {  if (g_page == nullptr || kind == 1 /* key up */) return;
+                    const std::string& text) {
+  SKY_DCHECK_UI_THREAD();
+  if (g_page == nullptr || kind == 1 /* key up */) return;
   AppNode* input = FindNode(g_page->focused_input_id);
   if (input == nullptr) {
     SKY_LOG(kDebug, kLogRuntime,

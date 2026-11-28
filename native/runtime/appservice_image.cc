@@ -530,7 +530,7 @@ void IssueDartImageRequest(RuntimeHolder* holder, uint32_t request_id,
 void StartDartImageRequest(RuntimeHolder* holder, uint32_t request_id,
                            const std::string& source) {
   auto runner = UiTaskRunner();
-  if (!runner) runner = g_ui_task_runner;
+  if (!runner) runner = SharedUiRunner();
   if (!runner) {
     DeliverImagePayload(request_id, {});
     return;
@@ -543,6 +543,7 @@ void StartDartImageRequest(RuntimeHolder* holder, uint32_t request_id,
 
 // Entry point shared by the Dart fallback and the DevTools shell fetch.
 void DeliverImagePayload(uint32_t request_id, std::vector<uint8_t> bytes) {
+  SKY_DCHECK_UI_THREAD();
   auto found = g_pending_image_requests.find(request_id);
   if (found == g_pending_image_requests.end()) {
     SKY_LOG(kWarning, kLogRuntime, "image response for unknown request %u",
@@ -672,7 +673,7 @@ bool StartNetworkImage(AppNode* node, const std::string& source,
   // `RequestHttpResource` is an async callback and must not be entered from
   // the middle of page construction.
   auto runner = UiTaskRunner();
-  if (!runner) runner = g_ui_task_runner;
+  if (!runner) runner = SharedUiRunner();
   if (runner) {
     runner->PostTask([holder, request_id, source, via_shell, runner]() {
       if (via_shell) {

@@ -10,12 +10,6 @@ struct SkylinePageConfig {
   void* pageUrl;
 };
 
-// Live DevTools bridge state (defined in appservice_model.cc).
-extern std::mutex g_live_ops_mutex;
-extern std::string g_pending_live_ops;
-extern bool g_live_ready;
-extern fml::RefPtr<fml::TaskRunner> g_live_ui_runner;
-
 namespace appservice {
 
 inline constexpr float kInf = 1e30f;
@@ -549,8 +543,6 @@ extern AppNode* g_fixed_root_node;
 
 extern OpPage* g_page;
 extern std::unordered_map<intptr_t, uint32_t> g_scroll_view_ids;
-extern std::atomic<SkylineScrollEventSink> g_scroll_event_sink;
-extern std::atomic<SkylineWidgetEventSink> g_widget_event_sink;
 extern std::unordered_map<intptr_t, uint32_t> g_swiper_ids;
 extern std::unordered_map<intptr_t, uint32_t> g_picker_column_ids;
 extern std::unordered_map<intptr_t, uint32_t> g_selection_ids;
@@ -559,10 +551,8 @@ extern std::unordered_map<uint32_t, uint32_t> g_intersection_unique_nodes;
 extern std::unordered_map<uint32_t, std::unordered_set<uint32_t>>
     g_intersection_node_observers;
 extern std::unordered_map<int32_t, bool> g_navigate_back_interception;
-extern std::atomic<SkylineJsonEventSink> g_json_event_sink;
 extern std::mutex g_rect_mutex;
 extern std::unordered_map<uint32_t, NodeRectSnapshot> g_rect_snapshot;
-extern fml::RefPtr<fml::TaskRunner> g_ui_task_runner;
 extern std::unique_ptr<rapidjson::Document> g_ops_document;
 extern int g_next_rule_order;
 extern intptr_t g_next_address;

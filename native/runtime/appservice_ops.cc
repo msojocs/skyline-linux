@@ -531,6 +531,7 @@ void OnNodeSnapshotResult(intptr_t ptr, Dart_Handle data) {
 }
 
 void DumpTree(bool elements) {
+  SKY_DCHECK_UI_THREAD();
   FfiTable* table = ActiveFfiTable();
   DumpTreeFn dump = nullptr;
   if (elements) {
@@ -547,6 +548,7 @@ void DumpTree(bool elements) {
 }
 
 void CollectGarbage() {
+  SKY_DCHECK_UI_THREAD();
   auto* collect = reinterpret_cast<CollectGarbageFn>(
       FindCallback(ActiveFfiTable(), kCollectGarbageHash));
   SKY_LOG(kInfo, kLogRuntime, "CollectGarbage requested (callback=%s)",
@@ -555,6 +557,7 @@ void CollectGarbage() {
 }
 
 void SendMessageToRunner(const std::string& message) {
+  SKY_DCHECK_UI_THREAD();
   auto* send = reinterpret_cast<SendMessageToRunnerFn>(
       FindCallback(ActiveFfiTable(), kSendMessageToRunnerHash));
   SKY_LOG(kInfo, kLogRuntime, "SendMessageToRunner: \"%s\" (callback=%s)",
@@ -566,6 +569,7 @@ void SendMessageToRunner(const std::string& message) {
 }
 
 void TakeAppSnapshot(uint32_t request_id, double scale, bool compressed) {
+  SKY_DCHECK_UI_THREAD();
   auto* take = reinterpret_cast<TakeAppSnapshotFn>(
       FindCallback(ActiveFfiTable(), kTakeAppSnapshotHash));
   SKY_LOG(kInfo, kLogRuntime,
@@ -578,6 +582,7 @@ void TakeAppSnapshot(uint32_t request_id, double scale, bool compressed) {
 }
 
 void SnapshotNode(uint32_t node_id, uint8_t format, uint32_t request_id) {
+  SKY_DCHECK_UI_THREAD();
   AppNode* node = FindNode(node_id);
   if (node == nullptr) {
     SKY_LOG(kWarning, kLogRuntime, "node snapshot: node #%u not found",
@@ -626,6 +631,7 @@ void SnapshotNode(uint32_t node_id, uint8_t format, uint32_t request_id) {
 }
 
 void SetUserGesture(bool in_progress) {
+  SKY_DCHECK_UI_THREAD();
   FfiTable* table = ActiveFfiTable();
   UserGestureFn callback = nullptr;
   if (in_progress) {
@@ -646,6 +652,7 @@ void SetUserGesture(bool in_progress) {
 }
 
 void RelaunchApp(uint8_t open_type) {
+  SKY_DCHECK_UI_THREAD();
   auto* relaunch = reinterpret_cast<AppCommandFn>(
       FindCallback(ActiveFfiTable(), kRelaunchAppHash));
   SKY_LOG(kInfo, kLogRuntime, "RelaunchApp: openType=%u (callback=%s)",
@@ -654,6 +661,7 @@ void RelaunchApp(uint8_t open_type) {
 }
 
 void ShutdownApplication() {
+  SKY_DCHECK_UI_THREAD();
   auto* shutdown = reinterpret_cast<VoidCommandFn>(
       FindCallback(ActiveFfiTable(), kShutdownApplicationHash));
   SKY_LOG(kInfo, kLogRuntime, "ShutdownApplication requested (callback=%s)",
@@ -669,7 +677,7 @@ bool QueryAccessibilityBoldText() {
 }
 
 void NotifyAccessibilitySink(int32_t kind, int32_t value) {
-  SkylineAccessibilitySink sink = g_accessibility_sink.load();
+  SkylineAccessibilitySink sink = SharedState().accessibility_sink.load();
   if (sink != nullptr) sink(kind, value);
 }
 

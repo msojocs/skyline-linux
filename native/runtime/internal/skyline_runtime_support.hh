@@ -37,9 +37,10 @@ template <typename Fn>
 void PostToUiIfReady(Fn fn) {
   fml::RefPtr<fml::TaskRunner> runner;
   {
-    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
-    if (!g_live_ready) return;
-    runner = g_live_ui_runner;
+    RuntimeState& state = SharedState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!state.live_ready) return;
+    runner = state.ui_runner;
   }
   if (!runner) return;
   runner->PostTask([fn]() {

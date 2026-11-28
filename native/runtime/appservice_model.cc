@@ -102,10 +102,6 @@ OpPage* g_page = nullptr;
 // appservice mirror can be told which view tag scrolled.
 std::unordered_map<intptr_t, uint32_t> g_scroll_view_ids;
 
-std::atomic<SkylineScrollEventSink> g_scroll_event_sink{nullptr};
-
-std::atomic<SkylineWidgetEventSink> g_widget_event_sink{nullptr};
-
 // Address -> view tag for the native Dart widgets whose callbacks receive the
 // opaque `ptr` we passed at construction.
 std::unordered_map<intptr_t, uint32_t> g_swiper_ids;
@@ -122,10 +118,8 @@ std::unordered_map<uint32_t, std::unordered_set<uint32_t>>
 // Per-page back interception flag (mirrored into the Dart route config).
 std::unordered_map<int32_t, bool> g_navigate_back_interception;
 
-std::atomic<SkylineJsonEventSink> g_json_event_sink{nullptr};
-
 void EmitJsonEvent(const std::string& json) {
-  SkylineJsonEventSink sink = g_json_event_sink.load();
+  SkylineJsonEventSink sink = SharedState().json_sink.load();
   if (sink != nullptr) sink(json.c_str());
 }
 
@@ -330,6 +324,7 @@ void DumpLayoutSnapshot() {
 }
 
 void PublishNodeRects() {
+  SKY_DCHECK_UI_THREAD();
   std::lock_guard<std::mutex> lock(g_rect_mutex);
   g_rect_snapshot.clear();
   if (g_page == nullptr) return;
@@ -370,9 +365,6 @@ void PublishNodeRects() {
   }
   DumpLayoutSnapshot();
 }
-// Captured on the UI thread; the host keyboard channel is called from the
-// embedder thread and must marshal work back onto the UI runner.
-fml::RefPtr<fml::TaskRunner> g_ui_task_runner;
 std::unique_ptr<rapidjson::Document> g_ops_document;
 int g_next_rule_order = 0;
 intptr_t g_next_address = 0x5000;
@@ -430,14 +422,44 @@ std::vector<std::string> SplitChar(const std::string& value, char separator) {
   return out;
 }
 
-
-
 }  // namespace appservice
 
-// Live DevTools bridge state.  The addon may call SkylineApplyLiveOps from the
-// Electron renderer thread before the Dart app has registered its UI task
-// runner, so payloads are parked until NotifyFlutterReady runs.
-std::mutex g_live_ops_mutex;
-std::string g_pending_live_ops;
-bool g_live_ready = false;
-fml::RefPtr<fml::TaskRunner> g_live_ui_runner;
+// -- shared runtime state
+// ------------------------------------------------------
+
+RuntimeState& SharedState() {
+  static auto* state = new RuntimeState();  // never destroyed
+  return *state;
+}
+
+fml::RefPtr<fml::TaskRunner> SharedUiRunner() {
+  RuntimeState& state = SharedState();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  return state.ui_runner;
+}
+
+void RememberUiRunner() {
+  auto runner = UiTaskRunner();
+  RuntimeState& state = SharedState();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  state.ui_runner = runner;
+}
+
+bool OnUiThread() {
+  auto runner = SharedUiRunner();
+  return !runner || runner->RunsTasksOnCurrentThread();
+}
+
+#ifndef NDEBUG
+void DcheckUiThread(const char* function) {
+  if (OnUiThread()) return;
+  static std::mutex mutex;
+  static std::unordered_set<std::string> reported;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!reported.insert(function).second) return;
+  }
+  SKY_LOG(kError, kLogRuntime,
+          "UI-thread check failed: %s ran on another thread", function);
+}
+#endif

@@ -29,6 +29,7 @@ include/skyline/log.h
 common/log.cc
 
 [embedded]
+internal/skyline_runtime_state.hh
 internal/skyline_runtime_ffi.hh
 internal/skyline_runtime_appservice.hh
 internal/skyline_runtime_embedded.hh

@@ -2,6 +2,7 @@
 // Native callback table for `package:skyline` (hash = stringHash(symbol)).
 // The constants are inline so the split translation units share one value.
 #include "skyline_runtime_abi.hh"
+#include "skyline_runtime_state.hh"
 
 using NewDecoratedBoxFn = Dart_Handle (*)(
     intptr_t ptr,
@@ -495,22 +496,15 @@ using AccessibilityBoldTextEnabledFn = uint8_t (*)();
 // Accessibility state is shared between the Dart runtime layer and the host
 // embedder, which installs `SkylineSetAccessibilitySink` (kinds in
 // skyline/runtime_api.h).
-inline std::atomic<SkylineAccessibilitySink> g_accessibility_sink{nullptr};
 inline std::atomic<int32_t> g_accessibility_enabled{0};
 inline std::atomic<int32_t> g_accessibility_bold_text{0};
-// DevTools shell HTTP bridge: the addon proxies `setHttpRequestCallback`
-// (window.fetch in the pageframe renderer) so network requests show up in the
-// DevTools Network panel instead of an in-engine dart:io socket.
-inline std::atomic<SkylineHttpRequestSink> g_shell_http_request{nullptr};
-inline std::atomic<SkylineHasHttpRequestCallbackFn> g_shell_http_available{nullptr};
-
 inline bool ShellHttpAvailable() {
-  auto* has = g_shell_http_available.load();
+  auto* has = SharedState().http_available.load();
   return has != nullptr && has() != 0;
 }
 
 inline void RequestShellHttp(uint32_t request_id, const std::string& url) {
-  auto sink = g_shell_http_request.load();
+  auto sink = SharedState().http_request_sink.load();
   if (sink != nullptr) sink(request_id, url.c_str());
 }
 // SnapshotTakeSnapshot is synchronous: SceneToImage runs inside the call, so

@@ -230,6 +230,12 @@ function finishHost(invocation, result) {
   } finally {
     fs.rmSync(invocation.shmPath, { force: true });
   }
+  // Debug engines log every UI-thread-only runtime function that ran on
+  // another thread (SKY_DCHECK_UI_THREAD); such a race must not pass a test.
+  const threadViolation = /UI-thread check failed: .*/.exec(logs);
+  if (threadViolation) {
+    throw new Error(`${threadViolation[0]}\n${logs}`);
+  }
   if (result.status === 77) {
     // The CMake stub host: the engine was missing when native/build* was
     // configured, although the prerequisite check found it now.

@@ -52,14 +52,16 @@ void ScheduleLiveOps(std::string payload, int attempt) {
 // UI thread: remember the engine task runner and flush any page ops that were
 // queued before the Dart app was ready.
 void ApplyPendingLiveOpsOnUi() {
+  SKY_DCHECK_UI_THREAD();
+  RememberUiRunner();
   std::string payload;
   {
-    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
-    g_live_ready = true;
-    g_live_ui_runner = UiTaskRunner();
-    if (g_pending_live_ops.empty()) return;
-    payload = std::move(g_pending_live_ops);
-    g_pending_live_ops.clear();
+    RuntimeState& state = SharedState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.live_ready = true;
+    if (state.pending_live_ops.empty()) return;
+    payload = std::move(state.pending_live_ops);
+    state.pending_live_ops.clear();
   }
   ScheduleLiveOps(std::move(payload), 0);
 }
@@ -81,17 +83,17 @@ SKYLINE_EXPORT extern "C" int32_t SkylineGetNodeRect(uint32_t node_id,
 
 SKYLINE_EXPORT extern "C" void SkylineSetScrollEventSink(
     SkylineScrollEventSink sink) {
-  appservice::g_scroll_event_sink.store(sink);
+  SharedState().scroll_sink.store(sink);
 }
 
 SKYLINE_EXPORT extern "C" void SkylineSetWidgetEventSink(
     SkylineWidgetEventSink sink) {
-  appservice::g_widget_event_sink.store(sink);
+  SharedState().widget_sink.store(sink);
 }
 
 SKYLINE_EXPORT extern "C" void SkylineSetJsonEventSink(
     SkylineJsonEventSink sink) {
-  appservice::g_json_event_sink.store(sink);
+  SharedState().json_sink.store(sink);
 }
 
 SKYLINE_EXPORT extern "C" void SkylineAddIntersectionObserver(
@@ -147,7 +149,7 @@ SKYLINE_EXPORT extern "C" void SkylineSetNavigateBackInterception(
 
 SKYLINE_EXPORT extern "C" void SkylineSetAccessibilitySink(
     SkylineAccessibilitySink sink) {
-  g_accessibility_sink.store(sink);
+  SharedState().accessibility_sink.store(sink);
   // Replay the state the Dart app reported before the host installed its sink.
   if (sink != nullptr) {
     if (g_accessibility_enabled.load() != 0) {
@@ -455,9 +457,10 @@ SKYLINE_EXPORT extern "C" void SkylineScrollNodeTo(uint32_t node_id,
                                                    double top) {
   fml::RefPtr<fml::TaskRunner> runner;
   {
-    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
-    if (!g_live_ready) return;
-    runner = g_live_ui_runner;
+    RuntimeState& state = SharedState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!state.live_ready) return;
+    runner = state.ui_runner;
   }
   if (!runner) return;
   runner->PostTask([node_id, top]() {
@@ -471,9 +474,10 @@ SKYLINE_EXPORT extern "C" void SkylineScrollIntoView(
     uint8_t animated, double offset, uint8_t alignment) {
   fml::RefPtr<fml::TaskRunner> runner;
   {
-    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
-    if (!g_live_ready) return;
-    runner = g_live_ui_runner;
+    RuntimeState& state = SharedState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!state.live_ready) return;
+    runner = state.ui_runner;
   }
   if (!runner) return;
   runner->PostTask([scroll_node_id, target_node_id, within_extent, animated,
@@ -491,12 +495,13 @@ SKYLINE_EXPORT extern "C" void SkylineApplyLiveOps(const char* json,
   if (payload.empty()) return;
   fml::RefPtr<fml::TaskRunner> runner;
   {
-    std::lock_guard<std::mutex> lock(g_live_ops_mutex);
-    if (!g_live_ready) {
-      g_pending_live_ops = std::move(payload);
+    RuntimeState& state = SharedState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!state.live_ready) {
+      state.pending_live_ops = std::move(payload);
       return;
     }
-    runner = g_live_ui_runner;
+    runner = state.ui_runner;
   }
   if (!runner) return;
   // Called from the Electron renderer thread: hop onto the engine UI thread
@@ -513,28 +518,30 @@ SKYLINE_EXPORT extern "C" void DispatchSkylineKeyEvent(int32_t kind,
   SKY_LOG(kDebug, kLogRuntime,
           "DispatchSkylineKeyEvent: kind=%d logical=%u text=%s",
           static_cast<int>(kind), logical, text != nullptr ? text : "");
-  if (appservice::g_page == nullptr || appservice::g_page->holder == nullptr) {
-    return;
-  }
   const std::string value = text != nullptr ? text : "";
-  if (Dart_CurrentIsolate() != nullptr) {
-    // Called with the isolate already entered (e.g. from a Dart callback).
-    DemoPageApiScope scope;
+  // The page belongs to the UI thread: look it up there.
+  auto handle = [kind, logical, value]() {
+    if (appservice::g_page == nullptr ||
+        appservice::g_page->holder == nullptr) {
+      return;
+    }
     appservice::HandleKeyInput(appservice::g_page->holder, kind, logical,
                                value);
+  };
+  if (Dart_CurrentIsolate() != nullptr) {
+    // Called with the isolate already entered (the 'skyline/keyboard'
+    // channel handler skyline_host drives).
+    DemoPageApiScope scope;
+    handle();
     return;
   }
-  RuntimeHolder* holder = appservice::g_page->holder;
-  auto runner = UiTaskRunner();
-  if (!runner) runner = appservice::g_ui_task_runner;
+  auto runner = SharedUiRunner();
   if (!runner) return;
-  // The headless embedder runs the UI tasks on the same thread that drives the
-  // engine, so run inline instead of deadlocking behind the host's wait loop.
-  fml::TaskRunner::RunNowOrPostTask(
-      runner, [holder, kind, logical, value]() {
-        DemoPageApiScope scope;
-        appservice::HandleKeyInput(holder, kind, logical, value);
-      });
+  // Runs inline when the caller already is on the UI thread.
+  fml::TaskRunner::RunNowOrPostTask(runner, [handle]() {
+    DemoPageApiScope scope;
+    handle();
+  });
 }
 
 
